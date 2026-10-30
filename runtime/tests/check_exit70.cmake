@@ -1,0 +1,7 @@
+execute_process(COMMAND ${EXE} RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)
+if(NOT rc EQUAL 70)
+  message(FATAL_ERROR "expected exit 70, got '${rc}'; stderr: ${err}")
+endif()
+if(NOT err MATCHES "stest: unmodelled write32 0x40013800")
+  message(FATAL_ERROR "stderr missing expected message; got: ${err}")
+endif()
