@@ -28,7 +28,10 @@ inline void charge() {
   g_clock.advance(g_cost_ns);
 }
 inline void deliver() {
-  if (g_hook) g_hook();
+  if (!g_hook) return;
+  try { g_hook(); }
+  catch (const std::exception& e) { stest_rt_abort("exception in delivery hook: %s", e.what()); }
+  catch (...) { stest_rt_abort("unknown exception in delivery hook"); }
 }
 
 [[noreturn]] void abort_access(const stest::UnmodelledAccess& e) {
@@ -43,11 +46,13 @@ uint32_t bus_read(uint64_t a, unsigned bytes) {
   try { return g_bus.read(a, bytes); }
   catch (const stest::UnmodelledAccess& e) { abort_access(e); }
   catch (const std::exception& e) { stest_rt_abort("exception in model at 0x%08x: %s", (unsigned)a, e.what()); }
+  catch (...) { stest_rt_abort("unknown exception in model at 0x%08x", (unsigned)a); }
 }
 void bus_write(uint64_t a, unsigned bytes, uint32_t v) {
   try { g_bus.write(a, bytes, v); }
   catch (const stest::UnmodelledAccess& e) { abort_access(e); }
   catch (const std::exception& e) { stest_rt_abort("exception in model at 0x%08x: %s", (unsigned)a, e.what()); }
+  catch (...) { stest_rt_abort("unknown exception in model at 0x%08x", (unsigned)a); }
 }
 
 inline uint64_t do_load(const volatile void* p, unsigned bytes) {

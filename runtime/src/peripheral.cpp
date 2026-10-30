@@ -11,11 +11,13 @@ void RegisterFile::declare(uint32_t off, uint32_t reset, uint32_t rw, uint32_t w
 }
 
 RegisterFile::Reg& RegisterFile::find(uint32_t off, unsigned width, bool is_write) {
+  if ((off & 3u) + width > 4) throw UnmodelledRegister(off, width, is_write);  // crosses registers
   auto it = regs_.find(off & ~3u);
   if (it == regs_.end()) throw UnmodelledRegister(off, width, is_write);
   return it->second;
 }
 const RegisterFile::Reg& RegisterFile::find(uint32_t off, unsigned width, bool is_write) const {
+  if ((off & 3u) + width > 4) throw UnmodelledRegister(off, width, is_write);  // crosses registers
   auto it = regs_.find(off & ~3u);
   if (it == regs_.end()) throw UnmodelledRegister(off, width, is_write);
   return it->second;

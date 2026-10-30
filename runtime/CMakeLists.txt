@@ -22,3 +22,12 @@ target_link_libraries(runtime_unmodelled_c PRIVATE stest_runtime)
 add_test(NAME runtime_unmodelled_exit70
   COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:runtime_unmodelled_c>
           -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_exit70.cmake)
+
+add_executable(runtime_abort_cpp tests/abort_cpp.cpp)
+target_link_libraries(runtime_abort_cpp PRIVATE stest_runtime)
+foreach(mode model_throw_int hook_throw_int hook_throw_std)
+  add_test(NAME runtime_abort_${mode}
+    COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:runtime_abort_cpp> -DARGS=${mode}
+            "-DPATTERN=stest: (unknown )?exception in (model|delivery hook)"
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_exit70.cmake)
+endforeach()

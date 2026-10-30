@@ -28,6 +28,14 @@ TEST_CASE("RegisterFile: undeclared throws") {
   CHECK_THROWS_AS(rf.write(8, 4, 1), UnmodelledRegister);
 }
 
+TEST_CASE("RegisterFile: access crossing a register boundary throws") {
+  RegisterFile rf; rf.declare(0, 0, 0xFFFFFFFF); rf.declare(4, 0, 0xFFFFFFFF);
+  CHECK_THROWS_AS(rf.read(2, 4), UnmodelledRegister);
+  CHECK_THROWS_AS(rf.write(2, 4, 1), UnmodelledRegister);
+  CHECK_THROWS_AS(rf.read(3, 2), UnmodelledRegister);
+  CHECK_NOTHROW(rf.read(2, 2));
+}
+
 namespace {
 struct Dummy : Peripheral {
   RegisterFile rf;
