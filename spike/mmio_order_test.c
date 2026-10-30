@@ -4,26 +4,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-
-enum { OP_LOAD, OP_STORE };
-typedef struct { int op; uint64_t addr; int width; uint64_t value; } rec_t;
-
-static rec_t recs[64];
-static int nrecs;
-static uint64_t scripted = 0xA5;
-
-static void rec(int op, const volatile void *a, int w, uint64_t v) {
-  if (nrecs < 64) recs[nrecs++] = (rec_t){op, (uint64_t)(uintptr_t)a, w, v};
-}
-
-uint8_t  __stest_mmio_load8 (const volatile void *a) { rec(OP_LOAD, a, 8,  0); return (uint8_t)scripted; }
-uint16_t __stest_mmio_load16(const volatile void *a) { rec(OP_LOAD, a, 16, 0); return (uint16_t)scripted; }
-uint32_t __stest_mmio_load32(const volatile void *a) { rec(OP_LOAD, a, 32, 0); return (uint32_t)scripted; }
-uint64_t __stest_mmio_load64(const volatile void *a) { rec(OP_LOAD, a, 64, 0); return scripted; }
-void __stest_mmio_store8 (volatile void *a, uint8_t  v) { rec(OP_STORE, a, 8,  v); }
-void __stest_mmio_store16(volatile void *a, uint16_t v) { rec(OP_STORE, a, 16, v); }
-void __stest_mmio_store32(volatile void *a, uint32_t v) { rec(OP_STORE, a, 32, v); }
-void __stest_mmio_store64(volatile void *a, uint64_t v) { rec(OP_STORE, a, 64, v); }
+#include "mmio_stubs.h"
 
 #define GPIOA_BSRR ((volatile uint32_t *)0x48000018u)
 #define GPIOA_IDR  ((volatile uint32_t *)0x48000010u)
@@ -70,6 +51,20 @@ int main(void) {
   expect(nrecs == 2, "u8 RMW: two records");
   expect_rec(0, OP_LOAD, 0x40002000u, 8, 0, 0);
   expect_rec(1, OP_STORE, 0x40002000u, 8, 0xA5 | 1, 1);
+
+  /* Sub-32-bit ABI: values must arrive/return zero-extended (needs zeroext). */
+  nrecs = 0;
+  *(volatile uint8_t *)0x40003000u = 0xFF;
+  *(volatile uint16_t *)0x40003004u = 0xFFFF;
+  expect(nrecs == 2, "narrow stores: two records");
+  expect_rec(0, OP_STORE, 0x40003000u, 8, 0xFF, 1);
+  expect_rec(1, OP_STORE, 0x40003004u, 16, 0xFFFF, 1);
+  scripted = 0x80;
+  uint32_t b8 = *(volatile uint8_t *)0x40003000u;
+  expect(b8 == 0x80, "u8 load 0x80 not sign-extended");
+  scripted = 0x8000;
+  uint32_t b16 = *(volatile uint16_t *)0x40003004u;
+  expect(b16 == 0x8000, "u16 load 0x8000 not sign-extended");
 
   if (failures) return 1;
   puts("mmio_order OK");

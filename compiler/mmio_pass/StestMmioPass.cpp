@@ -74,17 +74,39 @@ private:
     return (W == 8 || W == 16 || W == 32 || W == 64) ? unsigned(W) : 0;
   }
 
-  static FunctionCallee getLoadFn(Module &M, unsigned W) {
-    LLVMContext &C = M.getContext();
-    Type *PtrTy = PointerType::getUnqual(C);
-    return M.getOrInsertFunction(("__stest_mmio_load" + Twine(W)).str(),
-                                 Type::getIntNTy(C, W), PtrTy);
+  // i8/i16 values must be zero-extended by the caller (C ABI of uint8_t/uint16_t
+  // parameters and returns), so mark them zeroext on declaration and call sites.
+  static AttributeList loadAttrs(LLVMContext &C, unsigned W) {
+    if (W >= 32)
+      return AttributeList();
+    return AttributeList::get(C, AttributeList::ReturnIndex,
+                              {Attribute::ZExt});
   }
-  static FunctionCallee getStoreFn(Module &M, unsigned W) {
+  static AttributeList storeAttrs(LLVMContext &C, unsigned W) {
+    if (W >= 32)
+      return AttributeList();
+    return AttributeList::get(C, AttributeList::FirstArgIndex + 1,
+                              {Attribute::ZExt});
+  }
+
+  static CallInst *callLoad(IRBuilder<> &B, Module &M, unsigned W, Value *Ptr) {
     LLVMContext &C = M.getContext();
-    Type *PtrTy = PointerType::getUnqual(C);
-    return M.getOrInsertFunction(("__stest_mmio_store" + Twine(W)).str(),
-                                 Type::getVoidTy(C), PtrTy, Type::getIntNTy(C, W));
+    FunctionCallee F = M.getOrInsertFunction(
+        ("__stest_mmio_load" + Twine(W)).str(), loadAttrs(C, W),
+        Type::getIntNTy(C, W), PointerType::getUnqual(C));
+    CallInst *CI = B.CreateCall(F, {Ptr});
+    CI->setAttributes(loadAttrs(C, W));
+    return CI;
+  }
+  static CallInst *callStore(IRBuilder<> &B, Module &M, unsigned W, Value *Ptr,
+                             Value *V) {
+    LLVMContext &C = M.getContext();
+    FunctionCallee F = M.getOrInsertFunction(
+        ("__stest_mmio_store" + Twine(W)).str(), storeAttrs(C, W),
+        Type::getVoidTy(C), PointerType::getUnqual(C), Type::getIntNTy(C, W));
+    CallInst *CI = B.CreateCall(F, {Ptr, V});
+    CI->setAttributes(storeAttrs(C, W));
+    return CI;
   }
 
   static void remark(OptimizationRemarkEmitter &ORE, Instruction &I, StringRef Why) {
@@ -140,7 +162,7 @@ private:
       LLVMContext &C = M.getContext();
       Type *IntTy = Type::getIntNTy(C, W);
       if (auto *L = dyn_cast<LoadInst>(I)) {
-        Value *V = B.CreateCall(getLoadFn(M, W), {Ptr});
+        Value *V = callLoad(B, M, W, Ptr);
         if (ValTy->isPointerTy())
           V = B.CreateIntToPtr(V, ValTy);
         else if (!ValTy->isIntegerTy())
@@ -152,7 +174,7 @@ private:
           V = B.CreatePtrToInt(V, IntTy);
         else if (!ValTy->isIntegerTy())
           V = B.CreateBitCast(V, IntTy);
-        B.CreateCall(getStoreFn(M, W), {Ptr, V});
+        callStore(B, M, W, Ptr, V);
       }
       I->eraseFromParent();
       Changed = true;
