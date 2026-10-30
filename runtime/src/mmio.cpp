@@ -24,8 +24,16 @@ inline bool in_window(uint64_t a) {
   return (a - kPeriphBase) < kPeriphSize || (a - kCoreBase) < kCoreSize;
 }
 
+// Clock event callbacks (e.g. SysTick wraps) fire here; nothing may escape into
+// instrumented C.
+void run_due_events() {
+  try { g_clock.run_due(); }
+  catch (const std::exception& e) { stest_rt_abort("exception in clock event: %s", e.what()); }
+  catch (...) { stest_rt_abort("unknown exception in clock event"); }
+}
 inline void charge() {
   g_clock.advance(g_cost_ns);
+  if (__builtin_expect(g_clock.next_event_ns() <= g_clock.now_ns(), 0)) run_due_events();
 }
 inline void deliver() {
   if (!g_hook) return;

@@ -19,6 +19,7 @@ class Bus {
  public:
   // Throws std::invalid_argument on zero size or overlap.
   void map(uint64_t base, uint32_t size, Peripheral* p);
+  void unmap(Peripheral* p);  // removes every mapping of p (no-op if none)
   // width in bytes (1,2,4). Throws UnmodelledAccess if unmapped or the peripheral
   // throws UnmodelledRegister (then .peripheral is set).
   uint32_t read(uint64_t addr, unsigned width);

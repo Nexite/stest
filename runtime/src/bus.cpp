@@ -42,6 +42,11 @@ void Bus::write(uint64_t addr, unsigned width, uint32_t v) {
   }
 }
 
+void Bus::unmap(Peripheral* p) {
+  maps_.erase(std::remove_if(maps_.begin(), maps_.end(), [p](const Mapping& m) { return m.p == p; }),
+              maps_.end());
+}
+
 void Bus::reset_all() { for (auto& m : maps_) m.p->reset(); }
 
 }  // namespace stest
