@@ -144,6 +144,22 @@ TEST_CASE("cortexm (e): wfi advances to the next event before the quantum end") 
   CHECK(r.clock.now_ns() == 5 * MS);
 }
 
+int g_qhook_calls = 0;
+TEST_CASE("cortexm: wfi calls the quantum hook once it reaches the quantum end") {
+  Rig r;
+  g_qhook_calls = 0;
+  r.core->set_quantum_hook([] { ++g_qhook_calls; });
+  r.clock.schedule_at(3 * MS, [] {});
+  r.core->set_quantum_end(5 * MS);
+  r.core->wfi();  // stops at the event: no hook
+  CHECK(g_qhook_calls == 0);
+  r.core->wfi();  // reaches the quantum end: hook
+  CHECK(r.clock.now_ns() == 5 * MS);
+  CHECK(g_qhook_calls == 1);
+  r.core->wfi();  // still at the quantum end: hook again (the node would have moved it)
+  CHECK(g_qhook_calls == 2);
+}
+
 // ---- dispatcher ----
 
 TEST_CASE("cortexm: equal priority does not preempt; it tail-chains") {
@@ -402,6 +418,7 @@ TEST_CASE("systick: core clock changes and the CLKSOURCE=0 external divider") {
     Rig r;
     r.core->set_core_clock_getter(sysclk);
     r.core->set_systick_external_divider(8);
+    CHECK(r.r32(ST_CALIB) == 0x40000000);  // external reference present: NOREF=0
     r.w32(ST_RVR, 79999);
     r.w32(ST_CSR, 0x3);
     r.step_to(8 * MS - 1000, 1000);

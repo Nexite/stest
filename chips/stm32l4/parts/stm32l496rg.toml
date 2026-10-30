@@ -1,0 +1,190 @@
+# STM32L496RG chip package for stest.
+# Base addresses and the IRQ list follow ST's CMSIS device header stm32l496xx.h
+# (cmsis_device_l4); handler names are <name>_IRQHandler as in ST's startup file.
+# Core exceptions (NMI..SysTick) are implicit.
+
+[chip]
+name = "STM32L496RG"
+family = "stm32l4"
+core = "cortex-m4"
+nvic_prio_bits = 4
+device_define = "STM32L496xx"
+# CMSIS SystemInit() runs on the firmware thread before main (like Reset_Handler).
+system_init = "SystemInit"
+# SysTick CLKSOURCE=0 is HCLK/8 on STM32L4.
+systick_external_divider = 8
+
+[[peripheral]]
+name = "RCC"
+model = "stm32l4.rcc"
+base = 0x40021000
+size = 0x400
+
+[[peripheral]]
+name = "PWR"
+model = "stm32l4.pwr"
+base = 0x40007000
+size = 0x400
+
+[[peripheral]]
+name = "FLASH"
+model = "stm32l4.flash"
+base = 0x40022000
+size = 0x400
+
+# GPIO reset values (RM0351): ports A/B have the debug pins configured.
+[[peripheral]]
+name = "GPIOA"
+model = "stm32l4.gpio"
+base = 0x48000000
+size = 0x400
+params = { port = "A", moder_reset = 0xABFFFFFF, ospeedr_reset = 0x0C000000, pupdr_reset = 0x64000000 }
+
+[[peripheral]]
+name = "GPIOB"
+model = "stm32l4.gpio"
+base = 0x48000400
+size = 0x400
+params = { port = "B", moder_reset = 0xFFFFFEBF, ospeedr_reset = 0x000000C0, pupdr_reset = 0x00000100 }
+
+[[peripheral]]
+name = "GPIOC"
+model = "stm32l4.gpio"
+base = 0x48000800
+size = 0x400
+params = { port = "C" }
+
+[[peripheral]]
+name = "GPIOD"
+model = "stm32l4.gpio"
+base = 0x48000C00
+size = 0x400
+params = { port = "D" }
+
+[[peripheral]]
+name = "GPIOE"
+model = "stm32l4.gpio"
+base = 0x48001000
+size = 0x400
+params = { port = "E" }
+
+[[peripheral]]
+name = "GPIOF"
+model = "stm32l4.gpio"
+base = 0x48001400
+size = 0x400
+params = { port = "F" }
+
+[[peripheral]]
+name = "GPIOG"
+model = "stm32l4.gpio"
+base = 0x48001800
+size = 0x400
+params = { port = "G" }
+
+[[peripheral]]
+name = "GPIOH"
+model = "stm32l4.gpio"
+base = 0x48001C00
+size = 0x400
+params = { port = "H" }
+
+[[peripheral]]
+name = "GPIOI"
+model = "stm32l4.gpio"
+base = 0x48002000
+size = 0x400
+params = { port = "I" }
+
+# External interrupts: IRQn from stm32l496xx.h (79 is reserved).
+[irq]
+WWDG = 0
+PVD_PVM = 1
+TAMP_STAMP = 2
+RTC_WKUP = 3
+FLASH = 4
+RCC = 5
+EXTI0 = 6
+EXTI1 = 7
+EXTI2 = 8
+EXTI3 = 9
+EXTI4 = 10
+DMA1_Channel1 = 11
+DMA1_Channel2 = 12
+DMA1_Channel3 = 13
+DMA1_Channel4 = 14
+DMA1_Channel5 = 15
+DMA1_Channel6 = 16
+DMA1_Channel7 = 17
+ADC1_2 = 18
+CAN1_TX = 19
+CAN1_RX0 = 20
+CAN1_RX1 = 21
+CAN1_SCE = 22
+EXTI9_5 = 23
+TIM1_BRK_TIM15 = 24
+TIM1_UP_TIM16 = 25
+TIM1_TRG_COM_TIM17 = 26
+TIM1_CC = 27
+TIM2 = 28
+TIM3 = 29
+TIM4 = 30
+I2C1_EV = 31
+I2C1_ER = 32
+I2C2_EV = 33
+I2C2_ER = 34
+SPI1 = 35
+SPI2 = 36
+USART1 = 37
+USART2 = 38
+USART3 = 39
+EXTI15_10 = 40
+RTC_Alarm = 41
+DFSDM1_FLT3 = 42
+TIM8_BRK = 43
+TIM8_UP = 44
+TIM8_TRG_COM = 45
+TIM8_CC = 46
+ADC3 = 47
+FMC = 48
+SDMMC1 = 49
+TIM5 = 50
+SPI3 = 51
+UART4 = 52
+UART5 = 53
+TIM6_DAC = 54
+TIM7 = 55
+DMA2_Channel1 = 56
+DMA2_Channel2 = 57
+DMA2_Channel3 = 58
+DMA2_Channel4 = 59
+DMA2_Channel5 = 60
+DFSDM1_FLT0 = 61
+DFSDM1_FLT1 = 62
+DFSDM1_FLT2 = 63
+COMP = 64
+LPTIM1 = 65
+LPTIM2 = 66
+OTG_FS = 67
+DMA2_Channel6 = 68
+DMA2_Channel7 = 69
+LPUART1 = 70
+QUADSPI = 71
+I2C3_EV = 72
+I2C3_ER = 73
+SAI1 = 74
+SAI2 = 75
+SWPMI1 = 76
+TSC = 77
+LCD = 78
+RNG = 80
+FPU = 81
+CRS = 82
+I2C4_EV = 83
+I2C4_ER = 84
+DCMI = 85
+CAN2_TX = 86
+CAN2_RX0 = 87
+CAN2_RX1 = 88
+CAN2_SCE = 89
+DMA2D = 90

@@ -68,6 +68,18 @@ if(NOT CMAKE_CXX_COMPILER)
   set(CMAKE_CXX_COMPILER "${STEST_CLANGXX}" CACHE FILEPATH "" FORCE)
 endif()
 
+# macOS: Xcode's ld (via xcrun). A cctools-port ld earlier in PATH (e.g. Anaconda's)
+# produces plugin bundles dyld rejects and cannot read current DWARF (no debug map ->
+# empty dSYM). Used for the pass plugin and firmware executables.
+set(STEST_XCODE_LD "")
+if(APPLE OR CMAKE_HOST_APPLE)
+  execute_process(COMMAND xcrun -f ld OUTPUT_VARIABLE _stest_xcode_ld
+                  OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET RESULT_VARIABLE _stest_xcrun_rc)
+  if(_stest_xcrun_rc EQUAL 0 AND EXISTS "${_stest_xcode_ld}")
+    set(STEST_XCODE_LD "${_stest_xcode_ld}")
+  endif()
+endif()
+
 # stest_enable_mmio(<target>): compile <target> with the MMIO interception pass.
 function(stest_enable_mmio target)
   add_dependencies(${target} stest_mmio_pass)

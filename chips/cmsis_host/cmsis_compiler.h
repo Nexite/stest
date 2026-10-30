@@ -1,7 +1,10 @@
 /* stest host replacement for CMSIS-Core's cmsis_compiler.h (+ cmsis_gcc.h).
  *
  * Put chips/cmsis_host on the include path BEFORE the CMSIS-Core Include dir so that
- * core_cm4.h's `#include "cmsis_compiler.h"` picks this file up. Firmware is compiled
+ * core_cm4.h's `#include "cmsis_compiler.h"` picks this file up. That quoted include
+ * searches core_cm4.h's own directory first, so the CMSIS-Core dir used must not
+ * contain the toolchain headers (cmsis_compiler.h, cmsis_gcc.h, ...):
+ * stest_cmsis_core_include() (cmake/StestFetchST.cmake) stages a copy without them. Firmware is compiled
  * for the host (x86-64 / arm64), so no ARM assembly appears here:
  *  - barriers (__NOP/__DSB/__DMB/__ISB) are compiler barriers;
  *  - __WFI/__WFE and the PRIMASK/BASEPRI/FAULTMASK/IPSR intrinsics call the stest
@@ -93,6 +96,23 @@ __PACKED_STRUCT T_UINT32_READ { uint32_t v; };
 #define __UNALIGNED_UINT32_READ(addr) (((const struct T_UINT32_READ *)(const void *)(addr))->v)
 #endif
 #pragma GCC diagnostic pop
+
+/* ---- Mach-O (macOS) host adjustments for GCC-style embedded code ----
+ * 1. Apple clang targets predefine `__weak` as an Objective-C GC qualifier, which
+ *    makes ST's `#ifndef __weak / #define __weak __attribute__((weak))` (hal_def.h,
+ *    included after this file) a no-op: HAL weak defaults would become strong and
+ *    clash with firmware overrides. Give `__weak` its GCC meaning.
+ * 2. Mach-O section specifiers must be "segment,section"; ELF-style names used by
+ *    embedded code (e.g. HAL's __RAM_FUNC `section(".RamFunc")`, `.noinit`) are a
+ *    compile error there. Placement is meaningless on the host, so on macOS the
+ *    `section` attribute is dropped (mapped to `used`). Limitation: firmware that
+ *    uses `section(` as an ordinary identifier does not compile on macOS. */
+#if defined(__APPLE__)
+#undef __weak
+#define __weak __attribute__((weak))
+#define section(name) used
+#define __section__(name) used
+#endif
 
 /* Startup-file macros: meaningless on the host (no vector table / reset handler). */
 #ifndef __VECTOR_TABLE_ATTRIBUTE

@@ -31,6 +31,7 @@
 #include <memory>
 #include "stest/bus.hpp"
 #include "stest/clock.hpp"
+#include "stest/runtime.hpp"
 
 namespace stest {
 
@@ -78,12 +79,19 @@ class Cortexm {
   // "Pending and eligible" ignores PRIMASK, as on hardware: with interrupts disabled
   // wfi returns immediately without running the handler. Throws std::runtime_error
   // if nothing could ever wake the core (no event and no quantum end).
+  // If the clock is at/after the quantum end once wfi has slept, the quantum hook (if
+  // set) is called before returning: the node yields its baton there, so a firmware
+  // `while (!x) __WFI();` loop runs exactly one iteration per quantum instead of
+  // spinning at the quantum end.
   void wfi();
   void set_quantum_end(uint64_t t_ns);
   uint64_t quantum_end() const;
+  void set_quantum_hook(QuantumHook h);  // null by default
 
   void set_core_clock_getter(CoreClockGetter g);
-  void set_systick_external_divider(uint32_t div);  // >= 1; default 1
+  // >= 1; default 1. Configuring it also marks the external reference as present
+  // (SysTick CALIB.NOREF reads 0 instead of 1).
+  void set_systick_external_divider(uint32_t div);
 
   // Route the C API (stest/cortexm_c.h) and the runtime delivery hook to this core.
   // The destructor uninstalls it.

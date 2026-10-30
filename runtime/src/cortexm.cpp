@@ -190,7 +190,8 @@ struct Cortexm::Impl {
         }
         case 0x4: return c.st_load;
         case 0x8: c.st_sync(); return c.st_value_now();
-        case 0xC: return 0xC0000000u;  // CALIB: NOREF, SKEW, TENMS unknown
+        case 0xC:  // CALIB: SKEW, TENMS unknown; NOREF unless an external ref is configured
+          return (c.ext_ref ? 0u : 0x80000000u) | 0x40000000u;
       }
       throw UnmodelledRegister(off, 4, false);
     }
@@ -226,6 +227,8 @@ struct Cortexm::Impl {
 
   CoreClockGetter getter = nullptr;
   uint32_t ext_div = 1;
+  bool ext_ref = false;
+  QuantumHook quantum_hook = nullptr;
   uint32_t st_ctrl = 0, st_load = 0;
   bool st_countflag = false;
   // Counter state: running -> value st_val at tick boundary st_t0, counting at st_freq;
@@ -473,7 +476,9 @@ void Cortexm::wfi() {
   if (target > now) c.clock.advance(target - now);
   c.clock.run_due();
   c.deliver();
+  if (c.quantum_hook && c.clock.now_ns() >= c.quantum_end) c.quantum_hook();
 }
+void Cortexm::set_quantum_hook(QuantumHook h) { impl_->quantum_hook = h; }
 void Cortexm::set_quantum_end(uint64_t t_ns) { impl_->quantum_end = t_ns; }
 uint64_t Cortexm::quantum_end() const { return impl_->quantum_end; }
 
@@ -484,6 +489,7 @@ void Cortexm::set_core_clock_getter(CoreClockGetter g) {
 void Cortexm::set_systick_external_divider(uint32_t div) {
   if (div == 0) throw std::invalid_argument("SysTick external divider must be >= 1");
   impl_->ext_div = div;
+  impl_->ext_ref = true;
   impl_->st_sync();
 }
 

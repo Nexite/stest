@@ -18,10 +18,8 @@ if(APPLE)
   target_link_options(stest_mmio_pass PRIVATE -undefined dynamic_lookup)
   # Prefer Xcode's ld: a cctools-port ld earlier in PATH (e.g. Anaconda's) produces
   # plugin bundles that dyld rejects ("mis-aligned LINKEDIT string pool").
-  execute_process(COMMAND xcrun -f ld OUTPUT_VARIABLE _stest_xcode_ld
-                  OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET RESULT_VARIABLE _rc)
-  if(_rc EQUAL 0 AND EXISTS "${_stest_xcode_ld}")
-    target_link_options(stest_mmio_pass PRIVATE "-fuse-ld=${_stest_xcode_ld}")
+  if(STEST_XCODE_LD)
+    target_link_options(stest_mmio_pass PRIVATE "-fuse-ld=${STEST_XCODE_LD}")
   endif()
 endif()
 set_target_properties(stest_mmio_pass PROPERTIES PREFIX "" CXX_VISIBILITY_PRESET hidden)

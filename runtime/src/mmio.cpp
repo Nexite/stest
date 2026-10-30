@@ -15,6 +15,8 @@ stest::Clock g_clock;
 stest::Bus g_bus;
 uint64_t g_cost_ns = 25;
 stest::DeliveryHook g_hook = nullptr;
+uint64_t g_quantum_end = UINT64_MAX;
+stest::QuantumHook g_qhook = nullptr;
 bool g_inited = false;
 
 constexpr uint64_t kPeriphBase = 0x40000000u, kPeriphSize = 0x20000000u;
@@ -34,6 +36,8 @@ void run_due_events() {
 inline void charge() {
   g_clock.advance(g_cost_ns);
   if (__builtin_expect(g_clock.next_event_ns() <= g_clock.now_ns(), 0)) run_due_events();
+  // Quantum end: events due at <= now have fired; hand control back (blocks).
+  if (__builtin_expect(g_clock.now_ns() >= g_quantum_end, 0) && g_qhook) g_qhook();
 }
 inline void deliver() {
   if (!g_hook) return;
@@ -111,6 +115,9 @@ Bus& runtime_bus() { return g_bus; }
 uint64_t access_cost_ns() { return g_cost_ns; }
 void set_access_cost_ns(uint64_t ns) { g_cost_ns = ns; }
 void set_delivery_hook(DeliveryHook h) { g_hook = h; }
+void set_quantum_end(uint64_t t_ns) { g_quantum_end = t_ns; }
+uint64_t quantum_end() { return g_quantum_end; }
+void set_quantum_hook(QuantumHook h) { g_qhook = h; }
 }  // namespace stest
 
 extern "C" {
