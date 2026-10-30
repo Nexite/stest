@@ -1,0 +1,28 @@
+find_package(LLVM REQUIRED CONFIG)
+if(LLVM_PACKAGE_VERSION VERSION_LESS 18)
+  message(FATAL_ERROR "stest requires LLVM >= 18, found ${LLVM_PACKAGE_VERSION}")
+endif()
+message(STATUS "stest: LLVM ${LLVM_PACKAGE_VERSION} (${LLVM_DIR}), clang ${STEST_CLANG}")
+
+add_library(stest_mmio_pass MODULE StestMmioPass.cpp)
+target_include_directories(stest_mmio_pass SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+target_compile_definitions(stest_mmio_pass PRIVATE ${LLVM_DEFINITIONS_LIST})
+if(NOT LLVM_ENABLE_RTTI)
+  target_compile_options(stest_mmio_pass PRIVATE -fno-rtti)
+endif()
+if(NOT LLVM_ENABLE_EH)
+  target_compile_options(stest_mmio_pass PRIVATE -fno-exceptions)
+endif()
+# LLVM symbols are resolved from the host clang process at load time.
+if(APPLE)
+  target_link_options(stest_mmio_pass PRIVATE -undefined dynamic_lookup)
+  # Prefer Xcode's ld: a cctools-port ld earlier in PATH (e.g. Anaconda's) produces
+  # plugin bundles that dyld rejects ("mis-aligned LINKEDIT string pool").
+  execute_process(COMMAND xcrun -f ld OUTPUT_VARIABLE _stest_xcode_ld
+                  OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET RESULT_VARIABLE _rc)
+  if(_rc EQUAL 0 AND EXISTS "${_stest_xcode_ld}")
+    target_link_options(stest_mmio_pass PRIVATE "-fuse-ld=${_stest_xcode_ld}")
+  endif()
+endif()
+set_target_properties(stest_mmio_pass PROPERTIES PREFIX "" CXX_VISIBILITY_PRESET hidden)
+set_property(GLOBAL PROPERTY STEST_MMIO_PLUGIN_FILE "${CMAKE_CURRENT_BINARY_DIR}/stest_mmio_pass${CMAKE_SHARED_MODULE_SUFFIX}")

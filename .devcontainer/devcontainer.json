@@ -1,0 +1,6 @@
+{
+  "name": "stest",
+  "build": { "dockerfile": "../docker/Dockerfile", "context": "../docker" },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/w,type=bind",
+  "workspaceFolder": "/w"
+}

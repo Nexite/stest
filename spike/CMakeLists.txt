@@ -1,0 +1,6 @@
+foreach(opt O0 O2)
+  add_executable(mmio_order_${opt} mmio_order_test.c)
+  target_compile_options(mmio_order_${opt} PRIVATE -${opt})
+  stest_enable_mmio(mmio_order_${opt})
+  add_test(NAME mmio_order_${opt} COMMAND mmio_order_${opt})
+endforeach()
