@@ -5,7 +5,6 @@ from __future__ import annotations
 import atexit
 import os
 import time
-import weakref
 from typing import Callable, NoReturn
 
 from . import protocol as proto
@@ -16,7 +15,7 @@ from .node import Node
 # Every Sim that has spawned nodes and not been closed. If the interpreter exits without
 # the Sim being closed (or a test run is interrupted), the atexit handler kills and reaps
 # every node so none is left spinning in firmware.
-_LIVE: weakref.WeakSet[Sim] = weakref.WeakSet()
+_LIVE: set[Sim] = set()  # strong refs: a Sim dropped without close() must still be killed at exit
 
 
 @atexit.register

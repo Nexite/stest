@@ -26,9 +26,16 @@ STDERR_KEEP_LINES = 200  # retained per node (the pytest plugin's failure report
 
 
 def _make_pdeathsig():
-    """Linux: have the kernel SIGKILL the node if this (parent) process dies, so a
-    crashed or killed test run never leaves firmware spinning. None elsewhere (macOS has
-    no equivalent; there the Sim registry's atexit handler is the safety net)."""
+    """Linux: have the kernel SIGKILL the node if its parent dies, so a crashed or killed
+    test run never leaves firmware spinning. Returns a factory ``f(parent_pid) -> preexec_fn``
+    (None elsewhere: macOS has no equivalent; there the Sim registry's atexit handler is
+    the safety net).
+
+    Caveats: PR_SET_PDEATHSIG fires when the *thread* that forked the child exits, not
+    the process, so sim.start() must run from a long-lived thread (the main thread, as
+    under pytest). And the parent may already be gone before prctl runs, in which case no
+    signal would ever come: the child compares getppid() with the pid captured before the
+    fork and exits at once if it changed."""
     if not sys.platform.startswith("linux"):
         return None
     import ctypes
@@ -36,11 +43,18 @@ def _make_pdeathsig():
     libc = ctypes.CDLL(None, use_errno=True)
     PR_SET_PDEATHSIG = 1
     prctl = libc.prctl
+    sigkill = int(signal.SIGKILL)
+    getppid, _exit = os.getppid, os._exit
 
-    def preexec() -> None:
-        prctl(PR_SET_PDEATHSIG, signal.SIGKILL, 0, 0, 0)
+    def factory(parent_pid: int):
+        def preexec() -> None:
+            prctl(PR_SET_PDEATHSIG, sigkill, 0, 0, 0)
+            if getppid() != parent_pid:
+                _exit(1)
 
-    return preexec
+        return preexec
+
+    return factory
 
 
 _PDEATHSIG = _make_pdeathsig()
@@ -130,7 +144,7 @@ class Node:
                 stdin=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 pass_fds=(child.fileno(),),
-                preexec_fn=_PDEATHSIG,
+                preexec_fn=_PDEATHSIG(os.getpid()) if _PDEATHSIG else None,
             )
         finally:
             child.close()

@@ -8,7 +8,7 @@ stest is an open-source (Apache-2.0) software-in-the-loop simulator for STM32 fi
 - Python 3.11+ and [uv](https://docs.astral.sh/uv/)
 - Platforms: macOS arm64 and Linux (x86-64, arm64) natively. On Windows, or for zero setup, use the Docker image (`docker/Dockerfile`, Ubuntu 24.04 with LLVM 18) or the dev container in `.devcontainer/`.
 
-macOS: `brew install llvm cmake ninja uv`. Ubuntu 24.04: `apt install clang-18 llvm-18-dev lld-18 cmake ninja-build` and `pip install uv`, then `export STEST_LLVM_ROOT=/usr/lib/llvm-18`.
+macOS: `brew install llvm cmake ninja uv`. Ubuntu 24.04: `apt install clang-18 llvm-18-dev lld-18 cmake ninja-build` and `curl -LsSf https://astral.sh/uv/install.sh | sh` (or `pipx install uv`), then `export STEST_LLVM_ROOT=/usr/lib/llvm-18`.
 
 ## Build
 

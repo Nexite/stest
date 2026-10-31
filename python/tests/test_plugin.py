@@ -130,6 +130,14 @@ _ORPHAN_SCRIPT = textwrap.dedent(
     mode = sys.argv[2]
     if mode == "interrupt":
         threading.Timer(0.5, lambda: os.kill(os.getpid(), signal.SIGINT)).start()
+    elif mode == "gc":
+        import gc, time
+        from stest import protocol
+        n._send(protocol.run_until(10**9))  # the firmware now spins; nobody reads the reply
+        time.sleep(0.3)
+        del n, s  # dropped without close(): the registry must still kill the node at exit
+        gc.collect()
+        sys.exit(0)
     elif mode == "sigkill":
         threading.Timer(0.5, lambda: os.kill(os.getpid(), signal.SIGKILL)).start()
     s.advance(ms=1000)  # the firmware spins: blocks until the timer fires
@@ -148,6 +156,12 @@ def test_node_killed_when_python_exits_without_close(faults_exe):
     pid, p = _run_orphan_script(faults_exe("spin"), "interrupt")
     assert p.returncode != 0 and "KeyboardInterrupt" in p.stderr
     assert _wait_gone(pid), f"node {pid} orphaned after the interpreter exited"
+
+
+def test_node_killed_when_sim_garbage_collected_without_close(faults_exe):
+    pid, p = _run_orphan_script(faults_exe("spin"), "gc")
+    assert p.returncode == 0, p.stderr
+    assert _wait_gone(pid), f"node {pid} orphaned after the Sim was garbage-collected"
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="PR_SET_PDEATHSIG is Linux-only")
