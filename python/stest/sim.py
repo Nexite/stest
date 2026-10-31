@@ -120,6 +120,7 @@ class Sim:
             if version != proto.PROTO_VERSION:
                 self._node_gone(n, f"protocol version {version}, expected {proto.PROTO_VERSION}")
             n.proto_version, n.anchor_addr = version, anchor
+            n._load_symbols()
 
     # ---- time ----
     @property

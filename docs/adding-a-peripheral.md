@@ -180,6 +180,33 @@ Strict by default (`AGENTS.md`, "Non-negotiable rules"). The node aborts with ex
 
 **Typed helper.** Add a class to `python/stest/peripherals.py` that wraps the raw `call()`s (see `Timer` / `TimerChannel`), and an accessor on `Node` (`node.timer(name)`, `python/stest/node.py:63-65`). Raise `StestError` with a clear message for misuse (e.g. "TIM7 has no channel 1").
 
+### 8.1 Analog models (ADC, DAC, pin voltages)
+
+Analog values belong to the **pin**, not to the ADC. `Gpio` keeps a per-pin voltage next to (and independent of) the digital level, with two sources: an *external* value (Python) that wins, and an *on-chip driver* (the DAC, through `Gpio::set_analog_drive`). `Gpio::voltage(pin)` returns external-else-driver. Python reaches it with `node.pin("PA4").set_voltage(v)`, `.voltage` and `.release_voltage()` (call ops `set_voltage`, `get_voltage`, `release_voltage`; they bypass RCC gating like all MODEL_CALLs).
+
+- An ADC model gets its pin table as `params.analog` (`[{"pin":"PB1","adc":[1,2],"channel":16}, ...]`), injected by `tools/gen_chip.py` from the part's `[[analog]]` table (see `docs/adding-a-chip.md` section 2.1). It resolves pins to the `GPIO<port>` models in `connect()` and reads `Gpio::voltage()` when a conversion samples its input (`adc.cpp`). Python never parses the TOML.
+- A DAC model drives its pin with `set_analog_drive(pin, volts|nullopt)` and emits `{"kind":"dac","channel":n,"volts":v|null}` on every output change.
+- Typed helpers: `node.adc(n)` (`.set(channel, volts)`, `.get(channel)`, which act on the channel's pin) and `node.dac(1)` (`.channel(c).volts/.enabled/.dor`, `.state()`), in `python/stest/peripherals.py`.
+- **strict_analog.** Converting a channel whose pin has no voltage reads 0 V and warns once per (ADC, channel). With strict analog it aborts instead. Switches: `Sim(strict_analog=True)` (node env `STEST_STRICT_ANALOG=1`), pytest `--stest-strict-analog`, marker `@pytest.mark.stest(strict_analog=True)`; precedence marker > CLI > default. A model reads it from `params.strict_analog`, else the env var.
+- Document in the header what is not modelled and make unsupported configurations abort at the configuration write (`adc.hpp` is the template). Tests: `python/tests/test_adc.py`, `chips/stm32l4/tests/test_adc.cpp`.
+
+### 8.2 SPI: bursts, transactions, MISO
+
+`node.spi("SPI1")` (`SpiBus`) exposes `.bursts`, `.queue_miso(bytes)`, `.wait_for_bytes(n, timeout_ms)` and `.state()`. The model has no pin wiring: it emits one event per **burst**, grouped strictly by BSY (frames back to back, BSY never dropping), stamped when BSY falls: `{"kind":"spi","bus":"SPI1","t_start":ns,"mosi":hex,"miso":hex}`. A burst is not a transaction: `HAL_SPI_TransmitReceive` alternates TX and RX, so one call can span several bursts. Group by chip-select window instead: a burst belongs to the CS window with `cs_fall <= burst.t_start_ns` and `burst.t_end_ns <= cs_rise`, using `node.pin("PA4").history` (see the `SpiBus` docstring). `queue_miso` appends the bytes a slave returns, one byte per frame (two, little-endian, above 8 bits); an empty queue reads `0xFF`. Details and the strict-abort list are in `spi.hpp`.
+
+### 8.3 Firmware output: ITM, DWT, CoreDebug, stdout
+
+`chips/cortexm/` holds core-generic models (`Itm`, `Dwt`, `CoreDebug`) compiled into `stest_runtime` and mapped by `Cortexm` for every chip, so a part's TOML does not list them. They follow the same model contract as chip models.
+
+- `CoreDebug` models DHCSR.C_DEBUGEN and DEMCR.TRCENA; ITM output needs TRCENA, ITMENA and the port's TER bit, as on hardware. DWT gives CYCCNT derived from virtual time.
+- `Sim(debugger_attached=False)` (env `STEST_DEBUGGER=0`; pytest marker `debugger_attached=`) models a bare board: C_DEBUGEN and TRCENA reset to 0, so ITM prints nothing until the firmware enables it. Default is attached, so `ITM_SendChar` works unchanged.
+- Python: `node.log` (ITM port-0 lines), `node.itm_port(n)`, `node.wait_for_log(regex, timeout_ms)` (virtual-time wait; consumes lines), `node.stdout_tail` / `stdout_lines(n)` (firmware `printf`, line-buffered by the runtime). An unterminated ITM line is flushed when the node exits or aborts.
+- Tests: `python/tests/test_itm.py`, `selftest/firmware/itm`.
+
+### 8.4 Fast variable access
+
+`node.var(expr)` / `node.set_var(expr, value)` read and write firmware variables by name via DWARF (`python/stest/symbols.py`). `Sim.start()` loads the node's symbol table once (shared per executable path, size and mtime) and each node memoises `resolve(expr)`, so polling a variable in a loop is cheap (`test_var_hot_path`). Resolution is static; only the per-node ASLR slide is applied at access time.
+
 ## 9. Testing
 
 Write the failing test first (TDD, `AGENTS.md`). Test at three levels.
@@ -278,6 +305,7 @@ That command writes into the host `build/`. If you also build natively in the sa
 - [ ] `chips/<family>/parts/<part>.toml`: a `[[peripheral]]` per instance (`name`, `model`, `base`, `size`, `params`, `rcc_enable`). Check with `python3 tools/gen_chip.py --info <toml>` (see `docs/adding-a-chip.md`).
 - [ ] `selftest/firmware/<name>/` and `selftest/CMakeLists.txt`: HAL-based self-test firmware.
 - [ ] `python/tests/conftest.py` fixture and `python/tests/test_<kind>.py`: e2e, determinism and (if hot) speed.
+- [ ] Analog pins / SPI / output: sections 8.1-8.3 followed if the model touches them.
 - [ ] `python/stest/peripherals.py` typed helper and `Node` accessor, if Python needs more than raw `call()`.
 - [ ] Docs: the model header comment, `AGENTS.md` repo map or notes if conventions change, and this guide if you introduced a new pattern.
 - [ ] The full suite passes natively and in Docker.

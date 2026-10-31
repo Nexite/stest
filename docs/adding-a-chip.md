@@ -56,6 +56,19 @@ The file name is the lower-case part name. Use `chips/stm32l4/parts/stm32l496rg.
 | `params` | Model-specific inline table, passed to the constructor as JSON. Each model's header documents its schema (e.g. `tim.hpp`: `kind`, `width`, `bus`, `irq`, `opt`; `gpio.hpp`: `port`, `*_reset`). |
 | `rcc_enable` | `{ reg = "<one of enable_regs>", bit = n }` from the RM's RCC xxxENR register (the `RCC_xxxENR_<PPP>EN` bit in the header). Any firmware access while the bit is clear aborts. Omit it for always-clocked blocks (RCC, FLASH, EXTI). The clock-tree peripheral itself cannot be gated. |
 
+**`[[analog]]`** (optional, top level, one entry per analog-capable pin): tells every `<family>.adc` model which pin feeds which ADC channel.
+
+```toml
+[[analog]]
+pin = "PB1"      # P<port><0-15>; GPIO<port> must be a [[peripheral]]
+adc = [1, 2]     # ADC instances that can convert this pin (non-empty, no repeats)
+channel = 16     # 1..18; the same channel number on each listed ADC
+```
+
+`tools/gen_chip.py` validates the table (pin format and existing GPIO port, non-empty ADC list, channel range, each pin and each `(adc, channel)` listed once) and injects it into the params of every `<family>.adc` peripheral as `params.analog`. The pin-to-channel resolution happens in the ADC model, not in Python. Take the entries from the **datasheet's pin-definitions table** (the `ADCx_INy` alternate functions; L496: DS11585, "STM32L496xx pin definitions") for the exact package, and cross-check against ST's CubeMX MCU database XML for the part. Never write them from memory: a pin that is missing from the table is a channel with no pin on that package, which the model reports as an error. Python then uses `node.pin("PB1").set_voltage(v)` / `node.adc(1).set(16, v)`, and `Sim(strict_analog=True)` makes unset inputs abort (`docs/adding-a-peripheral.md` section 8.1). See `chips/stm32l4/parts/stm32l496rg.toml` for the L496 table.
+
+**Core-generic blocks** (ITM, DWT, DHCSR/DEMCR) are not in the TOML: `stest::Cortexm` maps them for every part (`chips/cortexm/`, `docs/adding-a-peripheral.md` section 8.3).
+
 Two things to watch in `params`:
 - **IRQ numbers** go in `params` as the model expects them (TIM: `irq = { update = 54 }`; EXTI: an array of 16). Use the `<NAME>_IRQn` values from the device header. Shared vectors (`TIM1_UP_TIM16 = 25`) appear in more than one instance's params, and the model ORs them.
 - **Reset values that differ per instance** go in `params` too, e.g. GPIOA/GPIOB debug-pin reset values in `moder_reset`/`pupdr_reset` (from the RM).
@@ -164,13 +177,14 @@ Record decisions about these in the relevant plan (`docs/superpowers/plans/`) be
 
 ### 3.6 Python
 
-Add typed helpers for the family's peripherals to `python/stest/peripherals.py` only where an existing helper does not fit. Helpers talk to models through `call()` ops, so they are family-neutral as long as the ops and state schemas match.
+Add typed helpers for the family's peripherals to `python/stest/peripherals.py` only where an existing helper does not fit (today: `node.timer()`, `node.adc()`, `node.dac()`, `node.spi()`). Helpers talk to models through `call()` ops, so they are family-neutral as long as the ops and state schemas match.
 
 ## 4. Checklists
 
 **New part in an existing family**
 
 - [ ] `chips/<family>/parts/<part>.toml`: `[chip]`, `[clock_tree]`, one `[[peripheral]]` per modelled instance (base and size from the device header, `rcc_enable` bits, `params` incl. IRQ numbers and per-instance reset values), `[irq]` from `IRQn_Type`.
+- [ ] `[[analog]]` entries (if the part has an ADC) taken from the datasheet pin table and cross-checked with the CubeMX XML.
 - [ ] `python3 tools/gen_chip.py --info` and a scratch generation succeed. The generated IRQ table, maps and gates have been reviewed.
 - [ ] A generator check test (`check_gen`-style) in `chips/<family>/CMakeLists.txt`, with `TIMEOUT 30`.
 - [ ] A self-test firmware (`selftest/firmware/<name>/`, `stest_add_firmware(... CHIP <PART> ...)`) and a pytest e2e test.

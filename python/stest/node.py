@@ -56,6 +56,9 @@ class Node:
         self._itm: dict[int, list[str]] = {}  # port -> completed lines
         self._log_cursor = 0  # Node.wait_for_log has consumed log[:cursor]
         self._seq = 0
+        self._symbols = None  # SymbolTable, loaded once by Sim.start()
+        self._symbols_error: Exception | None = None
+        self._resolved: dict[str, Any] = {}  # expr -> Resolved (static; valid for the node's lifetime)
         self._pin_history: dict[tuple[str, int], list[tuple[int, int]]] = {}
         self._spi_bursts: dict[str, list[SpiBurst]] = {}
 
@@ -167,13 +170,31 @@ class Node:
         r, slide = self._resolve_var(expr)
         self.write_mem(r.addr + slide, r.type.encode(value))
 
-    def _resolve_var(self, expr: str):
+    def _load_symbols(self) -> None:
+        """Called by Sim.start() after HELLO. Failures (e.g. no DWARF) surface on first var()."""
+        from .errors import SymbolError
         from .symbols import SymbolTable
 
+        self._resolved.clear()
+        self._symbols_error = None
+        try:
+            self._symbols = SymbolTable.load(self.exe)
+        except SymbolError as e:
+            self._symbols, self._symbols_error = None, e
+
+    def _resolve_var(self, expr: str):
         if self.anchor_addr is None:
             raise StestError(f"node {self.name!r}: variables are available after sim.start()")
-        table = SymbolTable.load(self.exe)
-        return table.resolve(expr), self.anchor_addr - table.anchor_addr
+        if self._symbols is None:
+            if self._symbols_error is not None:
+                raise self._symbols_error
+            self._load_symbols()
+            if self._symbols is None:
+                raise self._symbols_error
+        r = self._resolved.get(expr)
+        if r is None:
+            r = self._resolved[expr] = self._symbols.resolve(expr)
+        return r, self.anchor_addr - self._symbols.anchor_addr
 
     def __repr__(self) -> str:
         return f"<Node {self.name!r} pid={self.pid} t={self.now_ns} ns>"
@@ -305,19 +326,6 @@ class Node:
             self._proc.wait(timeout)
         except subprocess.TimeoutExpired:
             self._proc.kill()
-            self._proc.wait()
-
-    def _kill(self, grace_s: float) -> None:
-        """SIGTERM, then SIGKILL after grace_s; always reaps."""
-        if not self._proc:
-            return
-        if self._proc.poll() is None:
-            try:
-                self._proc.terminate()
-            except ProcessLookupError:
-                pass
-            self._wait_exit(grace_s)
-        else:
             self._proc.wait()
 
     def _close_channel(self) -> None:
