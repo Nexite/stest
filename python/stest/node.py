@@ -5,8 +5,10 @@ from __future__ import annotations
 import collections
 import json
 import os
+import signal
 import socket
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -19,7 +21,29 @@ from .pin import Pin
 if TYPE_CHECKING:
     from .sim import Sim
 
-STDERR_TAIL_LINES = 20
+STDERR_TAIL_LINES = 20  # shown in NodeCrashed messages / Node.stderr_tail
+STDERR_KEEP_LINES = 200  # retained per node (the pytest plugin's failure report)
+
+
+def _make_pdeathsig():
+    """Linux: have the kernel SIGKILL the node if this (parent) process dies, so a
+    crashed or killed test run never leaves firmware spinning. None elsewhere (macOS has
+    no equivalent; there the Sim registry's atexit handler is the safety net)."""
+    if not sys.platform.startswith("linux"):
+        return None
+    import ctypes
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    PR_SET_PDEATHSIG = 1
+    prctl = libc.prctl
+
+    def preexec() -> None:
+        prctl(PR_SET_PDEATHSIG, signal.SIGKILL, 0, 0, 0)
+
+    return preexec
+
+
+_PDEATHSIG = _make_pdeathsig()
 
 
 class Node:
@@ -37,7 +61,7 @@ class Node:
         self.now_ns = 0  # virtual time the node last reported (STOPPED)
         self._proc: subprocess.Popen | None = None
         self._chan: proto.Channel | None = None
-        self._stderr: collections.deque[str] = collections.deque(maxlen=STDERR_TAIL_LINES)
+        self._stderr: collections.deque[str] = collections.deque(maxlen=STDERR_KEEP_LINES)
         self._stderr_lock = threading.Lock()
         self._stderr_thread: threading.Thread | None = None
         self._seq = 0
@@ -47,8 +71,12 @@ class Node:
     @property
     def stderr_tail(self) -> list[str]:
         """The node's last 20 stderr lines (captured continuously)."""
+        return self.stderr_lines(STDERR_TAIL_LINES)
+
+    def stderr_lines(self, n: int = STDERR_KEEP_LINES) -> list[str]:
+        """The node's last ``n`` (at most 200) captured stderr lines."""
         with self._stderr_lock:
-            return list(self._stderr)
+            return list(self._stderr)[-n:] if n > 0 else []
 
     def pin(self, name: str) -> Pin:
         return Pin(self, name)
@@ -102,6 +130,7 @@ class Node:
                 stdin=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 pass_fds=(child.fileno(),),
+                preexec_fn=_PDEATHSIG,
             )
         finally:
             child.close()
@@ -132,8 +161,6 @@ class Node:
         if rc is None:
             return "still running"
         if rc < 0:
-            import signal
-
             try:
                 return f"killed by signal {signal.Signals(-rc).name}"
             except ValueError:

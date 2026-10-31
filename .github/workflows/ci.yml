@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  linux:
+    name: ubuntu-24.04 x86-64 (docker image)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the stest image (local only, not published)
+        run: docker build -t stest-ci docker
+      - name: Configure, build, test, gate (inside the image)
+        run: |
+          mkdir -p out
+          docker run --rm -v "$PWD":/w -w /w stest-ci bash -euxo pipefail -c '
+            cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+            cmake --build build
+            ctest --test-dir build --output-on-failure
+            uv run pytest python/tests -q
+          '
+      - name: Speed gate (non-blocking)
+        continue-on-error: true
+        run: |
+          docker run --rm -v "$PWD":/w -w /w stest-ci \
+            bash -c 'uv run spike/run_gate.py' 2>&1 | tee out/gate-linux-x86_64.txt
+          test "${PIPESTATUS[0]}" -eq 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gate-linux-x86_64
+          path: out/gate-linux-x86_64.txt
+          if-no-files-found: warn
+
+  macos:
+    name: macos-14 arm64 (native)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: brew install llvm ninja
+      - uses: astral-sh/setup-uv@v5
+      - name: Configure and build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+      - name: ctest
+        run: ctest --test-dir build --output-on-failure
+      - name: pytest
+        run: uv run pytest python/tests -q
+      - name: Speed gate (non-blocking)
+        continue-on-error: true
+        run: |
+          mkdir -p out
+          uv run spike/run_gate.py 2>&1 | tee out/gate-macos-arm64.txt
+          test "${PIPESTATUS[0]}" -eq 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gate-macos-arm64
+          path: out/gate-macos-arm64.txt
+          if-no-files-found: warn

@@ -42,14 +42,14 @@ Pending (CI, Task 8). Not run under emulation.
 
 ## Verdict
 macOS arm64: PASS (0.061 of 0.40 s). Linux arm64: PASS (0.090 of 0.40 s).
-Sync dominates by two orders of magnitude (~99%): MMIO interception costs ~2 ns per access
+Sync dominates by ~70-200x (~99%): MMIO interception costs 2-4 ns per access
 (under 1 ms per virtual second); the socket round trips cost 6-9 us each. Gate result: continue.
 
 ## Caveats
 - The model is a trivial register store; real peripheral models (timer/GPIO side effects, IRQ
   evaluation) will cost more per access. Headroom is ~400x on MMIO, so this is not expected to
   flip the verdict, but the figure is a lower bound.
-- Sync here is one node. Multi-node gating multiplies the sync term by node count; at 90 us /
+- Sync here is one node. Multi-node gating multiplies the sync term by node count; at ~90 ms /
   virtual-second per node the 0.40 budget leaves room for the 100 us quantum on several nodes,
   and shared-memory + futex / `os_sync_wait_on_address` remains the recorded remedy if needed.
 - Docker Desktop on macOS runs Linux in a VM; socket timings there include VM scheduling.

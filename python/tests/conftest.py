@@ -1,8 +1,7 @@
-"""Shared fixtures: self-test executables and a fresh Sim per test.
+"""Shared fixtures: self-test executables. (The `sim` fixture comes from the stest pytest plugin.)
 
 Executables are located in $STEST_SELFTEST_BIN (set by CTest's `python_tests`);
 for direct `uv run pytest` runs it defaults to <repo>/build/selftest.
-(The `sim` fixture moves into a pytest plugin in a later task.)
 """
 
 from __future__ import annotations
@@ -12,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from stest import Sim
+pytest_plugins = ["pytester"]
 
 _REPO = Path(__file__).resolve().parents[2]
 
@@ -49,11 +48,3 @@ def faults_exe():
 
     return get
 
-
-@pytest.fixture
-def sim():
-    s = Sim()
-    try:
-        yield s
-    finally:
-        s.close()

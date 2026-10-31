@@ -50,9 +50,18 @@ int main(void) {
     }
   }
   double dt = now_s() - t0;
+  uint64_t virt_ns = stest_now_ns;   /* before the volatile reads below, which are charged too */
   /* print results so the work is observable */
   fprintf(stderr, "uwTick=%u acc=%u sink=%u virt_ms=%.3f\n",
           (unsigned)uwTick, (unsigned)acc, (unsigned)sink, stest_now_ns / 1e6);
+  /* Prove the interception pass applied: every access is charged 25 ns of virtual
+   * time by bench_mmio_impl. Per tick: 20 ISRs x 8 accesses + uwTick load+store (2)
+   * + 50 main-loop accesses = 232, so 1000 ticks = 232000 accesses = 5.8 ms virtual. */
+  if (virt_ns != 232000ull * 25ull) {
+    fprintf(stderr, "FAIL: virtual clock %llu ns, expected %llu ns (pass not applied?)\n",
+            (unsigned long long)virt_ns, 232000ull * 25ull);
+    return 2;
+  }
   printf("mmio_s=%.6f\n", dt);
   return 0;
 }

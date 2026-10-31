@@ -2,13 +2,30 @@
 
 from __future__ import annotations
 
+import atexit
 import os
 import time
+import weakref
 from typing import Callable, NoReturn
 
 from . import protocol as proto
 from .errors import NodeCrashed, StestError, WaitTimeout, WallClockTimeout
 from .node import Node
+
+
+# Every Sim that has spawned nodes and not been closed. If the interpreter exits without
+# the Sim being closed (or a test run is interrupted), the atexit handler kills and reaps
+# every node so none is left spinning in firmware.
+_LIVE: weakref.WeakSet[Sim] = weakref.WeakSet()
+
+
+@atexit.register
+def _kill_live_sims() -> None:
+    for sim in list(_LIVE):
+        try:
+            sim._kill_all(grace_s=0.0)
+        except BaseException:
+            pass
 
 
 def fmt_ms(t_ns: int) -> str:
@@ -45,6 +62,10 @@ class Sim:
         self._closed = False
         self._dead: StestError | None = None
 
+    @property
+    def quantum_us(self) -> int:
+        return self.quantum_ns // 1000
+
     # ---- setup ----
     def node(self, name: str, exe: str | os.PathLike, env: dict | None = None) -> Node:
         if self._started:
@@ -62,6 +83,7 @@ class Sim:
         if not self.nodes:
             raise StestError("sim.start() with no nodes")
         self._started = True
+        _LIVE.add(self)
         extra = {"STEST_ACCESS_COST_NS": str(self.access_cost_ns)}
         try:
             for n in self.nodes:
@@ -161,6 +183,7 @@ class Sim:
         raise exc
 
     def _kill_all(self, grace_s: float = 0.5) -> None:
+        _LIVE.discard(self)
         for n in self.nodes:
             if n._alive:
                 try:
@@ -212,6 +235,7 @@ class Sim:
         if self._closed:
             return
         self._closed = True
+        _LIVE.discard(self)
         for n in self.nodes:
             if n._chan and n._alive:
                 try:

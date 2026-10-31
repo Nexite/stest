@@ -20,7 +20,13 @@ def run(cmd, **kw):
 def measure(exe, key, runs):
     vals = []
     for _ in range(runs):
-        out = subprocess.run([str(exe)], check=True, capture_output=True, text=True).stdout
+        r = subprocess.run([str(exe)], capture_output=True, text=True)
+        if r.stderr:
+            sys.stderr.write(r.stderr)
+            sys.stderr.flush()
+        if r.returncode != 0:
+            sys.exit(f"{exe} exited with status {r.returncode}")
+        out = r.stdout
         m = re.search(rf"{key}=([0-9.]+)", out)
         if not m:
             sys.exit(f"{exe}: no {key}= in output: {out!r}")
