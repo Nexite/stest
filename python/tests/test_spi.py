@@ -126,3 +126,12 @@ def test_spi_is_deterministic(spi_exe):
     a = run(1000)
     assert a == run(1000)
     assert a == run(250)
+
+
+def test_spi_types_exported_from_package():
+    import stest
+    from stest import peripherals
+
+    assert stest.SpiBus is peripherals.SpiBus
+    assert stest.SpiBurst is peripherals.SpiBurst
+    assert {"SpiBus", "SpiBurst"} <= set(stest.__all__)
