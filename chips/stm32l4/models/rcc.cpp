@@ -24,13 +24,6 @@ constexpr uint32_t kCrRw = bit(0) | bit(2) | bit(3) | 0xF0u | bit(8) | bit(9) | 
                            bit(18) | bit(19) | bit(24) | bit(26) | bit(28);
 constexpr uint32_t kResetFlags = 0xFF000000u;  // CSR FWRSTF..LPWRRSTF
 constexpr uint32_t kRmvf = bit(23);
-
-// Merge a sub-word write into the 32-bit register value (byte lanes).
-uint32_t lane_value(uint32_t off, unsigned width, uint32_t v) {
-  unsigned sh = (off & 3u) * 8u;
-  uint32_t m = (width == 4) ? 0xFFFFFFFFu : (((1u << (width * 8)) - 1u) << sh);
-  return (v << sh) & m;
-}
 }  // namespace
 
 Rcc::Rcc(std::string name, const nlohmann::json&, Clock&) : name_(std::move(name)) {
@@ -75,7 +68,7 @@ uint32_t Rcc::read(uint32_t off, unsigned width) { return regs_.read(off, width)
 
 void Rcc::write(uint32_t off, unsigned width, uint32_t v) {
   uint32_t aligned = off & ~3u;
-  uint32_t val = lane_value(off, width, v);
+  uint32_t val = lane_merge(0, off, width, v);
   if (aligned == CICR) {
     regs_.write(off, width, v);  // write-only: stores nothing; strictness checks
     regs_.set(CIFR, regs_.get(CIFR) & ~(val & 0x000007FFu));

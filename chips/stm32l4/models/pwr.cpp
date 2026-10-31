@@ -19,7 +19,7 @@ Pwr::Pwr(std::string name, const nlohmann::json&, Clock&) : name_(std::move(name
 void Pwr::write(uint32_t off, unsigned width, uint32_t v) {
   if ((off & ~3u) == SCR) {  // clear SR1 flags (CWUFx, CSBF)
     regs_.write(off, width, v);  // write-only: stores nothing; strictness checks
-    uint32_t val = (width == 4) ? v : (v << ((off & 3u) * 8u));
+    uint32_t val = lane_merge(0, off, width, v);
     regs_.set(SR1, regs_.get(SR1) & ~(val & 0x0000011Fu));
     return;
   }

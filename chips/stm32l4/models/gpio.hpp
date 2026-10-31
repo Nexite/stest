@@ -35,6 +35,11 @@ class Gpio : public Peripheral {
   int pin_level(unsigned pin) const;
 
  private:
+  struct Snapshot { uint32_t moder, otyper, pupdr, odr; };
+  Snapshot snapshot() const {
+    return {regs_.get(0x00), regs_.get(0x04), regs_.get(0x0C), regs_.get(0x14)};
+  }
+  int level_of(unsigned pin, const Snapshot& s) const;
   uint16_t levels() const;
   void update();  // recompute levels, emit change events
   std::string name_;

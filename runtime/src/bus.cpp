@@ -1,10 +1,14 @@
 #include "stest/bus.hpp"
 #include <algorithm>
+#include "stest/mmio_windows.hpp"
 
 namespace stest {
 
 void Bus::map(uint64_t base, uint32_t size, Peripheral* p) {
   if (size == 0 || !p) throw std::invalid_argument("bus map: empty range or null peripheral");
+  auto inside = [&](uint64_t wb, uint64_t ws) { return base >= wb && base + size <= wb + ws; };
+  if (!inside(kPeriphBase, kPeriphSize) && !inside(kCoreBase, kCoreSize))
+    throw std::invalid_argument("bus map: range outside the MMIO windows");
   for (const auto& m : maps_)
     if (base < m.base + m.size && m.base < base + size)
       throw std::invalid_argument("bus map: overlapping range");

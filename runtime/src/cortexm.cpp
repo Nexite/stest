@@ -21,11 +21,6 @@ void delivery_hook() {
 constexpr uint64_t kNone = UINT64_MAX;
 constexpr int kExcSVCall = 11, kExcDebugMon = 12, kExcPendSV = 14, kExcSysTick = 15;
 
-uint32_t lane_mask(uint32_t off, unsigned width) {
-  uint32_t m = width >= 4 ? 0xFFFFFFFFu : ((1u << (width * 8)) - 1u);
-  return m << ((off & 3u) * 8);
-}
-
 // Word-granular register block: sub-word accesses act on the byte lanes of the
 // containing aligned word (CMSIS uses byte access for NVIC->IP[] and SCB->SHP[]).
 struct CoreBlock : Peripheral {
@@ -35,7 +30,7 @@ struct CoreBlock : Peripheral {
 
   uint32_t read(uint32_t off, unsigned width) override {
     if ((off & 3u) + width > 4) throw UnmodelledRegister(off, width, false);
-    return (rd(off & ~3u) & lane_mask(off, width)) >> ((off & 3u) * 8);
+    return lane_extract(rd(off & ~3u), off, width);
   }
   void write(uint32_t off, unsigned width, uint32_t v) override {
     if ((off & 3u) + width > 4) throw UnmodelledRegister(off, width, true);

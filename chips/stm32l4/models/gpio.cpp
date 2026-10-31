@@ -10,11 +10,6 @@ enum : uint32_t {
 };
 constexpr uint32_t kLckk = 1u << 16;
 
-uint32_t lane_value(uint32_t off, unsigned width, uint32_t v) {
-  unsigned sh = (off & 3u) * 8u;
-  uint32_t m = (width == 4) ? 0xFFFFFFFFu : (((1u << (width * 8)) - 1u) << sh);
-  return (v << sh) & m;
-}
 uint32_t spread(uint16_t pins, unsigned bits, unsigned first, unsigned count) {
   uint32_t m = 0;
   for (unsigned i = 0; i < count; ++i)
@@ -57,24 +52,27 @@ void Gpio::reset() {
   update();
 }
 
-int Gpio::pin_level(unsigned pin) const {
+int Gpio::level_of(unsigned pin, const Snapshot& s) const {
   if (drive_[pin] >= 0) return drive_[pin];
-  uint32_t mode = (regs_.get(MODER) >> (2 * pin)) & 3u;
-  uint32_t pull = (regs_.get(PUPDR) >> (2 * pin)) & 3u;
+  uint32_t mode = (s.moder >> (2 * pin)) & 3u;
+  uint32_t pull = (s.pupdr >> (2 * pin)) & 3u;
   int pull_level = (pull == 1) ? 1 : 0;
   if (mode == 1) {
-    int odr = (regs_.get(ODR) >> pin) & 1u;
-    bool open_drain = (regs_.get(OTYPER) >> pin) & 1u;
+    int odr = (s.odr >> pin) & 1u;
+    bool open_drain = (s.otyper >> pin) & 1u;
     if (open_drain && odr) return pull_level;
     return odr;
   }
   return pull_level;
 }
 
+int Gpio::pin_level(unsigned pin) const { return level_of(pin, snapshot()); }
+
 uint16_t Gpio::levels() const {
+  const Snapshot s = snapshot();  // registers read once per call, not once per pin
   uint16_t l = 0;
   for (unsigned p = 0; p < 16; ++p)
-    if (pin_level(p)) l |= static_cast<uint16_t>(1u << p);
+    if (level_of(p, s)) l |= static_cast<uint16_t>(1u << p);
   return l;
 }
 
@@ -92,15 +90,14 @@ void Gpio::update() {
 uint32_t Gpio::read(uint32_t off, unsigned width) {
   if ((off & ~3u) == IDR) {
     (void)regs_.read(off, width);  // strictness checks
-    return (uint32_t{levels()} >> ((off & 3u) * 8u)) &
-           (width == 4 ? 0xFFFFFFFFu : ((1u << (width * 8)) - 1u));
+    return lane_extract(levels(), off, width);
   }
   return regs_.read(off, width);
 }
 
 void Gpio::write(uint32_t off, unsigned width, uint32_t v) {
   uint32_t aligned = off & ~3u;
-  uint32_t val = lane_value(off, width, v);
+  uint32_t val = lane_merge(0, off, width, v);
   switch (aligned) {
     case BSRR: {
       regs_.write(off, width, v);  // stores nothing; strictness checks

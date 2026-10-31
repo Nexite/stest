@@ -18,7 +18,8 @@ struct UnmodelledAccess : std::runtime_error {
 
 class Bus {
  public:
-  // Throws std::invalid_argument on zero size or overlap.
+  // Throws std::invalid_argument on zero size, overlap, or a range outside both MMIO windows
+  // (see mmio_windows.hpp): firmware accesses there never reach the Bus.
   void map(uint64_t base, uint32_t size, Peripheral* p);
   void unmap(Peripheral* p);  // removes every mapping of p (no-op if none)
   // width in bytes (1,2,4). Throws UnmodelledAccess if unmapped or the peripheral

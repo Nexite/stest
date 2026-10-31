@@ -1,6 +1,6 @@
 #pragma once
 #include <cstdint>
-#include <map>
+#include <array>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -41,10 +41,28 @@ struct Peripheral {  // one instance per mapped block
   virtual nlohmann::json call(std::string_view op, const nlohmann::json& args);  // throws UnknownOp
 };
 
+// Sub-word access helpers shared by every model. `off` is taken modulo 4; width is 1, 2 or 4
+// bytes and the lane must not cross the word (callers check that).
+inline uint32_t lane_mask(uint32_t off, unsigned width) {  // e.g. (2,2) -> 0xFFFF0000
+  uint32_t m = width >= 4 ? 0xFFFFFFFFu : ((1u << (width * 8)) - 1u);
+  return m << ((off & 3u) * 8);
+}
+inline uint32_t lane_extract(uint32_t word, uint32_t off, unsigned width) {  // right-aligned
+  return (word & lane_mask(off, width)) >> ((off & 3u) * 8);
+}
+inline uint32_t lane_merge(uint32_t word, uint32_t off, unsigned width, uint32_t v) {
+  uint32_t m = lane_mask(off, width);
+  return (word & ~m) | ((v << ((off & 3u) * 8)) & m);
+}
+
 // 32-bit register store with reset values, rw/w1c masks. Sub-word accesses
 // operate on the byte lanes of the containing aligned register.
 class RegisterFile {
  public:
+  // Registers live in a flat array indexed by off/4: off must be word aligned and below
+  // kMaxBlock, else std::invalid_argument.
+  static constexpr uint32_t kMaxBlock = 0x400;
+  static constexpr uint32_t kMaxRegs = kMaxBlock / 4;
   // rw_mask: bits software may write. w1c_mask: bits cleared by writing 1.
   // rw_mask == w1c_mask == 0 declares a read-only register: write() throws ReadOnlyRegister.
   void declare(uint32_t off, uint32_t reset, uint32_t rw_mask, uint32_t w1c_mask = 0);
@@ -60,10 +78,10 @@ class RegisterFile {
   void set(uint32_t off, uint32_t v);
 
  private:
-  struct Reg { uint32_t value, reset, rw, w1c; bool write_only; };
+  struct Reg { uint32_t value = 0, reset = 0, rw = 0, w1c = 0; bool declared = false, write_only = false; };
   Reg& find(uint32_t off, unsigned width, bool is_write);
   const Reg& find(uint32_t off, unsigned width, bool is_write) const;
-  std::map<uint32_t, Reg> regs_;
+  std::array<Reg, kMaxRegs> regs_{};
 };
 
 }  // namespace stest

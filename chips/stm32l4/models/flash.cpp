@@ -58,7 +58,7 @@ void Flash::write(uint32_t off, unsigned width, uint32_t v) {
       return;  // locked: ignored
     }
     regs_.write(off, width, v);
-    uint32_t val = (width == 4) ? v : (v << ((off & 3u) * 8u));
+    uint32_t val = lane_merge(0, off, width, v);
     if (val & (kStrt | kOptStrt))
       throw std::runtime_error("FLASH program/erase (CR.STRT/OPTSTRT) is not modelled");
     if (val & kLock) regs_.set(CR, regs_.get(CR) | kLock);

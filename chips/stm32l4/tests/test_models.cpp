@@ -195,3 +195,19 @@ TEST_CASE("gpio: LCKR sequence locks configuration") {
   bus.write(0x48000400, 4, m & ~(3u << 2));  // PB1 not locked
   CHECK((bus.read(0x48000400, 4) & (3u << 2)) == 0);
 }
+
+#include <chrono>
+#include <cstdio>
+TEST_CASE("bench: Gpio::write ns/op" * doctest::skip()) {
+  Bus bus;
+  Clock clock;
+  stm32l4::Gpio gpio("GPIOA", json{{"port", "A"}}, clock);
+  bus.map(GPIOA, 0x400, &gpio);
+  bus.write(GPIOA + 0x00, 4, 0x55555555);  // MODER: all outputs
+  constexpr int N = 2000000;
+  auto t0 = std::chrono::steady_clock::now();
+  for (int i = 0; i < N; ++i) bus.write(GPIOA + 0x08, 4, uint32_t(i));  // OSPEEDR: no level change, so update() is pure compute
+  auto t1 = std::chrono::steady_clock::now();
+  std::printf("Gpio::write (OSPEEDR): %.1f ns/op\n",
+              std::chrono::duration<double, std::nano>(t1 - t0).count() / N);
+}

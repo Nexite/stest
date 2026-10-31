@@ -1,5 +1,6 @@
 // Runtime implementation of the __stest_mmio_* ABI. This TU is NOT compiled
 // with the MMIO pass (its own volatile accesses must not recurse).
+#include "stest/mmio_windows.hpp"
 #include "stest/mmio.h"
 #include <algorithm>
 #include <cstdarg>
@@ -30,12 +31,12 @@ Tuple g_tuples[kMaxTuples];
 uint64_t g_break_epoch = 0;    // bumped by poll_streak_break()
 bool g_inited = false;
 
-constexpr uint64_t kPeriphBase = 0x40000000u, kPeriphSize = 0x20000000u;
-constexpr uint64_t kCoreBase = 0xE0000000u, kCoreSize = 0x100000u;
+using stest::kCoreBase;
+using stest::kCoreSize;
+using stest::kPeriphBase;
+using stest::kPeriphSize;
 
-inline bool in_window(uint64_t a) {
-  return (a - kPeriphBase) < kPeriphSize || (a - kCoreBase) < kCoreSize;
-}
+inline bool in_window(uint64_t a) { return stest::in_mmio_window(a); }
 
 // Clock event callbacks (e.g. SysTick wraps) fire here; nothing may escape into
 // instrumented C.
