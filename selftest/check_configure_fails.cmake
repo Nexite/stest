@@ -1,0 +1,47 @@
+# Configures a tiny project that misuses stest_add_firmware and expects the configure
+# step to fail with a specific message.
+# Inputs: CASE (bad_include|bad_compiler), STEST_ROOT, WORK, STEST_CLANG, STEST_LLVM_ROOT,
+#         STEST_CLANGXX, LLVM_DIR, CMAKE_BIN, GEN, MAKE_PROGRAM.
+file(REMOVE_RECURSE "${WORK}")
+file(MAKE_DIRECTORY "${WORK}/bin" "${WORK}/src" "${WORK}/inc")
+file(WRITE "${WORK}/inc/core_cm4.h" "/* a user's own CMSIS-Core copy */\n")
+file(WRITE "${WORK}/src/main.c" "int main(void) { return 0; }\n")
+file(WRITE "${WORK}/CMakeLists.txt" "
+cmake_minimum_required(VERSION 3.23)
+include(${STEST_ROOT}/cmake/StestToolchain.cmake)
+project(tiny LANGUAGES C CXX)
+include(${STEST_ROOT}/cmake/stest_add_firmware.cmake)
+add_subdirectory(${STEST_ROOT}/compiler/mmio_pass mmio_pass)
+stest_add_firmware(fw CHIP STM32L496RG SOURCES ${WORK}/src/main.c
+                   INCLUDE_DIRS ${WORK}/inc)
+")
+set(args -S "${WORK}" -B "${WORK}/build" -DSTEST_CLANG=${STEST_CLANG} -DLLVM_DIR=${LLVM_DIR}
+    -G ${GEN} -DCMAKE_MAKE_PROGRAM=${MAKE_PROGRAM} -DCMAKE_CXX_COMPILER=${STEST_CLANGXX})
+if(STEST_LLVM_ROOT)
+  list(APPEND args -DSTEST_LLVM_ROOT=${STEST_LLVM_ROOT})
+endif()
+if(CASE STREQUAL "bad_include")
+  set(pattern "Drop your Drivers/CMSIS/Include")
+elseif(CASE STREQUAL "bad_compiler")
+  find_program(OTHER_CC NAMES gcc cc)
+  get_filename_component(a "${OTHER_CC}" REALPATH)
+  get_filename_component(b "${STEST_CLANG}" REALPATH)
+  if(NOT OTHER_CC OR a STREQUAL b)
+    # Only clang available (e.g. the Docker image): a byte copy has a different real path.
+    file(COPY_FILE "${b}" "${WORK}/bin/cc")
+    set(OTHER_CC "${WORK}/bin/cc")
+  endif()
+  list(APPEND args -DCMAKE_C_COMPILER=${OTHER_CC})
+  set(pattern "the C compiler is")
+else()
+  message(FATAL_ERROR "unknown CASE ${CASE}")
+endif()
+execute_process(COMMAND "${CMAKE_BIN}" ${args} RESULT_VARIABLE rc ERROR_VARIABLE err OUTPUT_QUIET)
+if(rc EQUAL 0)
+  message(FATAL_ERROR "configure unexpectedly succeeded for ${CASE}")
+endif()
+# CMake word-wraps message() text by path length, so match on collapsed whitespace.
+string(REGEX REPLACE "[ \t\r\n]+" " " err_flat "${err}")
+if(NOT err_flat MATCHES "${pattern}")
+  message(FATAL_ERROR "configure failed without the expected message '${pattern}':\n${err}")
+endif()

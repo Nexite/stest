@@ -1,0 +1,26 @@
+[project]
+name = "stest"
+version = "0.1.0"
+description = "STM32 software-in-the-loop simulator: Python test harness"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+dependencies = [
+    "pyelftools>=0.33",
+]
+
+[project.entry-points.pytest11]
+stest = "stest.pytest_plugin"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["python/stest"]
+
+[tool.pytest.ini_options]
+testpaths = ["python/tests"]
