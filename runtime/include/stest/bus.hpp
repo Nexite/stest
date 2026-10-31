@@ -20,7 +20,7 @@ struct UnmodelledAccess : std::runtime_error {
 };
 
 // An access to a gated peripheral whose clock is disabled (strict abort). what() is
-// "access to <NAME> while its clock is disabled (<what passed to set_gate>)".
+// "access to <NAME> while its clock is disabled (<what passed to set_gate>) (<read|write><bits> 0x%08x)".
 struct ClockDisabled : std::runtime_error {
   uint64_t addr; unsigned width; bool is_write;
   ClockDisabled(const std::string& msg, uint64_t a, unsigned w, bool wr)

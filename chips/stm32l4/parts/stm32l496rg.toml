@@ -33,6 +33,22 @@ base = 0x40007000
 size = 0x400
 rcc_enable = { reg = "APB1ENR1", bit = 28 }
 
+# SYSCFG (EXTI port selection) is clocked from APB2ENR bit 0; EXTI itself is always clocked.
+[[peripheral]]
+name = "SYSCFG"
+model = "stm32l4.syscfg"
+base = 0x40010000
+size = 0x400
+rcc_enable = { reg = "APB2ENR", bit = 0 }
+
+# EXTI lines 0-15 (GPIO) and the NVIC IRQ each one pends: EXTI0..4, EXTI9_5, EXTI15_10.
+[[peripheral]]
+name = "EXTI"
+model = "stm32l4.exti"
+base = 0x40010400
+size = 0x400
+params = { irq = [6, 7, 8, 9, 10, 23, 23, 23, 23, 23, 40, 40, 40, 40, 40, 40] }
+
 [[peripheral]]
 name = "FLASH"
 model = "stm32l4.flash"

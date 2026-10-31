@@ -109,7 +109,7 @@ TEST_CASE("bus: gated peripheral aborts while its clock is disabled") {
     bus.write(0x48000414, 4, 1);
     FAIL("expected ClockDisabled");
   } catch (const ClockDisabled& e) {
-    CHECK(std::string(e.what()) == "access to GPIOB while its clock is disabled (RCC AHB2ENR bit 1)");
+    CHECK(std::string(e.what()) == "access to GPIOB while its clock is disabled (RCC AHB2ENR bit 1) (write32 0x48000414)");
     CHECK(e.addr == 0x48000414);
     CHECK(e.is_write);
   }
@@ -139,7 +139,7 @@ TEST_CASE("bus: word-form gate reads the enable word live") {
     bus.read(0x40007000, 4);
     FAIL("expected ClockDisabled");
   } catch (const ClockDisabled& e) {
-    CHECK(std::string(e.what()) == "access to PWR while its clock is disabled (RCC APB1ENR1 bit 28)");
+    CHECK(std::string(e.what()) == "access to PWR while its clock is disabled (RCC APB1ENR1 bit 28) (read32 0x40007000)");
     CHECK_FALSE(e.is_write);
   }
   t.enr = 1u << 27;  // another bit: still gated

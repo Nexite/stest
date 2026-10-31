@@ -34,6 +34,13 @@ foreach(variant SPIN CRASH UNMODELLED RO_WRITE CLKOFF)
     HAL_SOURCES ${_st_hal}/Src/stm32l4xx_hal.c)
 endforeach()
 
+# EXTI: HAL_GPIO_EXTI_Callback driven by PC13 rising edges (blinky's CubeMX scaffolding).
+stest_add_firmware(exti
+  CHIP STM32L496RG
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/firmware/exti/main.c ${_bl}/Src/stm32l4xx_it.c
+          ${_bl}/Src/stm32l4xx_hal_msp.c
+  INCLUDE_DIRS ${_bl}/Inc)
+
 # Poll fast-forward regression firmware (counting loop over a constant volatile read).
 stest_add_firmware(pollcount
   CHIP STM32L496RG

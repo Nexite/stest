@@ -81,10 +81,13 @@ void Gpio::update() {
   uint16_t changed = now ^ last_levels_;
   last_levels_ = now;
   if (!changed) return;
+  const uint64_t t = clock_.now_ns();
   for (unsigned p = 0; p < 16; ++p)
-    if (changed & (1u << p))
-      emit_event(clock_.now_ns(), {{"kind", "gpio"}, {"port", port_}, {"pin", p},
-                                   {"level", (now >> p) & 1u}});
+    if (changed & (1u << p)) {
+      const int level = (now >> p) & 1u;
+      emit_event(t, {{"kind", "gpio"}, {"port", port_}, {"pin", p}, {"level", level}});
+      edges_.emit(PinEdge{port_[0], p, level, t});
+    }
 }
 
 uint32_t Gpio::read(uint32_t off, unsigned width) {

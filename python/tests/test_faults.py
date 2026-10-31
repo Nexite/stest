@@ -86,13 +86,13 @@ def test_access_with_clock_disabled_aborts(faults_exe):
         s.start()
         with pytest.raises(
             NodeCrashed,
-            match=r"access to GPIOB while its clock is disabled \(RCC AHB2ENR bit 1\)",
+            match=r"access to GPIOB while its clock is disabled \(RCC AHB2ENR bit 1\) \(write32 0x48000414\)",
         ) as ei:
             s.advance(ms=100)
         first = str(ei.value).splitlines()[0]
         assert first == (
             "node 'clk' aborted at virtual t=10.000 ms: "
-            "stest: access to GPIOB while its clock is disabled (RCC AHB2ENR bit 1) (exit status 70)"
+            "stest: access to GPIOB while its clock is disabled (RCC AHB2ENR bit 1) (write32 0x48000414) (exit status 70)"
         )
 
 

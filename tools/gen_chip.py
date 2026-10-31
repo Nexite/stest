@@ -23,7 +23,7 @@ Clock gating: [clock_tree] names the clock-tree model (`peripheral`, implements
 stest::ClockTree) and the RCC enable registers by name (`enable_regs = { AHB2ENR = 0x4C,
 ... }`, offsets in the RCC block). A [[peripheral]] with
 `rcc_enable = { reg = "AHB2ENR", bit = 0 }` is gated on that bit: any access while it is
-clear aborts "access to <NAME> while its clock is disabled (RCC AHB2ENR bit 0)".
+clear aborts "access to <NAME> while its clock is disabled (RCC AHB2ENR bit 0) (write32 0x48000414)".
 
 Python >= 3.11, standard library only (tomllib).
 """

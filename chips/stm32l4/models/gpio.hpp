@@ -13,6 +13,7 @@
 //
 // params: {"port": "A", "moder_reset": u32 (default 0xFFFFFFFF),
 //          "ospeedr_reset": u32 (default 0), "pupdr_reset": u32 (default 0)}
+// Signal edges(): see PinEdge.
 // call(): "get_pin" {pin} -> 0/1; "drive_pin" {pin, level}; "release_pin" {pin}.
 #include <array>
 #include <cstdint>
@@ -24,6 +25,15 @@
 
 namespace stest::stm32l4 {
 
+// A pin level change, emitted synchronously (Gpio::edges()) at the virtual time it happens,
+// whether caused by firmware writes (MODER/ODR/BSRR/PUPDR/...) or by drive_pin/release_pin.
+struct PinEdge {
+  char port;      // 'A'..'I'
+  unsigned pin;   // 0..15
+  int level;      // new level, 0/1
+  uint64_t t_ns;  // Clock::now_ns() at the change
+};
+
 class Gpio : public Peripheral {
  public:
   Gpio(std::string name, const nlohmann::json& params, ModelContext& ctx);
@@ -34,6 +44,9 @@ class Gpio : public Peripheral {
   nlohmann::json call(std::string_view op, const nlohmann::json& args) override;
 
   int pin_level(unsigned pin) const;
+  // Fires once per level change, pins in ascending order, before the causing access returns
+  // (the same changes that become "gpio" events). EXTI subscribes in its connect().
+  Signal<PinEdge>& edges() { return edges_; }
 
  private:
   struct Snapshot { uint32_t moder, otyper, pupdr, odr; };
@@ -52,6 +65,7 @@ class Gpio : public Peripheral {
   int lck_stage_ = 0;
   uint16_t lck_mask_ = 0;
   bool locked_ = false;
+  Signal<PinEdge> edges_;
 };
 
 }  // namespace stest::stm32l4

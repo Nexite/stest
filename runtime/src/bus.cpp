@@ -1,5 +1,6 @@
 #include "stest/bus.hpp"
 #include <algorithm>
+#include <cstdio>
 #include "stest/mmio_windows.hpp"
 
 namespace stest {
@@ -48,8 +49,11 @@ void Bus::install_gate(Peripheral* p, Gate gate) {
 }
 
 void Bus::gated(const Mapping& m, uint64_t addr, unsigned width, bool is_write) {
+  char tail[48];
+  std::snprintf(tail, sizeof tail, " (%s%u 0x%08x)", is_write ? "write" : "read", width * 8,
+                static_cast<unsigned>(addr));
   throw ClockDisabled("access to " + std::string(m.p->name()) + " while its clock is disabled (" +
-                          m.gate->what + ")",
+                          m.gate->what + ")" + tail,
                       addr, width, is_write);
 }
 

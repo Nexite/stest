@@ -53,3 +53,8 @@ def faults_exe():
 @pytest.fixture
 def pollcount_exe() -> Path:
     return _exe("pollcount")
+
+
+@pytest.fixture
+def exti_exe() -> Path:
+    return _exe("exti")
