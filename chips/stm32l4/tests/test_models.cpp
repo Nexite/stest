@@ -188,7 +188,7 @@ TEST_CASE("gpio: deliver drive_pin schedules the drive at t, event stamped t") {
   gpio.deliver("drive_pin", {{"pin", 0}, {"level", nullptr}}, 2000);  // release
   CHECK(gpio.pin_level(0) == 0);  // nothing changes before t
   CHECK(take_events().empty());
-  clock.advance(1010);  // the firmware's next access overshoots t by 10 ns
+  clock.advance(1010);  // the access whose charge crosses t ends 10 ns after it
   clock.run_due();
   CHECK(gpio.pin_level(0) == 1);
   auto ev = take_events();

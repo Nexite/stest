@@ -73,9 +73,12 @@ class Node {
 
   // Creates the (parked) firmware thread: chip.startup() then fw(). Once only.
   void start(FirmwareMain fw);
-  // Runs the firmware until virtual time >= t_ns or firmware exit. If now >= t_ns it
-  // returns Stop::Quantum immediately without running firmware. After an MMIO-charge
-  // yield now may exceed t_ns by less than one access cost; a wfi yield stops at t_ns.
+  // Runs the firmware until it reaches the quantum end t_ns or exits. If now >= t_ns it
+  // returns Stop::Quantum immediately without running firmware. The clock never passes
+  // t_ns: an access whose charge would cross it yields first (now < t_ns, the access
+  // happens on the next call, at the same virtual time as without the boundary); a charge
+  // landing exactly on t_ns, a wfi or a poll fast-forward stops at now == t_ns. On resume,
+  // Clock events the loop scheduled at now (inbox) fire before the firmware continues.
   Stop run_until(uint64_t t_ns);
 
   bool exited() const;

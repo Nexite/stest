@@ -98,7 +98,8 @@ def test_post_at_node_now_is_allowed(blinky_exe):
         n = s.node("b", blinky_exe)
         s.start()
         s.advance(ms=1)
-        t = n.now_ns  # may exceed the quantum end by less than one access cost
+        t = n.now_ns  # never past the quantum end (<= 1 ms)
+        assert t <= s.now_ns
         n.post("GPIOA", "drive_pin", {"pin": 0, "level": 1}, t)
         s.advance(ms=1)
         assert n.pin("PA0").history == [(t, 1)]
@@ -143,6 +144,24 @@ def test_post_validates_arguments(blinky_exe):
             n.post("GPIOA", "drive_pin", [0, 1], 0)
         with pytest.raises(ValueError, match="too long"):
             n.post("GPIOA", "drive_pin", {"x": "a" * 70000}, 0)
+
+
+def test_post_rejects_inbox_over_max_payload(blinky_exe, monkeypatch):
+    monkeypatch.setattr(proto, "MAX_PAYLOAD", 200)
+    with Sim() as s:
+        n = s.node("b", blinky_exe)
+        s.start()
+        args = {"pin": 0, "level": 1}
+        one = proto.INBOX_ENTRY_OVERHEAD + len(proto.inbox_message("GPIOA", "drive_pin", args))
+        fits = (200 - proto.RUN_UNTIL_FIXED) // one
+        for i in range(fits):
+            n.post("GPIOA", "drive_pin", args, 500_000 + i)
+        with pytest.raises(StestError, match="inbox would exceed the protocol maximum of 200 bytes"):
+            n.post("GPIOA", "drive_pin", args, 900_000)
+        s.advance(ms=1)  # flushed: room again
+        n.post("GPIOA", "drive_pin", args, 1_500_000)
+        s.advance(ms=1)
+        assert n.pin("PA0").level == 1
 
 
 def test_post_in_past_aborts(blinky_exe):
@@ -231,3 +250,58 @@ def test_abort_output_not_duplicated(faults_exe):
         assert n.log == ["itm 1"]
         evs = [json.loads(js) for _, _, js in s.event_log]
         assert evs[-1] == {"kind": "stdout", "periph": "stdout", "text": "frag", "partial": True}
+
+
+# ---- quantum-boundary independence (nodes never stop past the quantum end) ----
+
+
+def _pollpin_run(exe, quantum_us, post_at, poll_skip):
+    """Drive PA0 high at 2.0 ms, low at 2.5 ms + 12 345 ns, high at 3.0 ms, low at 3.4 ms
+    (pollpin mirrors each on PA5). ``post_at``: "boundary" posts each message when the sim
+    is at the quantum boundary at or just before its t (t == T when t is on the grid);
+    "early" posts all of them at t=0. -> (event log, counts)."""
+    drives = [(2_000_000, 1), (2_512_345, 0), (3_000_000, 1), (3_400_000, 0)]
+    with Sim(quantum_us=quantum_us, poll_skip=poll_skip) as s:
+        n = s.node("p", exe)
+        s.start()
+        if post_at == "early":
+            for t, lv in drives:
+                n.pin("PA0").drive_at(lv, t)
+        else:
+            for t, lv in drives:
+                s.advance(ns=(t // s.quantum_ns) * s.quantum_ns - s.now_ns)
+                assert n.now_ns <= s.now_ns <= t
+                n.pin("PA0").drive_at(lv, t)
+        s.advance(ms=5)
+        assert n.var("rounds") == 4
+        return list(s.event_log), [n.var(f"counts[{i}]") for i in range(4)]
+
+
+@pytest.mark.parametrize("poll_skip", [0, None])
+def test_inbox_delivery_is_quantum_independent(pollpin_exe, poll_skip):
+    ref = _pollpin_run(pollpin_exe, 1000, "early", poll_skip)
+    log, counts = ref
+    pa5 = [(t, json.loads(js)["level"]) for t, _, js in log if json.loads(js)["pin"] == 5]
+    assert [lv for _, lv in pa5] == [1, 0, 1, 0]
+    # PA5 follows within a few accesses of each drive
+    for (t5, _), t0 in zip(pa5, (2_000_000, 2_512_345, 3_000_000, 3_400_000)):
+        assert 0 < t5 - t0 < 200
+    for q, post_at in [(1000, "boundary"), (100, "early"), (100, "boundary")]:
+        got = _pollpin_run(pollpin_exe, q, post_at, poll_skip)
+        assert got[0] == log, (q, post_at)
+        if poll_skip == 0:  # with fast-forward on, counted spins are dilated per quantum (documented)
+            assert got[1] == counts, (q, post_at)
+
+
+@pytest.mark.parametrize("quantum_us", [1000, 100, 7])
+def test_node_never_stops_past_the_quantum_end(blinky_exe, tim_exe, quantum_us):
+    with Sim(quantum_us=quantum_us) as s:
+        nodes = [s.node("b", blinky_exe), s.node("t", tim_exe)]
+        s.start()
+        for _ in range(40):
+            s.advance(ns=33_337)  # ends off the quantum grid too
+            for n in nodes:
+                assert n.now_ns <= s.now_ns, (n.name, n.now_ns, s.now_ns)
+        s.advance(ms=600)
+        assert all(n.now_ns <= s.now_ns for n in nodes)
+        assert [t for t, _ in nodes[0].pin("PA5").history] == [500_001_825]

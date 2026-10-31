@@ -148,6 +148,13 @@ stest_add_firmware(pollcount
   INCLUDE_DIRS ${_bl}/Inc
   HAL_SOURCES ${_st_hal}/Src/stm32l4xx_hal.c)
 
+# Tight polling of PA0 driven by timestamped inbox messages (python/tests/test_protocol_v2.py).
+stest_add_firmware(pollpin
+  CHIP STM32L496RG
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/firmware/pollpin/main.c
+  INCLUDE_DIRS ${_bl}/Inc
+  HAL_SOURCES ${_st_hal}/Src/stm32l4xx_hal.c)
+
 # Configure-time checks of stest_add_firmware (compiler identity, CMSIS include dirs,
 # MODELS= types/modes).
 foreach(case bad_include bad_compiler models_unknown models_unsupported)

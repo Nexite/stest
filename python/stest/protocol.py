@@ -26,6 +26,8 @@ _U32 = struct.Struct("<I")
 _EVENT_HDR = struct.Struct("<QH")
 _MEM_REQ = struct.Struct("<QI")
 _U16 = struct.Struct("<H")
+RUN_UNTIL_FIXED = _RUN_UNTIL_HDR.size  # RUN_UNTIL payload bytes before the inbox
+INBOX_ENTRY_OVERHEAD = _EVENT_HDR.size  # per inbox message: u64 t_ns, u16 json_len
 
 MAX_READ_MEM = MAX_PAYLOAD  # the MEM reply carries exactly the bytes read
 MAX_WRITE_MEM = MAX_PAYLOAD - _MEM_REQ.size  # WRITE_MEM payload = addr, len, data

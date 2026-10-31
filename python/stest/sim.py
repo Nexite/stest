@@ -170,7 +170,7 @@ class Sim:
         for n in self.nodes:
             if n._inbox:
                 msg = proto.run_until(t, n._inbox)
-                n._inbox = []
+                n._inbox, n._inbox_bytes = [], 0
             else:
                 msg = plain = plain or proto.run_until(t)
             n._send(msg)

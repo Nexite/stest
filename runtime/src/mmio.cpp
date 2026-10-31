@@ -46,13 +46,26 @@ void run_due_events() {
   catch (const std::exception& e) { stest_rt_abort("exception in clock event: %s", e.what()); }
   catch (...) { stest_rt_abort("unknown exception in clock event"); }
 }
-// After the clock moved: fire due events, then yield at the quantum end.
-inline void settle() {
+inline void run_due_now() {
   if (__builtin_expect(g_clock.next_event_ns() <= g_clock.now_ns(), 0)) run_due_events();
-  // Quantum end: events due at <= now have fired; hand control back (blocks).
-  if (__builtin_expect(g_clock.now_ns() >= g_quantum_end, 0) && g_qhook) g_qhook();
 }
+// Hand the baton back at the quantum end (blocks). On resume the loop thread may have
+// scheduled events at the current time (inbox, protocol v2): they fire before the caller
+// continues, exactly as if they had been scheduled before the yield.
+inline void boundary_yield() {
+  g_qhook();
+  run_due_now();
+}
+// After the clock moved: fire due events, then yield if exactly at the quantum end.
+inline void settle() {
+  run_due_now();
+  if (__builtin_expect(g_clock.now_ns() >= g_quantum_end, 0) && g_qhook) boundary_yield();
+}
+// The clock never moves past the quantum end: if this access's charge would cross it, the
+// node yields first with the clock unchanged (< quantum end) and charges on resume, so each
+// access happens at the same virtual time wherever the quantum boundaries fall.
 inline void charge() {
+  while (__builtin_expect(g_clock.now_ns() + g_cost_ns > g_quantum_end, 0) && g_qhook) boundary_yield();
   g_clock.advance(g_cost_ns);
   settle();
 }

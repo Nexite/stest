@@ -523,7 +523,13 @@ void Cortexm::wfi() {
   if (target > now) c.clock.advance(target - now);
   c.clock.run_due();
   c.deliver();
-  if (c.quantum_hook && c.clock.now_ns() >= c.quantum_end) c.quantum_hook();
+  if (c.quantum_hook && c.clock.now_ns() >= c.quantum_end) {
+    c.quantum_hook();
+    // Resumed: events the loop thread scheduled at the current time (inbox) fire and their
+    // exceptions are taken now, as if they had been scheduled before this wfi slept.
+    c.clock.run_due();
+    c.deliver();
+  }
 }
 void Cortexm::set_quantum_hook(QuantumHook h) { impl_->quantum_hook = h; }
 void Cortexm::set_quantum_end(uint64_t t_ns) { impl_->quantum_end = t_ns; }

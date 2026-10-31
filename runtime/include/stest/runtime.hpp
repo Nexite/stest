@@ -7,10 +7,14 @@
 //  - set_delivery_hook(): called after every __stest_mmio_* call (IRQ delivery
 //    point); null by default.
 //  - stest_rt_init() (mmio.h) must be called once at startup.
-//  - Quantum end: when a charge brings the clock to >= quantum_end(), the quantum
-//    hook (if set) is called right there, on the calling (firmware) thread, before
-//    the access proceeds. The node uses it to hand the baton back to its loop
-//    thread; the hook returns once the loop has set a later quantum end.
+//  - Quantum end: the clock never moves past quantum_end() while a quantum hook is set.
+//    If an access's charge would cross it, the hook is called first with the clock
+//    unchanged; if a charge lands exactly on it, due events fire and then the hook is
+//    called, before the access proceeds. Either way the access happens at the same
+//    virtual time as without the boundary. The hook runs on the calling (firmware)
+//    thread; the node uses it to hand the baton back to its loop thread, and it returns
+//    once the loop has set a later quantum end. Events due at the (unchanged) current
+//    time, e.g. scheduled by the loop thread meanwhile, fire right after it returns.
 #include <cstdint>
 #include <type_traits>
 #include "stest/bus.hpp"

@@ -104,7 +104,8 @@ class Cortexm {
   // If the clock is at/after the quantum end once wfi has slept, the quantum hook (if
   // set) is called before returning: the node yields its baton there, so a firmware
   // `while (!x) __WFI();` loop runs exactly one iteration per quantum instead of
-  // spinning at the quantum end.
+  // spinning at the quantum end. On resume, events due at the current time (scheduled by
+  // the loop thread meanwhile) fire and deliver() runs again before wfi returns.
   void wfi();
   void set_quantum_end(uint64_t t_ns);
   uint64_t quantum_end() const;

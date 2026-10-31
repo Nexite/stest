@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdint>
 #include <thread>
+#include <vector>
 #include "stest/cortexm_c.h"
 #include "stest/mmio.h"
 #include "stest/node.hpp"
@@ -73,8 +74,7 @@ TEST_CASE("node: quantum end reached during an MMIO charge yields; one thread at
   node.start(&fw_poll_forever);
   CHECK(node.run_until(t0 + 1000) == Node::Stop::Quantum);
   uint64_t t1 = node.now_ns();
-  CHECK(t1 >= t0 + 1000);
-  CHECK(t1 < t0 + 1000 + 25);
+  CHECK(t1 == t0 + 1000);  // never past the quantum end (here a charge lands exactly on it)
   int n1 = g_iters;
   CHECK(n1 >= 39);
   CHECK(n1 <= 40);
@@ -129,6 +129,80 @@ TEST_CASE("node: model registry") {
   register_model(&d);
   CHECK(find_model("DUMMY") == &d);
   CHECK_THROWS_AS(register_model(&d), std::invalid_argument);
+}
+
+namespace {
+constexpr int kRec = 200;
+uint64_t g_times[kRec];
+int g_nrec = 0;
+int fw_record_access_times() {
+  for (g_nrec = 0; g_nrec < kRec;) {
+    (void)__stest_mmio_load32(&g_ram);
+    g_times[g_nrec++] = stest_rt_now_ns();
+  }
+  for (;;) stest_rt_wfi();
+}
+
+volatile uint32_t g_flag = 0;
+uint64_t g_seen = 0;
+int fw_poll_flag() {
+  while (!__stest_mmio_load32(&g_flag)) {
+  }
+  g_seen = stest_rt_now_ns();
+  for (;;) stest_rt_wfi();
+}
+
+// Access times of fw_record_access_times relative to its start, stopping at each `ends`
+// offset; checks that the node never stops past the quantum end.
+std::vector<uint64_t> record_with_ends(std::initializer_list<uint64_t> ends) {
+  Node node(kChip);
+  const uint64_t t0 = node.now_ns();
+  node.start(&fw_record_access_times);
+  for (uint64_t e : ends) {
+    CHECK(node.run_until(t0 + e) == Node::Stop::Quantum);
+    CHECK(node.now_ns() <= t0 + e);
+  }
+  REQUIRE(g_nrec == kRec);
+  std::vector<uint64_t> out;
+  for (int i = 0; i < kRec; ++i) out.push_back(g_times[i] - t0);
+  return out;
+}
+
+uint64_t seen_offset(bool schedule_while_parked) {
+  g_flag = 0;
+  g_seen = 0;
+  Node node(kChip);
+  const uint64_t t0 = node.now_ns();
+  const uint64_t t = t0 + 1000;  // 40 accesses of 25 ns: a charge lands exactly on it
+  auto set_flag = [] { g_flag = 1; };
+  if (!schedule_while_parked) runtime_clock().schedule_at(t, set_flag);
+  node.start(&fw_poll_flag);
+  CHECK(node.run_until(t) == Node::Stop::Quantum);
+  CHECK(node.now_ns() == t);  // parked exactly at the quantum end, before that access
+  if (schedule_while_parked) runtime_clock().schedule_at(node.now_ns(), set_flag);  // t == now
+  CHECK(node.run_until(t0 + 3000) == Node::Stop::Quantum);
+  return g_seen - t0;
+}
+}  // namespace
+
+TEST_CASE("node: a charge never moves the clock past the quantum end; timing is boundary-independent") {
+  set_access_cost_ns(25);
+  set_poll_skip_threshold(0);  // constant loads: no fast-forward (its jumps depend on the quantum)
+  const auto straight = record_with_ends({10'000});
+  CHECK(straight[0] == 25);
+  CHECK(straight[kRec - 1] == 25u * kRec);
+  // Quantum ends on and off the 25 ns access grid, including ones that allow no progress.
+  CHECK(record_with_ends({7, 1010, 1011, 1012, 1333, 2000, 2001, 2024, 2025, 4999, 10'000}) == straight);
+  set_poll_skip_threshold(64);
+}
+
+TEST_CASE("node: an event scheduled at now while parked is seen by the in-flight access") {
+  set_access_cost_ns(25);
+  set_poll_skip_threshold(0);
+  const uint64_t scheduled_before = seen_offset(false);
+  CHECK(scheduled_before == 1000);  // the access charged to t reads the flag set at t
+  CHECK(seen_offset(true) == scheduled_before);
+  set_poll_skip_threshold(64);
 }
 
 TEST_CASE("node: only one node per process at a time") {

@@ -65,6 +65,7 @@ class Node:
         self._resolved: dict[str, Any] = {}  # expr -> Resolved (static; valid for the node's lifetime)
         self._pin_history: dict[tuple[str, int], list[tuple[int, int]]] = {}
         self._inbox: list[tuple[int, bytes]] = []  # Node.post messages for the next RUN_UNTIL
+        self._inbox_bytes = 0  # their encoded size in RUN_UNTIL
         # Unterminated ITM/stdout lines the runtime reported on stderr at exit, as
         # ("itm", port, text) / ("stdout", 0, text); folded into the logs by _join_stderr()
         # (after any ERROR events, so they stay last) unless an ERROR frame carried them.
@@ -189,7 +190,15 @@ class Node:
             raise ValueError(f"post: t_ns out of range: {t_ns}")
         if not isinstance(args, dict):
             raise TypeError(f"post: args must be a dict (got {type(args).__name__})")
-        self._inbox.append((t_ns, proto.inbox_message(model, op, args)))
+        js = proto.inbox_message(model, op, args)
+        size = self._inbox_bytes + proto.INBOX_ENTRY_OVERHEAD + len(js)
+        if proto.RUN_UNTIL_FIXED + size > proto.MAX_PAYLOAD:
+            raise StestError(
+                f"node {self.name!r}: post: the next quantum's inbox would exceed the protocol maximum of "
+                f"{proto.MAX_PAYLOAD} bytes (advance the simulation to flush it first)"
+            )
+        self._inbox.append((t_ns, js))
+        self._inbox_bytes = size
 
     def call(self, model: str, op: str, **args: Any) -> Any:
         """Call ``op`` on peripheral model ``model`` (e.g. "GPIOA"); returns its JSON result."""
