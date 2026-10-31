@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import protocol as proto
 from .errors import StestError
-from .peripherals import Timer
+from .peripherals import Adc, Dac, Timer
 from .pin import Pin
 
 if TYPE_CHECKING:
@@ -63,6 +63,14 @@ class Node:
     def timer(self, name: str) -> Timer:
         """Timer model ``name`` (e.g. "TIM7"): ``.state()``, ``.update_hz``, ``.channel(n).duty``."""
         return Timer(self, name)
+
+    def adc(self, n: int) -> Adc:
+        """ADC ``n`` (1-based): ``.set(channel, volts)``, ``.get(channel)``."""
+        return Adc(self, n)
+
+    def dac(self, n: int) -> Dac:
+        """DAC ``n`` (model "DAC<n>"): ``.channel(c).volts``, ``.state()``."""
+        return Dac(self, f"DAC{int(n)}")
 
     def call(self, model: str, op: str, **args: Any) -> Any:
         """Call ``op`` on peripheral model ``model`` (e.g. "GPIOA"); returns its JSON result."""

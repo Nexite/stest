@@ -15,8 +15,18 @@
 //          "ospeedr_reset": u32 (default 0), "pupdr_reset": u32 (default 0)}
 // Signal edges(): see PinEdge.
 // call(): "get_pin" {pin} -> 0/1; "drive_pin" {pin, level}; "release_pin" {pin}.
+//
+// Analog voltage (ADC inputs, DAC outputs), per pin, independent of the digital level
+// above (it never changes IDR): an external voltage set from outside (call "set_voltage"
+// {pin, volts}, e.g. Python's Pin.set_voltage) wins over an on-chip analog driver
+// (set_analog_drive(), used by the DAC for its output pins), like drive_pin overrides the
+// firmware's output. Neither set: voltage() is empty (the pin floats). MODEL_CALL is the
+// outside world driving the pin, so set_voltage works whatever the RCC clock state.
+// call(): "set_voltage" {pin, volts (finite number)}; "get_voltage" {pin} -> volts | null;
+// "release_voltage" {pin} (drop the external voltage).
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <nlohmann/json.hpp>
 #include "stest/clock.hpp"
@@ -44,6 +54,10 @@ class Gpio : public Peripheral {
   nlohmann::json call(std::string_view op, const nlohmann::json& args) override;
 
   int pin_level(unsigned pin) const;
+  // Analog voltage of `pin` (external, else on-chip driver), empty if neither is set.
+  std::optional<double> voltage(unsigned pin) const;
+  // On-chip analog driver (DAC output buffer): a voltage, or empty to stop driving.
+  void set_analog_drive(unsigned pin, std::optional<double> volts);
   // Fires once per level change, pins in ascending order, before the causing access returns
   // (the same changes that become "gpio" events). EXTI subscribes in its connect().
   Signal<PinEdge>& edges() { return edges_; }
@@ -61,6 +75,7 @@ class Gpio : public Peripheral {
   Clock& clock_;
   RegisterFile regs_;
   std::array<int8_t, 16> drive_{};  // -1: not driven
+  std::array<std::optional<double>, 16> ext_volts_{}, drv_volts_{};
   uint16_t last_levels_ = 0;
   int lck_stage_ = 0;
   uint16_t lck_mask_ = 0;

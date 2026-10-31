@@ -25,6 +25,11 @@ stest::ClockTree) and the RCC enable registers by name (`enable_regs = { AHB2ENR
 `rcc_enable = { reg = "AHB2ENR", bit = 0 }` is gated on that bit: any access while it is
 clear aborts "access to <NAME> while its clock is disabled (RCC AHB2ENR bit 0) (write32 0x48000414)".
 
+Analog pins: top-level `[[analog]]` entries (`pin = "PB1", adc = [1, 2], channel = 16`)
+map package pins to ADC channels. They are validated (pin "P<port><0-15>" with a
+GPIO<port> peripheral, ADC numbers 1..9 without repeats, channel 1..18, each (adc, channel)
+and each pin listed once) and passed to every `<family>.adc` model as `params.analog`.
+
 Python >= 3.11, standard library only (tomllib).
 """
 from __future__ import annotations
@@ -36,6 +41,7 @@ import tomllib
 from pathlib import Path
 
 IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+PIN = re.compile(r"^P([A-Z])(\d{1,2})$")
 
 # Core exceptions: (exception number, CMSIS handler name, IRQn).
 CORE_EXCEPTIONS = [
@@ -109,6 +115,38 @@ def load(path: Path) -> dict:
                 f"{path}: {p['name']}: bad rcc_enable {gate!r} "
                 f"(want {{ reg = <one of {sorted(regs)}>, bit = 0..31 }})"
             )
+    analog = data.get("analog", [])
+    if not isinstance(analog, list):
+        raise ChipError(f"{path}: analog must be an array of tables ([[analog]])")
+    pins, chans = set(), set()
+    for a in analog:
+        m = PIN.match(a.get("pin", "")) if isinstance(a, dict) else None
+        adcs = a.get("adc") if isinstance(a, dict) else None
+        ch = a.get("channel") if isinstance(a, dict) else None
+        if (
+            not m
+            or set(a) != {"pin", "adc", "channel"}
+            or not 0 <= int(m.group(2)) <= 15
+            or not isinstance(adcs, list)
+            or not adcs
+            or len(set(adcs)) != len(adcs)
+            or not all(isinstance(n, int) and not isinstance(n, bool) and 1 <= n <= 9 for n in adcs)
+            or not isinstance(ch, int)
+            or isinstance(ch, bool)
+            or not 1 <= ch <= 18
+        ):
+            raise ChipError(
+                f"{path}: bad [[analog]] entry {a!r} (want pin = \"PB1\", adc = [1, 2], channel = 1..18)"
+            )
+        if f"GPIO{m.group(1)}" not in names:
+            raise ChipError(f"{path}: [[analog]] pin {a['pin']}: no GPIO{m.group(1)} peripheral")
+        if a["pin"] in pins:
+            raise ChipError(f"{path}: [[analog]] pin {a['pin']} listed twice")
+        pins.add(a["pin"])
+        for n in adcs:
+            if (n, ch) in chans:
+                raise ChipError(f"{path}: [[analog]] ADC{n} channel {ch} listed twice")
+            chans.add((n, ch))
     irqs = data.get("irq", {})
     seen = {}
     for name, num in irqs.items():
@@ -183,7 +221,10 @@ def generate(data: dict, source_name: str) -> str:
     w("  stest::Cortexm& core = ctx.core();")
     for p in periphs:
         _, cls = model_class(p["model"])
-        params = json.dumps(p.get("params", {}), sort_keys=True, separators=(",", ":"))
+        params = dict(p.get("params", {}))
+        if p["model"].partition(".")[2] == "adc":
+            params["analog"] = data.get("analog", [])
+        params = json.dumps(params, sort_keys=True, separators=(",", ":"))
         var = f"m_{p['name']}"
         w(f'  static {cls} {var}("{p["name"]}", nlohmann::json::parse(R"json({params})json"), ctx);')
         w(f"  {var}.reset();")

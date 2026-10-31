@@ -134,6 +134,38 @@ def test_poll_skip_option_and_marker(pytester):
     r.assert_outcomes(passed=3)
 
 
+def test_strict_analog_option_and_marker(pytester):
+    pytester.makepyfile(
+        test_default="""
+        import pytest
+
+        def test_default(sim):
+            assert sim.strict_analog is None
+
+        @pytest.mark.stest(strict_analog=True)
+        def test_marker(sim):
+            assert sim.strict_analog is True
+        """,
+        test_cli="""
+        import pytest
+
+        def test_cli(sim):
+            assert sim.strict_analog is True
+
+        @pytest.mark.stest(strict_analog=False)
+        def test_marker_wins(sim):
+            assert sim.strict_analog is False
+
+        @pytest.mark.stest(quantum_us=50)
+        def test_other_marker_keeps_cli(sim):
+            assert sim.strict_analog is True
+        """,
+    )
+    pytester.runpytest("test_default.py", "--strict-markers").assert_outcomes(passed=2)
+    r = pytester.runpytest("test_cli.py", "--stest-strict-analog", "--strict-markers")
+    r.assert_outcomes(passed=3)
+
+
 def test_teardown_leaves_no_children_when_test_raises(pytester, blinky_exe):
     pidfile = pytester.path / "pid"
     pytester.makepyfile(

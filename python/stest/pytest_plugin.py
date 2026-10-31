@@ -7,7 +7,10 @@ Registered through the ``pytest11`` entry point (installed with the package).
 * options ``--stest-quantum-us`` (default 1000) and ``--stest-wall-timeout`` (seconds,
   default 30).
 * option ``--stest-poll-skip`` (poll fast-forward threshold; 0 disables; default: runtime's 64).
-* marker ``@pytest.mark.stest(quantum_us=..., wall_timeout_s=..., poll_skip=...)`` overrides them per test.
+* option ``--stest-strict-analog``: converting an ADC channel with no input voltage aborts
+  the node (default: it reads 0 V with one stderr warning).
+* marker ``@pytest.mark.stest(quantum_us=..., wall_timeout_s=..., poll_skip=..., strict_analog=...)``
+  overrides them per test.
 * on failure each node's last 200 stderr lines and the merged event log are attached to the
   report as ``stest node <name> stderr`` and ``stest events`` sections.
 """
@@ -31,13 +34,17 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     g.addoption("--stest-poll-skip", type=int, default=None, metavar="N",
                 help="poll fast-forward threshold in store-free loads; 0 disables "
                      "(default: the runtime's, 64)")
+    g.addoption("--stest-strict-analog", action="store_true", default=None,
+                help="abort a node that converts an ADC channel with no input voltage set "
+                     "(default: read 0 V and warn once per channel)")
 
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
-        "stest(quantum_us=..., wall_timeout_s=..., poll_skip=...): override the simulation quantum, "
-        "wall-clock timeout and poll fast-forward threshold of the `sim` fixture for this test",
+        "stest(quantum_us=..., wall_timeout_s=..., poll_skip=..., strict_analog=...): override the "
+        "simulation quantum, wall-clock timeout, poll fast-forward threshold and strict analog "
+        "inputs of the `sim` fixture for this test",
     )
 
 
@@ -47,17 +54,21 @@ def sim(request: pytest.FixtureRequest):
     quantum_us = cfg.getoption("--stest-quantum-us")
     wall_timeout_s = cfg.getoption("--stest-wall-timeout")
     poll_skip = cfg.getoption("--stest-poll-skip")
+    strict_analog = cfg.getoption("--stest-strict-analog")
     marker = request.node.get_closest_marker("stest")
     if marker is not None:
-        unknown = set(marker.kwargs) - {"quantum_us", "wall_timeout_s", "poll_skip"}
+        unknown = set(marker.kwargs) - {"quantum_us", "wall_timeout_s", "poll_skip", "strict_analog"}
         if unknown or marker.args:
             raise pytest.UsageError(
-                f"@pytest.mark.stest accepts only quantum_us=, wall_timeout_s= and poll_skip= (got {marker.args} {sorted(unknown)})"
+                "@pytest.mark.stest accepts only quantum_us=, wall_timeout_s=, poll_skip= and "
+                f"strict_analog= (got {marker.args} {sorted(unknown)})"
             )
         quantum_us = marker.kwargs.get("quantum_us", quantum_us)
         wall_timeout_s = marker.kwargs.get("wall_timeout_s", wall_timeout_s)
         poll_skip = marker.kwargs.get("poll_skip", poll_skip)
-    s = Sim(quantum_us=quantum_us, wall_timeout_s=wall_timeout_s, poll_skip=poll_skip)
+        strict_analog = marker.kwargs.get("strict_analog", strict_analog)
+    s = Sim(quantum_us=quantum_us, wall_timeout_s=wall_timeout_s, poll_skip=poll_skip,
+            strict_analog=strict_analog)
     request.node.stash[_SIM_KEY] = s
     try:
         yield s

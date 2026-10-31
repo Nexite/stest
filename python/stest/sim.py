@@ -44,7 +44,7 @@ class Sim:
     """
 
     def __init__(self, quantum_us: int = 1000, wall_timeout_s: float = 30.0, access_cost_ns: int = 25,
-                 poll_skip: int | None = None):
+                 poll_skip: int | None = None, strict_analog: bool | None = None):
         if quantum_us <= 0:
             raise ValueError("quantum_us must be positive")
         if wall_timeout_s <= 0:
@@ -57,6 +57,9 @@ class Sim:
         if poll_skip is not None and poll_skip < 0:
             raise ValueError("poll_skip must be >= 0 (0 disables poll fast-forward)")
         self.poll_skip = poll_skip
+        # True: converting an ADC channel with no input voltage aborts the node (else it
+        # reads 0 V with one stderr warning). None: inherit STEST_STRICT_ANALOG.
+        self.strict_analog = strict_analog
         self.nodes: list[Node] = []
         # Merged event log: (t_ns, node name, event JSON text), in merge order.
         self.event_log: list[tuple[int, str, str]] = []
@@ -90,6 +93,8 @@ class Sim:
         extra = {"STEST_ACCESS_COST_NS": str(self.access_cost_ns)}
         if self.poll_skip is not None:
             extra["STEST_POLL_SKIP"] = str(int(self.poll_skip))
+        if self.strict_analog is not None:
+            extra["STEST_STRICT_ANALOG"] = "1" if self.strict_analog else "0"
         try:
             for n in self.nodes:
                 n._spawn(extra)

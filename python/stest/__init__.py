@@ -2,7 +2,7 @@
 
 from .errors import NodeCrashed, StestError, SymbolError, SymbolRangeError, WaitTimeout, WallClockTimeout
 from .node import Node
-from .peripherals import Timer, TimerChannel
+from .peripherals import Adc, Dac, DacChannel, Timer, TimerChannel
 from .pin import Pin
 from .sim import Sim
 
@@ -12,6 +12,9 @@ __all__ = [
     "Pin",
     "Timer",
     "TimerChannel",
+    "Adc",
+    "Dac",
+    "DacChannel",
     "StestError",
     "NodeCrashed",
     "WaitTimeout",

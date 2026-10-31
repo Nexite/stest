@@ -1,4 +1,5 @@
 #include "stm32l4/models/gpio.hpp"
+#include <cmath>
 #include <stdexcept>
 #include "stest/node.hpp"
 
@@ -46,6 +47,8 @@ Gpio::Gpio(std::string name, const nlohmann::json& params, ModelContext& ctx)
 void Gpio::reset() {
   regs_.reset();
   drive_.fill(-1);
+  ext_volts_.fill(std::nullopt);
+  drv_volts_.fill(std::nullopt);
   lck_stage_ = 0;
   lck_mask_ = 0;
   locked_ = false;
@@ -67,6 +70,12 @@ int Gpio::level_of(unsigned pin, const Snapshot& s) const {
 }
 
 int Gpio::pin_level(unsigned pin) const { return level_of(pin, snapshot()); }
+
+std::optional<double> Gpio::voltage(unsigned pin) const {
+  return ext_volts_.at(pin) ? ext_volts_[pin] : drv_volts_.at(pin);
+}
+
+void Gpio::set_analog_drive(unsigned pin, std::optional<double> volts) { drv_volts_.at(pin) = volts; }
 
 uint16_t Gpio::levels() const {
   const Snapshot s = snapshot();  // registers read once per call, not once per pin
@@ -171,6 +180,21 @@ nlohmann::json Gpio::call(std::string_view op, const nlohmann::json& args) {
   if (op == "release_pin") {
     drive_[pin_arg(args)] = -1;
     update();
+    return nullptr;
+  }
+  if (op == "set_voltage") {
+    unsigned p = pin_arg(args);
+    if (!args.contains("volts") || !args["volts"].is_number() || !std::isfinite(args["volts"].get<double>()))
+      throw std::invalid_argument("missing finite number 'volts'");
+    ext_volts_[p] = args["volts"].get<double>();
+    return nullptr;
+  }
+  if (op == "get_voltage") {
+    std::optional<double> v = voltage(pin_arg(args));
+    return v ? nlohmann::json(*v) : nlohmann::json(nullptr);
+  }
+  if (op == "release_voltage") {
+    ext_volts_[pin_arg(args)] = std::nullopt;
     return nullptr;
   }
   throw UnknownOp(op);

@@ -49,6 +49,32 @@ stest_add_firmware(tim
           ${_bl}/Src/stm32l4xx_hal_msp.c
   INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/firmware/tim/Inc ${_bl}/Inc)
 
+# ADC: CubeMX-style ADC1 channel 16 (PB1) single conversions every 1 ms. Variants (one exe
+# each): adc (synchronous HCLK/4), adc_async (asynchronous SYSCLK), adc_async_noclk
+# (asynchronous, no RCC ADCSEL: aborts), adc_scan (two ranks: aborts). ADC + DAC HAL modules
+# enabled in adc/Inc; MSP/handlers from blinky.
+set(_adc ${CMAKE_CURRENT_SOURCE_DIR}/firmware/adc)
+foreach(variant SYNC ASYNC ASYNC_NOCLK SCAN)
+  string(TOLOWER ${variant} v)
+  if(variant STREQUAL "SYNC")
+    set(_exe adc)
+  else()
+    set(_exe adc_${v})
+  endif()
+  stest_add_firmware(${_exe}
+    CHIP STM32L496RG
+    SOURCES ${_adc}/main.c ${_bl}/Src/stm32l4xx_it.c ${_bl}/Src/stm32l4xx_hal_msp.c
+    INCLUDE_DIRS ${_adc}/Inc ${_bl}/Inc
+    DEFINES ADC_VARIANT=ADC_${variant})
+endforeach()
+
+# DAC: CubeMX-style DAC1 channel 1 (PA4) set to 2048 and started.
+stest_add_firmware(dac
+  CHIP STM32L496RG
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/firmware/dac/main.c ${_bl}/Src/stm32l4xx_it.c
+          ${_bl}/Src/stm32l4xx_hal_msp.c
+  INCLUDE_DIRS ${_adc}/Inc ${_bl}/Inc)
+
 # Poll fast-forward regression firmware (counting loop over a constant volatile read).
 stest_add_firmware(pollcount
   CHIP STM32L496RG

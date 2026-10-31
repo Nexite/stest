@@ -63,3 +63,18 @@ def exti_exe() -> Path:
 @pytest.fixture
 def tim_exe() -> Path:
     return _exe("tim")
+
+
+@pytest.fixture
+def adc_exe():
+    """Factory: adc_exe("" | "async" | "async_noclk" | "scan") -> path of that adc firmware."""
+
+    def get(variant: str = "") -> Path:
+        return _exe(f"adc_{variant}" if variant else "adc")
+
+    return get
+
+
+@pytest.fixture
+def dac_exe() -> Path:
+    return _exe("dac")

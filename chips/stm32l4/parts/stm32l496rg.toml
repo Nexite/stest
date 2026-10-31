@@ -220,6 +220,112 @@ size = 0x400
 rcc_enable = { reg = "APB2ENR", bit = 18 }
 params = { kind = "general", width = 16, bus = "apb2", channels = 1, complementary = 1, up_only = true, irq = { update = 26, cc = 26, break = 26, trg_com = 26 }, opt = [[0x50, 0], [0x60, 1]] }
 
+# ADC1-3 + common block in one 0x400 window (ADC1 +0x000, ADC2 +0x100, ADC3 +0x200, common
+# +0x300; RM0351 18). irq = vectors of ADC1, ADC2, ADC3 (ADC1 and ADC2 share ADC1_2).
+# vref = VREF+ in volts. The [[analog]] pin table below is injected as params.analog.
+[[peripheral]]
+name = "ADC"
+model = "stm32l4.adc"
+base = 0x50040000
+size = 0x400
+rcc_enable = { reg = "AHB2ENR", bit = 13 }
+params = { vref = 3.3, irq = [18, 18, 47] }
+
+# DAC1 (RM0351 19): channel outputs on PA4 / PA5; its interrupt shares TIM6_DAC with TIM6.
+[[peripheral]]
+name = "DAC1"
+model = "stm32l4.dac"
+base = 0x40007400
+size = 0x400
+rcc_enable = { reg = "APB1ENR1", bit = 29 }
+params = { vref = 3.3, irq = 54, pins = ["PA4", "PA5"] }
+
+# Analog pins of the LQFP64 package: pin -> the ADCs that convert it and its channel number.
+# Source: DS11585 Rev 20 (STM32L496xx datasheet), table "STM32L496xx pin definitions",
+# LQFP64 column (ADC123_INPx = ADC1/2/3 channel x, ADC12_INPx = ADC1/2 channel x),
+# cross-checked against ST's CubeMX MCU database (STM32L496R(E-G)Tx.xml, ADCx_INy signals).
+# ADC3 channels 6-13 (PF3-PF10) are not bonded on LQFP64. Internal channels (0 VREFINT,
+# 17/18 temperature sensor / VBAT on ADC1/3, DAC1 outputs on ADC2) are handled by the model.
+[[analog]]
+pin = "PC0"
+adc = [1, 2, 3]
+channel = 1
+
+[[analog]]
+pin = "PC1"
+adc = [1, 2, 3]
+channel = 2
+
+[[analog]]
+pin = "PC2"
+adc = [1, 2, 3]
+channel = 3
+
+[[analog]]
+pin = "PC3"
+adc = [1, 2, 3]
+channel = 4
+
+[[analog]]
+pin = "PA0"
+adc = [1, 2]
+channel = 5
+
+[[analog]]
+pin = "PA1"
+adc = [1, 2]
+channel = 6
+
+[[analog]]
+pin = "PA2"
+adc = [1, 2]
+channel = 7
+
+[[analog]]
+pin = "PA3"
+adc = [1, 2]
+channel = 8
+
+[[analog]]
+pin = "PA4"
+adc = [1, 2]
+channel = 9
+
+[[analog]]
+pin = "PA5"
+adc = [1, 2]
+channel = 10
+
+[[analog]]
+pin = "PA6"
+adc = [1, 2]
+channel = 11
+
+[[analog]]
+pin = "PA7"
+adc = [1, 2]
+channel = 12
+
+[[analog]]
+pin = "PC4"
+adc = [1, 2]
+channel = 13
+
+[[analog]]
+pin = "PC5"
+adc = [1, 2]
+channel = 14
+
+[[analog]]
+pin = "PB0"
+adc = [1, 2]
+channel = 15
+
+[[analog]]
+pin = "PB1"
+adc = [1, 2]
+channel = 16
+
 # External interrupts: IRQn from stm32l496xx.h (79 is reserved).
 [irq]
 WWDG = 0

@@ -90,3 +90,82 @@ class TimerChannel:
 
     def __repr__(self) -> str:
         return f"<TimerChannel {self.timer.node.name}.{self.timer.name} ch{self.n}>"
+
+
+class Adc:
+    """ADC ``n`` (1-based) of the chip's ADC model (``node.adc(1)``).
+
+    Inputs are pin voltages: ``set(channel, volts)`` sets the voltage of the pin wired to that
+    channel (part TOML ``[[analog]]`` table), so every ADC sharing the pin sees it, exactly
+    like ``node.pin("PB1").set_voltage(volts)``. Works whatever the firmware's RCC clock state
+    (the outside world drives the pin). Values are clamped to 0..VREF+ when converted.
+    """
+
+    MODEL = "ADC"
+
+    def __init__(self, node: Node, n: int):
+        self.node = node
+        self.n = int(n)
+
+    def set(self, channel: int, volts: float) -> None:
+        """Drive the pin of ``channel`` to ``volts``. StestError if the channel has no pin."""
+        self.node.call(self.MODEL, "set_input", adc=self.n, channel=int(channel), volts=float(volts))
+
+    def get(self, channel: int) -> float | None:
+        """The voltage on ``channel``'s pin, or None if nothing drives it."""
+        v = self.node.call(self.MODEL, "get_input", adc=self.n, channel=int(channel))
+        return None if v is None else float(v)
+
+    def __repr__(self) -> str:
+        return f"<Adc {self.node.name}.ADC{self.n}>"
+
+
+class Dac:
+    """A DAC model, e.g. ``node.dac(1)`` (model ``DAC1``). See ``chips/stm32l4/models/dac.hpp``."""
+
+    def __init__(self, node: Node, name: str):
+        self.node = node
+        self.name = name
+
+    def state(self) -> dict[str, Any]:
+        """{"vref", "channels": [{"ch", "enabled", "dhr", "dor", "volts", "pin"}]}"""
+        return self.node.call(self.name, "state")
+
+    def channel(self, n: int) -> DacChannel:
+        return DacChannel(self, n)
+
+    def __repr__(self) -> str:
+        return f"<Dac {self.node.name}.{self.name}>"
+
+
+class DacChannel:
+    """Output channel ``n`` (1-based) of a :class:`Dac`."""
+
+    def __init__(self, dac: Dac, n: int):
+        self.dac = dac
+        self.n = n
+
+    def state(self) -> dict[str, Any]:
+        chans = self.dac.state()["channels"]
+        if not 1 <= self.n <= len(chans):
+            raise StestError(f"{self.dac.name} has no channel {self.n} (it has {len(chans)})")
+        return chans[self.n - 1]
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.state()["enabled"])
+
+    @property
+    def dor(self) -> int:
+        return int(self.state()["dor"])
+
+    @property
+    def volts(self) -> float:
+        """Output voltage (DOR / 4095 * VREF+). StestError while the channel is disabled."""
+        st = self.state()
+        if st["volts"] is None:
+            raise StestError(f"{self.dac.name} channel {self.n} is disabled (no output)")
+        return float(st["volts"])
+
+    def __repr__(self) -> str:
+        return f"<DacChannel {self.dac.node.name}.{self.dac.name} ch{self.n}>"
