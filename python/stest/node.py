@@ -72,6 +72,7 @@ class Node:
         self._stderr_partials: list[tuple[str, int, str]] = []
         self._error_received = False
         self._spi_bursts: dict[str, list[SpiBurst]] = {}
+        self.can: dict[str, Any] = {}  # CAN controller model name -> CanBus (Sim.node(can=...))
 
     # ---- public API ----
     @property

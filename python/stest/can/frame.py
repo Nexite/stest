@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-MIN_FRAME_BITS = 44  # 0-byte standard data frame, no stuff bits, SOF..EOF
+# Conservative floor of a frame's length SOF..EOF: a 0-byte standard data frame would be 44
+# bits without stuff bits, but every real frame has at least one (the true minimum is 45).
+MIN_FRAME_BITS = 44
 IFS_BITS = 3  # intermission, not part of bit_length()
 _CRC_POLY = 0x4599
 _TAIL_BITS = 1 + 1 + 1 + 7  # CRC delimiter, ACK slot, ACK delimiter, EOF
@@ -97,5 +99,6 @@ class CanFrame:
 
 
 def lookahead_ns(bitrate: int) -> int:
-    """Shortest possible frame time; the scheduler quantum cap."""
+    """Lower bound of any frame's time (MIN_FRAME_BITS bit times, floored); the scheduler
+    quantum cap. Every real frame (>= 45 bits) takes strictly longer."""
     return MIN_FRAME_BITS * 1_000_000_000 // bitrate

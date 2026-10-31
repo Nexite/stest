@@ -90,6 +90,7 @@ def test_crc_matches_reference(f):
 def test_known_sizes():
     assert MIN_FRAME_BITS == 44 and IFS_BITS == 3
     # 0x000/dlc 0 forces stuffing in SOF+ID; 0x7FF likewise
+    assert CanFrame(0x000).bit_length() == 50  # golden
     assert CanFrame(0x000).bit_length() > 44
     assert CanFrame(0x7FF).bit_length() > 44
 
@@ -101,8 +102,10 @@ def test_crc_zero_message_is_zero():
 
 def test_min_frame_is_a_lower_bound():
     assert min(f.bit_length() for f in FRAMES) >= MIN_FRAME_BITS
-    # id 0x555 / no data has no stuffing at all in the head; the frame may still be > 44
-    assert CanFrame(0x555).bit_length() >= MIN_FRAME_BITS
+    # Every frame has at least one stuff bit (true minimum 45 bits); MIN_FRAME_BITS = 44 is a
+    # conservative floor. Even id 0x555 (alternating id bits) still has one stuff bit: 45 bits.
+    assert CanFrame(0x555).bit_length() == 45
+    assert min(CanFrame(i, rtr=r).bit_length() for i in range(0x800) for r in (False, True)) == 45
 
 
 def test_duration_and_lookahead():

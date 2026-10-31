@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import atexit
+import heapq
+import logging
 import os
 import time
-from typing import Callable, NoReturn
+from typing import TYPE_CHECKING, Callable, NoReturn
 
 from . import protocol as proto
 from .errors import NodeCrashed, StestError, WaitTimeout, WallClockTimeout
 from .node import Node
 
+if TYPE_CHECKING:
+    from .can.bus import CanBus
+
+_log = logging.getLogger("stest")
 
 # Every Sim that has spawned nodes and not been closed. If the interpreter exits without
 # the Sim being closed (or a test run is interrupted), the atexit handler kills and reaps
@@ -41,6 +47,11 @@ class Sim:
     per-node sequence). Every blocking read is bounded by ``wall_timeout_s`` of real
     time. On any node failure every node is killed and reaped before the exception
     (NodeCrashed / WallClockTimeout) propagates; the Sim is then unusable.
+
+    CAN: ``can_bus()`` creates buses (before ``start()``); the quantum is capped at the
+    shortest frame time of the fastest bus (``stest.can.lookahead_ns``) so the bus engine,
+    run at every quantum end, never has to post a result into a node's past. A Sim with
+    buses but no nodes is valid (Python devices only).
     """
 
     def __init__(self, quantum_us: int = 1000, wall_timeout_s: float = 30.0, access_cost_ns: int = 25,
@@ -53,6 +64,7 @@ class Sim:
         if access_cost_ns < 0:
             raise ValueError("access_cost_ns must be >= 0")
         self.quantum_ns = int(quantum_us) * 1000
+        self._quantum_requested_ns = self.quantum_ns
         self.wall_timeout_s = float(wall_timeout_s)
         self.access_cost_ns = int(access_cost_ns)
         if poll_skip is not None and poll_skip < 0:
@@ -73,28 +85,92 @@ class Sim:
         self._closed = False
         self._dead: StestError | None = None
         self._merging: list = []  # this quantum's event merge keys not yet in event_log
+        # CAN (see stest.can.bus): buses in creation order; hooks run at each quantum end T
+        # before the engine (node CAN event wiring feeds requests there); a heap of device
+        # callbacks (t, class 0 frame delivery | 1 timer, k1, k2, payload) run in that order
+        # at the first quantum end >= t, with _can_cb_t = t (the device's "now").
+        self._buses: list[CanBus] = []
+        self._can_hooks: list[Callable[[int], None]] = []
+        self._can_queue: list[tuple] = []
+        self._can_cb_t: int | None = None
+        self._can_timers = 0
 
     @property
     def quantum_us(self) -> int:
         return self.quantum_ns // 1000
 
     # ---- setup ----
-    def node(self, name: str, exe: str | os.PathLike, env: dict | None = None) -> Node:
+    def node(
+        self, name: str, exe: str | os.PathLike, env: dict | None = None, can: dict | None = None
+    ) -> Node:
+        """A firmware node. ``can`` wires its CAN controllers to buses of this Sim:
+        ``{"CAN2": bus}`` (a CanBus or a bus name); one controller per bus per node."""
         if self._started:
             raise StestError("nodes must be created before sim.start()")
         if any(n.name == name for n in self.nodes):
             raise StestError(f"duplicate node name {name!r}")
+        wiring = []
+        for periph, b in (can or {}).items():
+            bus = self._resolve_bus(b)
+            if any(w[1] is bus for w in wiring):
+                raise StestError(f"node {name!r}: two CAN controllers on bus {bus.name!r}")
+            if name in bus._order:
+                raise StestError(f"node {name!r}: bus {bus.name!r} already has a sender named {name!r}")
+            wiring.append((str(periph), bus))
         n = Node(self, len(self.nodes), name, exe, env)
         self.nodes.append(n)
+        for periph, bus in wiring:
+            n.can[periph] = bus
+            bus._attach_node(name, *_node_can_callbacks(n, periph))
         return n
+
+    def can_bus(self, name: str, bitrate: int = 500_000) -> CanBus:
+        """A CAN bus (before ``start()``). Caps the quantum at ``lookahead_ns(bitrate)``."""
+        from .can.bus import CanBus
+        from .can.frame import lookahead_ns
+
+        if self._started:
+            raise StestError("CAN buses must be created before sim.start()")
+        if any(b.name == name for b in self._buses):
+            raise StestError(f"duplicate CAN bus name {name!r}")
+        if isinstance(bitrate, bool) or not isinstance(bitrate, int) or not 0 < bitrate <= 1_000_000:
+            raise ValueError(f"CAN bitrate must be an int in 1..1000000 bit/s (got {bitrate!r})")
+        bus = CanBus(self, name, bitrate, len(self._buses))
+        self._buses.append(bus)
+        self.quantum_ns = min(self.quantum_ns, lookahead_ns(bitrate))
+        return bus
+
+    def _resolve_bus(self, b) -> CanBus:
+        from .can.bus import CanBus
+
+        if isinstance(b, CanBus):
+            if b._sim is not self:
+                raise StestError(f"CAN bus {b.name!r} belongs to another Sim")
+            return b
+        for bus in self._buses:
+            if bus.name == b:
+                return bus
+        raise StestError(f"no CAN bus named {b!r} (create it with sim.can_bus() first)")
+
+    def _can_lookahead_ns(self) -> int | None:
+        from .can.frame import lookahead_ns
+
+        return min((lookahead_ns(b.bitrate) for b in self._buses), default=None)
 
     def start(self) -> None:
         """Spawns every node and waits for its HELLO."""
         if self._started:
             raise StestError("sim.start() called twice")
-        if not self.nodes:
-            raise StestError("sim.start() with no nodes")
+        if not self.nodes and not self._buses:
+            raise StestError("sim.start() with no nodes (and no CAN buses)")
         self._started = True
+        if self.quantum_ns < self._quantum_requested_ns:
+            limit = min(self._buses, key=lambda b: (-b.bitrate, b._index))
+            _log.info(
+                "stest: quantum capped from %d ns to %d ns by CAN bus %r (%d bit/s): the quantum must "
+                "not exceed the shortest frame time",
+                self._quantum_requested_ns, self.quantum_ns, limit.name, limit.bitrate,
+            )
         _LIVE.add(self)
         extra = {"STEST_ACCESS_COST_NS": str(self.access_cost_ns)}
         if self.poll_skip is not None:
@@ -188,6 +264,46 @@ class Sim:
             merged.extend(n._record_events(events))
         self._flush_events()
         self._now = t
+        if self._buses:
+            self._can_boundary(t)
+
+    # ---- CAN scheduling (see stest.can.bus) ----
+    def _can_boundary(self, T: int) -> None:
+        """At quantum end T: node CAN events -> requests (hooks), device callbacks due by T
+        (frame deliveries and timers, in time order), then each bus's engine."""
+        for h in self._can_hooks:
+            h(T)
+        if self._can_queue:
+            self._run_can_queue(T)
+        for b in self._buses:
+            if b._npending or b._aborts:
+                b._run(T)
+
+    def _run_can_queue(self, T: int) -> None:
+        q = self._can_queue
+        while q and q[0][0] <= T:
+            t, cls, k1, _, payload = heapq.heappop(q)
+            self._can_cb_t = t
+            try:
+                if cls == 0:
+                    payload()
+                else:
+                    period, fn = payload
+                    heapq.heappush(q, (t + period, 1, k1, 0, payload))
+                    fn()
+            finally:
+                self._can_cb_t = None
+
+    def _can_schedule(self, t: int, cls: int, k1: int, k2: int, payload) -> None:
+        heapq.heappush(self._can_queue, (t, cls, k1, k2, payload))
+
+    def _can_every(self, period_ns: int, fn: Callable[[], None]) -> None:
+        self._can_timers += 1
+        heapq.heappush(self._can_queue, (self._can_now() + period_ns, 1, self._can_timers, 0, (period_ns, fn)))
+
+    def _can_now(self) -> int:
+        """Virtual time for device sends: the running callback's time, else now_ns."""
+        return self._now if self._can_cb_t is None else self._can_cb_t
 
     def _flush_events(self, extra: list | None = None) -> None:
         """Merge this quantum's recorded events (plus ``extra``: a crashing node's ERROR
@@ -287,3 +403,18 @@ class Sim:
 
     def __exit__(self, *exc) -> None:
         self.close()
+
+
+def _node_can_callbacks(n: Node, periph: str):
+    """Engine result hooks for node ``n``'s controller ``periph``: inbox messages for the
+    model's ``deliver()`` ops ``rx`` {id, ext, rtr, dlc, data (hex)} and ``tx_result``
+    {mailbox, ok, arb_lost, error}, applied at exactly the frame's EOF."""
+
+    def on_rx(lf, t: int) -> None:
+        f = lf.frame
+        n.post(periph, "rx", {"id": f.id, "ext": f.ext, "rtr": f.rtr, "dlc": f.dlc, "data": f.data.hex()}, t)
+
+    def on_tx_result(key, result: dict, t: int) -> None:
+        n.post(periph, "tx_result", {"mailbox": key, **result}, t)
+
+    return on_rx, on_tx_result

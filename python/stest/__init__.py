@@ -1,5 +1,6 @@
 """stest: STM32 software-in-the-loop simulation, Python harness."""
 
+from .can import CanBus, CanDevice, CanFrame, LoggedFrame
 from .errors import NodeCrashed, StestError, SymbolError, SymbolRangeError, WaitTimeout, WallClockTimeout
 from .node import Node
 from .peripherals import Adc, Dac, DacChannel, SpiBurst, SpiBus, Timer, TimerChannel
@@ -17,6 +18,10 @@ __all__ = [
     "DacChannel",
     "SpiBus",
     "SpiBurst",
+    "CanBus",
+    "CanDevice",
+    "CanFrame",
+    "LoggedFrame",
     "StestError",
     "NodeCrashed",
     "WaitTimeout",
