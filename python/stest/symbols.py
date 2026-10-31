@@ -297,7 +297,7 @@ def _s(v: Any) -> str:
 
 
 class SymbolTable:
-    """Variables of one executable. Use :meth:`load` (cached per path)."""
+    """Variables of one executable. Use :meth:`load` (cached per path, size and mtime)."""
 
     def __init__(self, exe: Path, dwarf: Any, anchor_addr: int):
         self.exe = exe
@@ -479,7 +479,7 @@ class SymbolTable:
             return t
         return UnsupportedType(tag.removeprefix("DW_TAG_"))
 
-    def _add_members(self, st: StructType, die: Any, base: int) -> None:
+    def _add_members(self, st: StructType, die: Any, base: int, bad: bool = False) -> None:
         for m in die.iter_children():
             if m.tag != "DW_TAG_member":
                 continue
@@ -491,7 +491,7 @@ class SymbolTable:
                 bad_off = dec is None
                 off = dec or 0
             mt = self._type_of(m)
-            if bad_off:
+            if bad_off or bad:
                 mt = UnsupportedType("member with a computed (non-constant) offset")
             if "DW_AT_bit_size" in ma:
                 mt = UnsupportedType("bit-field")
@@ -499,7 +499,7 @@ class SymbolTable:
             if mn is None:  # anonymous struct/union member: hoist its members
                 sub = m.get_DIE_from_attribute("DW_AT_type") if "DW_AT_type" in ma else None
                 if sub is not None and sub.tag in ("DW_TAG_structure_type", "DW_TAG_union_type"):
-                    self._add_members(st, sub, base + off)
+                    self._add_members(st, sub, base + off, bad or bad_off)
                 continue
             st.members[_s(mn.value)] = (base + off, mt)
 

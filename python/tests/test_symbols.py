@@ -145,3 +145,64 @@ def test_cache_invalidated_when_exe_rebuilt(blinky_exe, tmp_path):
     os.utime(exe, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
     b = SymbolTable.load(exe)
     assert b is not a and b.anchor_addr == a.anchor_addr
+
+
+class _Attr:
+    def __init__(self, value):
+        self.value = value
+
+
+class _Die:
+    """Minimal DIE stand-in for SymbolTable._add_members."""
+
+    _n = 0
+
+    def __init__(self, tag, attrs=None, children=(), type_die=None):
+        _Die._n += 1
+        self.offset = _Die._n
+        self.tag = tag
+        self.attributes = {k: _Attr(v) for k, v in (attrs or {}).items()}
+        if type_die is not None:
+            self.attributes["DW_AT_type"] = _Attr(0)
+        self._type = type_die
+        self._children = list(children)
+
+    def iter_children(self):
+        return iter(self._children)
+
+    def get_DIE_from_attribute(self, name):
+        assert name == "DW_AT_type"
+        return self._type
+
+
+def test_computed_member_offset_raises_on_access_named_and_anonymous():
+    from stest.symbols import StructType
+
+    u8 = _Die("DW_TAG_base_type", {"DW_AT_byte_size": 1, "DW_AT_encoding": 0x08, "DW_AT_name": b"u"})
+    ok = _Die("DW_TAG_member", {"DW_AT_name": b"ok", "DW_AT_data_member_location": 0}, type_die=u8)
+    named_bad = _Die(
+        "DW_TAG_member", {"DW_AT_name": b"nb", "DW_AT_data_member_location": [0x10, 0x04]}, type_die=u8
+    )
+    inner = _Die(
+        "DW_TAG_structure_type",
+        {"DW_AT_byte_size": 2},
+        [_Die("DW_TAG_member", {"DW_AT_name": b"x", "DW_AT_data_member_location": 1}, type_die=u8)],
+    )
+    anon_bad = _Die("DW_TAG_member", {"DW_AT_data_member_location": [0x10, 0x08]}, type_die=inner)
+    anon_ok = _Die("DW_TAG_member", {"DW_AT_data_member_location": 4}, type_die=inner)
+    outer = _Die("DW_TAG_structure_type", {"DW_AT_byte_size": 16}, [ok, named_bad, anon_bad])
+
+    tbl = SymbolTable.__new__(SymbolTable)
+    tbl._types = {}
+    st = StructType(16, "outer", "struct")
+    tbl._add_members(st, outer, 0)
+    assert st.members["ok"][0] == 0 and st.members["ok"][1].decode(b"\x07") == 7
+    for name in ("nb", "x"):  # named member and hoisted child of the anonymous member
+        with pytest.raises(SymbolError, match="computed"):
+            st.members[name][1].decode(b"\0")
+        with pytest.raises(SymbolError, match="computed"):
+            st.members[name][1].encode(1)
+
+    good = StructType(16, "good", "struct")  # control: constant offset still hoists correctly
+    tbl._add_members(good, _Die("DW_TAG_structure_type", {}, [anon_ok]), 0)
+    assert good.members["x"][0] == 5 and good.members["x"][1].decode(b"\x09") == 9
