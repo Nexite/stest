@@ -260,10 +260,21 @@ void Adc::write_cr(Inst& a, uint32_t off, unsigned width, uint32_t v) {
   const uint32_t wv = lane_merge(0, off, width, v) & lanes;
   uint32_t cr = (old & ~(kCrRw & lanes)) | (wv & kCrRw);
   const uint32_t set = wv & kCrRs & ~old;  // rs bits newly written 1
+  // ADCAL / ADEN written 1 while already 1. Alone, that is the firmware setting the bit
+  // again (a second LL_ADC_Enable / LL_ADC_StartCalibration, CR = ADEN, CR |= ADEN), which
+  // RM0351 forbids. Together with a newly set rs bit it is a read-modify-write carrying the
+  // current value (CMSIS ADC1->CR |= ADC_CR_ADSTART); the new bit's own checks apply. ST's
+  // LL masks every rs bit (ADC_CR_BITS_PROPERTY_RS) and never writes either.
+  const uint32_t again = wv & old & (ADCAL | ADEN);
   set_reg(a, CR, cr);
   const std::string me = label(a);
   if (set & (JADSTART | JADSTP))
     not_modelled(&a, "injected conversions (CR.JADSTART/JADSTP)");
+  if (again && !set) {
+    if (again & ADCAL) throw std::runtime_error(me + ": ADCAL set while calibrating (CR.ADCAL=1)");
+    throw std::runtime_error(me + ": ADEN set while the ADC is already enabled (CR.ADEN=1; RM0351 allows "
+                             "setting ADEN only while every other CR bit except ADVREGEN is 0)");
+  }
   auto powered = [&](const char* bit) {
     if ((cr & DEEPPWD) || !(cr & ADVREGEN))
       throw std::runtime_error(me + ": " + bit + " set in deep power-down or with the voltage regulator "

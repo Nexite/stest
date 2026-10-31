@@ -4,7 +4,10 @@
 // ADC_Common_TypeDef at +0x300, stm32l496xx.h). Gated as a whole by RCC AHB2ENR ADCEN.
 //
 // Modelled (per ADC): CR DEEPPWD/ADVREGEN/ADCALDIF (rw) and ADCAL/ADEN/ADDIS/ADSTART/ADSTP
-// (rs: writing 1 acts, writing 0 is ignored); ISR ADRDY/EOSMP/EOC/EOS/OVR (rc_w1) with IER
+// (rs: writing 1 acts, writing 0 is ignored; a 1 written to a bit that is already 1 is a
+// read-modify-write carry when another rs bit is newly set in the same write, as in CMSIS
+// ADC1->CR |= ADC_CR_ADSTART, and otherwise a repeated set: ADEN while enabled or ADCAL
+// while calibrating aborts, see below; ST's LL masks the rs bits, ADC_CR_BITS_PROPERTY_RS); ISR ADRDY/EOSMP/EOC/EOS/OVR (rc_w1) with IER
 // ADRDYIE/EOSMPIE/EOCIE/EOSIE/OVRIE; CFGR RES/ALIGN/OVRMOD (+ stored DMACFG, EXTSEL,
 // AWD1SGL/AWD1CH, JQDIS); SQR1 SQ1 (single conversion of one channel); SMPR1/2 (+ SMPPLUS);
 // DR (reading clears EOC); CALFACT; TR1-3, SQR2-4, OFRx (offset disabled) stored. Common:
@@ -43,7 +46,8 @@
 // offsets (OFRx.OFFSET_EN), differential inputs (DIFSEL), DFSDM output, dual mode (CCR.DUAL,
 // and reading CDR), reserved PRESC values, VBAT / temperature sensor / DAC-internal
 // channels, and sequencing errors the RM leaves undefined: ADCAL / ADEN in deep power-down
-// or without the regulator, ADCAL / ADEN while enabled or calibrating, ADDIS while not
+// or without the regulator, ADCAL / ADEN while enabled or calibrating (including writing
+// ADEN = 1 again to an enabled ADC, or ADCAL = 1 again while calibrating), ADDIS while not
 // enabled or converting, ADSTART before ADRDY, changing CCR.CKMODE/PRESC while an ADC is
 // enabled. ADSTP without a conversion is ignored.
 //

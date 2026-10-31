@@ -443,3 +443,51 @@ TEST_CASE("gpio: set_voltage only on pins with an analog function (ADC table, DA
   CHECK(m.find("PB1,") != std::string::npos);
   CHECK(m.find("PB11") == m.rfind("PB11"));  // listed pins exclude PB11
 }
+
+TEST_CASE("adc: ADEN / ADCAL written 1 again abort (rs bits detected on a written 1, not an edge)") {
+  // LL_ADC_Enable / LL_ADC_StartCalibration write CR as MODIFY_REG(CR, rs bits, ADEN|...):
+  // the only rs bit written 1 is the one they act on.
+  auto ll_write = [](Rig& r, uint64_t base, uint32_t rs) {
+    r.wr(base + CR, (r.rd(base + CR) & ~(ADEN | ADDIS | ADSTART | JADSTART | ADSTP | (1u << 5) | ADCAL)) | rs);
+  };
+  SUBCASE("ADEN while already enabled (second LL_ADC_Enable)") {
+    Rig r;
+    r.ready(ADC1);
+    CHECK(abort_message([&] { ll_write(r, ADC1, ADEN); }) ==
+          "ADC1: ADEN set while the ADC is already enabled (CR.ADEN=1; RM0351 allows setting ADEN "
+          "only while every other CR bit except ADVREGEN is 0)");
+  }
+  SUBCASE("ADEN while enabled and not yet ready") {
+    Rig r;
+    r.wr(COMMON + CCR, CKMODE_DIV4);
+    r.wr(ADC1 + CR, ADVREGEN);
+    r.set(ADC1 + CR, ADEN);
+    CHECK(abort_message([&] { r.wr(ADC1 + CR, ADVREGEN | ADEN); }).find("already enabled") != std::string::npos);
+  }
+  SUBCASE("ADCAL while calibrating") {
+    Rig r;
+    r.wr(COMMON + CCR, CKMODE_DIV4);
+    r.wr(ADC1 + CR, ADVREGEN);
+    ll_write(r, ADC1, ADCAL);
+    CHECK(abort_message([&] { ll_write(r, ADC1, ADCAL); }) ==
+          "ADC1: ADCAL set while calibrating (CR.ADCAL=1)");
+  }
+  SUBCASE("ADCAL while enabled") {
+    Rig r;
+    r.ready(ADC1);
+    CHECK(abort_message([&] { ll_write(r, ADC1, ADCAL); }).find("ADCAL set while the ADC is enabled") !=
+          std::string::npos);
+  }
+  SUBCASE("CMSIS read-modify-write that carries ADEN=1 while setting another rs bit is accepted") {
+    Rig r;
+    r.ready(ADC1);
+    r.volts("PB1", 1.65);
+    r.set(ADC1 + CR, ADSTART);  // ADC1->CR |= ADC_CR_ADSTART: writes ADEN=1 | ADSTART=1
+    while (!(r.rd(ADC1 + ISR) & EOC)) REQUIRE(r.fire_next() != kNone);
+    r.set(ADC1 + CR, ADSTART);
+    r.set(ADC1 + CR, ADSTP);    // ADEN and ADSTART carried, ADSTP new
+    CHECK((r.rd(ADC1 + CR) & (ADEN | ADSTART | ADSTP)) == ADEN);
+    r.set(ADC1 + CR, ADDIS);    // ADEN carried, ADDIS new
+    CHECK((r.rd(ADC1 + CR) & ADEN) == 0);
+  }
+}
