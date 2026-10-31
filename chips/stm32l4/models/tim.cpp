@@ -163,25 +163,21 @@ void Tim::reset() {
 
 // ---------------------------------------------------------------- configuration helpers
 
-void Tim::not_modelled(const std::string& what, uint32_t off, uint32_t v) const {
-  char b[64];
-  std::snprintf(b, sizeof b, " (write %s at offset 0x%02x)", hex(v).c_str(), off);
-  throw std::runtime_error(name_ + ": " + what + " not modelled" + b);
-}
+void Tim::not_modelled(const std::string& what) const { throw NotModelled(name_, what); }
 
 void Tim::check_write(uint32_t off, uint32_t v) const {
   switch (off) {
     case SMCR:
       if (!has_smcr_) return;  // read-only: RegisterFile aborts
-      if (v & 0x10007u) not_modelled("slave mode controller (SMCR.SMS, incl. encoder modes)", off, v);
-      if (v & (1u << 14)) not_modelled("external clock mode 2 (SMCR.ECE)", off, v);
+      if (v & 0x10007u) not_modelled("slave mode controller (SMCR.SMS, incl. encoder modes)");
+      if (v & (1u << 14)) not_modelled("external clock mode 2 (SMCR.ECE)");
       return;
     case DIER:
-      if (v & DMA_EN) not_modelled("DMA requests (DIER.UDE/CCxDE/COMDE/TDE)", off, v);
+      if (v & DMA_EN) not_modelled("DMA requests (DIER.UDE/CCxDE/COMDE/TDE)");
       return;
     case CR2:
       if (kind_ != Kind::Basic && has_bdtr() && (v & CCPC))
-        not_modelled("preloaded capture/compare control (CR2.CCPC, commutation)", off, v);
+        not_modelled("preloaded capture/compare control (CR2.CCPC, commutation)");
       return;
     case CCMR1: case CCMR2: {
       unsigned first = off == CCMR1 ? 0 : 2;
@@ -189,29 +185,29 @@ void Tim::check_write(uint32_t off, uint32_t v) const {
         unsigned s = (v >> (8 * h)) & 3u;
         unsigned ocm = ((v >> (8 * h + 4)) & 7u) | (((v >> (16 + 8 * h)) & 1u) << 3);
         std::string ch = std::to_string(first + h + 1);
-        if (s) not_modelled("input capture (CCMR CC" + ch + "S=" + std::to_string(s) + ")", off, v);
+        if (s) not_modelled("input capture (CCMR CC" + ch + "S=" + std::to_string(s) + ")");
         if (ocm >= 8)
           not_modelled("output compare mode OC" + ch + "M=" + std::to_string(ocm) +
-                           " (retriggerable OPM / combined / asymmetric PWM)", off, v);
-        if (v & (1u << (8 * h + 7))) not_modelled("OCREF clear (CCMR OC" + ch + "CE)", off, v);
+                           " (retriggerable OPM / combined / asymmetric PWM)");
+        if (v & (1u << (8 * h + 7))) not_modelled("OCREF clear (CCMR OC" + ch + "CE)");
       }
       return;
     }
     case CCER:
-      if (v & ((1u << 16) | (1u << 20))) not_modelled("channels 5/6 (CCER.CC5E/CC6E)", off, v);
+      if (v & ((1u << 16) | (1u << 20))) not_modelled("channels 5/6 (CCER.CC5E/CC6E)");
       return;
     case CCMR3:
-      if (v & 0x01017070u) not_modelled("channels 5/6 (CCMR3.OC5M/OC6M)", off, v);
+      if (v & 0x01017070u) not_modelled("channels 5/6 (CCMR3.OC5M/OC6M)");
       return;
     case CCR5:
-      if (v & 0xE0000000u) not_modelled("channels 5/6 (CCR5.GC5Cx)", off, v);
+      if (v & 0xE0000000u) not_modelled("channels 5/6 (CCR5.GC5Cx)");
       return;
     case BDTR:
-      if (v & (BKE | BK2E)) not_modelled("break inputs (BDTR.BKE/BK2E)", off, v);
+      if (v & (BKE | BK2E)) not_modelled("break inputs (BDTR.BKE/BK2E)");
       return;
     default:
       for (auto [o, rst] : opt_)
-        if (o == off && v != rst) not_modelled("option register remap / break-input selection", off, v);
+        if (o == off && v != rst) not_modelled("option register remap / break-input selection");
       return;
   }
 }
@@ -534,7 +530,7 @@ uint32_t Tim::read(uint32_t off, unsigned width) {
       return lane_extract(v, off, width);
     }
     case DMAR:
-      if (kind_ != Kind::Basic) not_modelled("DMA burst access (DMAR)", off, 0);
+      if (kind_ != Kind::Basic) not_modelled("DMA burst access (DMAR)");
       return regs_.read(off, width);
     default:
       return regs_.read(off, width);
@@ -614,7 +610,7 @@ void Tim::write(uint32_t off, unsigned width, uint32_t v) {
       update_irqs();
       return;
     case DMAR:
-      if (kind_ != Kind::Basic) not_modelled("DMA burst access (DMAR)", off, full);
+      if (kind_ != Kind::Basic) not_modelled("DMA burst access (DMAR)");
       regs_.write(off, width, v);
       return;
     default:

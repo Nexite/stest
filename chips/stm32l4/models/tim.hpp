@@ -86,7 +86,7 @@ class Tim : public Peripheral {
   static constexpr int64_t kNever = INT64_MAX;
 
   // --- configuration helpers ---
-  [[noreturn]] void not_modelled(const std::string& what, uint32_t off, uint32_t v) const;
+  [[noreturn]] void not_modelled(const std::string& what) const;  // throws NotModelled
   void check_write(uint32_t off, uint32_t v) const;
   Mode mode_of(uint32_t cr1) const;
   uint64_t timer_clk() const;

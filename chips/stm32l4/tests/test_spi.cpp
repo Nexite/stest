@@ -317,7 +317,8 @@ TEST_CASE("spi not-modelled features abort") {
   r.wr(SPI1 + CR1, 0);
   r.wr(SPI1 + CR1, MSTR | SSI);  // hardware NSS while SPE = 0 is fine too
   // ...but enabling unmodelled behaviour aborts
-  CHECK(msg(SPI1 + CR1, SSM | SSI | SPE).find("SPI slave not modelled") != std::string::npos);
+  CHECK(msg(SPI1 + CR1, SSM | SSI | SPE) == "SPI1: SPI slave mode (CR1.MSTR=0 with SPE=1) not modelled");
+  CHECK_THROWS_AS(r.wr(SPI1 + CR1, SSM | SSI | SPE), NotModelled);
   CHECK(msg(SPI1 + CR1, MSTR | SPE).find("hardware NSS") != std::string::npos);
   CHECK(msg(SPI1 + CR1, MSTR | SSM | SPE).find("mode fault") != std::string::npos);
   CHECK(msg(SPI1 + CR1, MASTER | BIDIMODE).find("bidirectional") != std::string::npos);

@@ -80,8 +80,7 @@ void Dwt::wr(uint32_t off, uint32_t v) {
       case 4: mask_[n] = v & 0x1Fu; return;
       case 8:
         if (v & 0xFu)
-          throw std::runtime_error("DWT comparator " + std::to_string(n) + " enabled (FUNCTION" +
-                                   std::to_string(n) + " = " + hex32(v) + "): comparators are not modelled");
+          throw NotModelled("DWT", "comparators (FUNCTION" + std::to_string(n) + " = " + hex32(v) + ")");
         return;  // FUNCTION == 0: disabled; other fields have no effect
     }
   }

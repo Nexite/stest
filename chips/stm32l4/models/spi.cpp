@@ -74,24 +74,20 @@ void Spi::reset() {
   sync();
 }
 
-void Spi::not_modelled(const std::string& what, uint32_t off, uint32_t v) const {
-  char b[64];
-  std::snprintf(b, sizeof b, " (write %s at offset 0x%02x)", hex32(v).c_str(), off);
-  throw std::runtime_error(name_ + ": " + what + b);
-}
+void Spi::not_modelled(const std::string& what) const { throw NotModelled(name_, what); }
 
 void Spi::check_config(uint32_t cr1, uint32_t cr2, uint32_t off, uint32_t v) const {
-  if (cr1 & BIDIMODE) not_modelled("bidirectional mode (CR1.BIDIMODE) not modelled", off, v);
-  if (cr1 & (CRCEN | CRCNEXT)) not_modelled("CRC (CR1.CRCEN/CRCNEXT) not modelled", off, v);
-  if (cr1 & RXONLY) not_modelled("receive-only mode (CR1.RXONLY) not modelled", off, v);
-  if (cr2 & FRF) not_modelled("TI mode (CR2.FRF) not modelled", off, v);
+  if (cr1 & BIDIMODE) not_modelled("bidirectional mode (CR1.BIDIMODE)");
+  if (cr1 & (CRCEN | CRCNEXT)) not_modelled("CRC (CR1.CRCEN/CRCNEXT)");
+  if (cr1 & RXONLY) not_modelled("receive-only mode (CR1.RXONLY)");
+  if (cr2 & FRF) not_modelled("TI mode (CR2.FRF)");
   if (cr2 & (TXDMAEN | RXDMAEN | LDMATX | LDMARX))
-    not_modelled("DMA (CR2.TXDMAEN/RXDMAEN/LDMATX/LDMARX) not modelled", off, v);
+    not_modelled("DMA (CR2.TXDMAEN/RXDMAEN/LDMATX/LDMARX)");
   if (!(cr1 & SPE)) return;
-  if (!(cr1 & MSTR)) not_modelled("SPI slave not modelled (CR1.MSTR=0 with SPE=1)", off, v);
-  if (!(cr1 & SSM)) not_modelled("hardware NSS (CR1.SSM=0) not modelled; use software NSS (SSM=1, SSI=1)", off, v);
-  if (!(cr1 & SSI)) not_modelled("master mode fault (CR1.SSM=1, SSI=0 -> MODF) not modelled", off, v);
-  if (cr2 & SSOE) not_modelled("hardware NSS output (CR2.SSOE=1) not modelled", off, v);
+  if (!(cr1 & MSTR)) not_modelled("SPI slave mode (CR1.MSTR=0 with SPE=1)");
+  if (!(cr1 & SSM)) not_modelled("hardware NSS (CR1.SSM=0; use software NSS: SSM=1, SSI=1)");
+  if (!(cr1 & SSI)) not_modelled("master mode fault (CR1.SSM=1, SSI=0 -> MODF)");
+  if (cr2 & SSOE) not_modelled("hardware NSS output (CR2.SSOE=1)");
 }
 
 unsigned Spi::data_bits() const { return ((regs_.get(CR2) & DS) >> DS_POS) + 1; }
@@ -196,9 +192,9 @@ void Spi::write_dr(unsigned width, uint32_t v) {
   }
   if (tx_.bytes + n * fb > kFifoBytes) {
     char b[96];
-    std::snprintf(b, sizeof b, "write%u to DR with the TX FIFO full (%u of 4 bytes used) not modelled",
-                  width * 8, tx_.bytes);
-    not_modelled(b, DR, v);
+    std::snprintf(b, sizeof b, "write%u to DR with the TX FIFO full (%u of 4 bytes used)", width * 8,
+                  tx_.bytes);
+    not_modelled(b);
   }
   for (unsigned i = 0; i < n; ++i) tx_.push(f[i]);
   start_next();

@@ -104,7 +104,7 @@ class Adc : public Peripheral {
 
   std::string label(const Inst& a) const { return "ADC" + std::to_string(a.idx + 1); }
   [[noreturn]] void fail(const Inst& a, const std::string& what) const;
-  [[noreturn]] void not_modelled(const Inst* a, const std::string& what, uint32_t off, uint32_t v) const;
+  [[noreturn]] void not_modelled(const Inst* a, const std::string& what) const;  // throws NotModelled
   uint32_t reg(const Inst& a, uint32_t r) const { return regs_.get(a.idx * 0x100 + r); }
   void set_reg(const Inst& a, uint32_t r, uint32_t v) { regs_.set(a.idx * 0x100 + r, v); }
   uint64_t adc_hz(const Inst& a) const;  // aborts when there is no clock

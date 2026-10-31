@@ -82,11 +82,7 @@ void Dac::reset() {
   update_irq();
 }
 
-void Dac::not_modelled(const std::string& what, uint32_t off, uint32_t v) const {
-  char b[64];
-  std::snprintf(b, sizeof b, "; write %s at offset 0x%02x)", hex(v).c_str(), off);
-  throw std::runtime_error(name_ + " " + what + b);
-}
+void Dac::not_modelled(const std::string& what) const { throw NotModelled(name_, what); }
 
 void Dac::check_write(uint32_t off, uint32_t v) const {
   if (off == CR) {
@@ -94,17 +90,16 @@ void Dac::check_write(uint32_t off, uint32_t v) const {
       const uint32_t f = v >> (16 * c);
       const std::string n = std::to_string(c + 1);
       if ((f & TEN) && ((f & TSEL) >> 3) != TSEL_SW)
-        not_modelled("hardware triggers not modelled (CR.TEN" + n + "=1, TSEL" + n + "=" +
-                         std::to_string((f & TSEL) >> 3) + "; only the software trigger TSEL=7 is",
-                     off, v);
-      if (f & WAVE) not_modelled("wave generation not modelled (CR.WAVE" + n, off, v);
-      if (f & (DMAEN | DMAUDRIE)) not_modelled("DMA requests not modelled (CR.DMAEN" + n + "/DMAUDRIE" + n, off, v);
-      if (f & CEN) not_modelled("calibration mode not modelled (CR.CEN" + n, off, v);
+        not_modelled("hardware triggers (CR.TEN" + n + "=1, TSEL" + n + "=" +
+                     std::to_string((f & TSEL) >> 3) + "; only the software trigger TSEL=7 is supported)");
+      if (f & WAVE) not_modelled("wave generation (CR.WAVE" + n + ")");
+      if (f & (DMAEN | DMAUDRIE)) not_modelled("DMA requests (CR.DMAEN" + n + "/DMAUDRIE" + n + ")");
+      if (f & CEN) not_modelled("calibration mode (CR.CEN" + n + ")");
     }
   } else if (off == MCR) {
     for (unsigned c = 0; c < 2; ++c)
       if (((v >> (16 * c)) & 7u) >= 4)
-        not_modelled("sample-and-hold mode not modelled (MCR.MODE" + std::to_string(c + 1) + ">=4", off, v);
+        not_modelled("sample-and-hold mode (MCR.MODE" + std::to_string(c + 1) + ">=4)");
   }
 }
 

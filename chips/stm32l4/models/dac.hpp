@@ -61,7 +61,7 @@ class Dac : public Peripheral {
     unsigned pin = 0;
     bool driving = false;
   };
-  [[noreturn]] void not_modelled(const std::string& what, uint32_t off, uint32_t v) const;
+  [[noreturn]] void not_modelled(const std::string& what) const;  // throws NotModelled
   void check_write(uint32_t off, uint32_t v) const;
   void sync_dhr_views();
   void schedule_transfer(unsigned ch);

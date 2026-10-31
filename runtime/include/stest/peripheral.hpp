@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <nlohmann/json.hpp>
 
 namespace stest {
@@ -22,6 +23,17 @@ struct UnmodelledRegister : std::runtime_error {
 struct ReadOnlyRegister : UnmodelledRegister {
   ReadOnlyRegister(uint32_t o, unsigned w) : UnmodelledRegister(o, w, true) {}
   const char* what() const noexcept override { return "write to read-only register"; }
+};
+
+// A model was asked for a feature it does not implement (strict abort). `periph` is the
+// instance name ("TIM2", "ADC1"), `feature` names the feature and the register bits that
+// selected it ("DMA requests (DIER.UDE/CCxDE/COMDE/TDE)"). what() is
+// "<periph>: <feature> not modelled"; at an MMIO access the runtime (mmio.cpp) prints
+//   stest: <periph>: <feature> not modelled (<read|write><bits> 0x<addr>[ = 0x<value>])
+struct NotModelled : std::runtime_error {
+  std::string periph, feature;
+  NotModelled(std::string p, std::string f)
+      : std::runtime_error(p + ": " + f + " not modelled"), periph(std::move(p)), feature(std::move(f)) {}
 };
 
 struct UnknownOp : std::runtime_error {

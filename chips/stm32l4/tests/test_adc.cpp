@@ -320,11 +320,13 @@ TEST_CASE("adc_async_no_clock_aborts") {
 TEST_CASE("adc_unmodelled_features_abort") {
   Rig r;
   auto msg = [&](uint64_t a, uint32_t v) { return abort_message([&] { r.wr(a, v); }); };
-  CHECK(msg(ADC1 + CFGR, 0x80000000u | (1u << 10)).find("hardware triggers not modelled") != std::string::npos);
+  CHECK(msg(ADC1 + CFGR, 0x80000000u | (1u << 10)) ==
+        "ADC1: hardware triggers (CFGR.EXTEN=1, EXTSEL=0) not modelled");
+  CHECK_THROWS_AS(r.wr(ADC1 + CFGR, 0x80000000u | 1u), NotModelled);
   CHECK(msg(ADC1 + CFGR, 0x80000000u | 1u).find("DMA") != std::string::npos);
   CHECK(msg(ADC1 + CFGR, 0x80000000u | (1u << 13)).find("continuous") != std::string::npos);
   CHECK(msg(ADC1 + CFGR, 0x80000000u | (1u << 23)).find("watchdog") != std::string::npos);
-  CHECK(msg(ADC1 + SQR1, 1u).find("scan mode not modelled") != std::string::npos);
+  CHECK(msg(ADC1 + SQR1, 1u) == "ADC1: scan mode (SQR1.L=1: a sequence of 2 conversions) not modelled");
   CHECK(msg(ADC1 + CFGR2, 1u).find("oversampling") != std::string::npos);
   CHECK(msg(ADC1 + JSQR, 0x100u).find("injected") != std::string::npos);
   CHECK(msg(ADC1 + IER, 1u << 7).find("watchdog") != std::string::npos);
@@ -416,7 +418,7 @@ TEST_CASE("dac_software_trigger") {
 
 TEST_CASE("dac_hw_trigger_aborts") {
   Rig r;
-  CHECK(abort_message([&] { r.wr(DAC + DCR, TEN1 | (2u << 3)); }) .find("DAC1 hardware triggers not modelled") !=
+  CHECK(abort_message([&] { r.wr(DAC + DCR, TEN1 | (2u << 3)); }) .find("DAC1: hardware triggers (CR.TEN1=1, TSEL1=2;") !=
         std::string::npos);
   CHECK(abort_message([&] { r.wr(DAC + DCR, 1u << 6); }).find("wave") != std::string::npos);
   CHECK(abort_message([&] { r.wr(DAC + DCR, 1u << 12); }).find("DMA") != std::string::npos);

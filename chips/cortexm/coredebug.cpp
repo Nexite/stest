@@ -34,7 +34,7 @@ void CoreDebug::write(uint32_t off, unsigned width, uint32_t v) {
       // With a debugger attached a keyed C_HALT/C_STEP/C_MASKINTS request would halt the core.
       uint32_t w = lane_merge(0, off, width, v);
       if (debug_enabled() && (w >> 16) == kDbgKey && (w & kDhcsrHaltStepMask))
-        throw std::runtime_error("DHCSR: halting/stepping the core is not modelled");
+        throw NotModelled("CoreDebug", "halting/stepping the core (DHCSR C_HALT/C_STEP/C_MASKINTS)");
       return;
     }
     case kDemcr: {

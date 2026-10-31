@@ -146,7 +146,7 @@ struct Cortexm::Impl {
       switch (off) {
         case 0x00: return;  // CPUID read-only
         case 0x04:
-          if (v & (1u << 31)) throw std::runtime_error("ICSR.NMIPENDSET (NMI) not modelled");
+          if (v & (1u << 31)) throw NotModelled("SCB", "NMI (ICSR.NMIPENDSET)");
           if (v & (1u << 28)) c.set_pend(kExcPendSV, true);
           if (v & (1u << 27)) c.set_pend(kExcPendSV, false);
           if (v & (1u << 26)) c.set_pend(kExcSysTick, true);
@@ -155,8 +155,8 @@ struct Cortexm::Impl {
         case 0x08: merge(c.vtor, 0xFFFFFF80u); return;
         case 0x0C:
           if (mask != 0xFFFFFFFFu || (v >> 16) != 0x05FAu) return;  // needs VECTKEY
-          if (v & 4u) throw std::runtime_error("AIRCR.SYSRESETREQ (system reset) not modelled");
-          if (v & 3u) throw std::runtime_error("AIRCR.VECTCLRACTIVE/VECTRESET not modelled");
+          if (v & 4u) throw NotModelled("SCB", "system reset (AIRCR.SYSRESETREQ)");
+          if (v & 3u) throw NotModelled("SCB", "AIRCR.VECTCLRACTIVE/VECTRESET");
           c.prigroup = (v >> 8) & 7u;
           return;
         case 0x10: merge(c.scr, 0x16u); return;
@@ -556,6 +556,8 @@ template <class F> auto guarded(const char* what, F f) -> decltype(f(*stest::Cor
   if (!c) stest_rt_abort("no Cortex-M core installed (%s)", what);
   try {
     return f(*c);
+  } catch (const stest::NotModelled& e) {
+    stest_rt_abort("%s", e.what());
   } catch (const std::exception& e) {
     stest_rt_abort("exception in %s: %s", what, e.what());
   } catch (...) {

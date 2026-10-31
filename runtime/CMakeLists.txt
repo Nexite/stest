@@ -49,7 +49,9 @@ set(_stest_abort_cases
   "clock_throw_int|stest: unknown exception in clock event"
   "clock_throw_std|stest: exception in clock event: tick"
   "capi_no_core|stest: no Cortex-M core installed"
-  "sysresetreq|stest: exception in model at 0xe000ed0c: .*SYSRESETREQ"
+  "not_modelled_read|^stest: FAKE1: frobnication \\(CR.FROB\\) not modelled \\(read16 0x40001002\\)"
+  "not_modelled_clock|^stest: FAKE2: widgets not modelled\n"
+  "sysresetreq|^stest: SCB: system reset \\(AIRCR.SYSRESETREQ\\) not modelled \\(write32 0xe000ed0c = 0x05fa0004\\)"
   "null_handler|stest: .*no handler for exception 16"
   "wfi_deadlock|stest: .*wfi.*nothing can wake"
   "systick_no_getter|stest: exception in model at 0xe000e010: .*core clock getter")

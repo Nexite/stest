@@ -42,6 +42,7 @@ inline bool in_window(uint64_t a) { return stest::in_mmio_window(a); }
 // instrumented C.
 void run_due_events() {
   try { g_clock.run_due(); }
+  catch (const stest::NotModelled& e) { stest_rt_abort("%s", e.what()); }
   catch (const std::exception& e) { stest_rt_abort("exception in clock event: %s", e.what()); }
   catch (...) { stest_rt_abort("unknown exception in clock event"); }
 }
@@ -58,6 +59,7 @@ inline void charge() {
 void deliver() {
   if (!g_hook) return;
   try { g_hook(); }
+  catch (const stest::NotModelled& e) { stest_rt_abort("%s", e.what()); }
   catch (const std::exception& e) { stest_rt_abort("exception in delivery hook: %s", e.what()); }
   catch (...) { stest_rt_abort("unknown exception in delivery hook"); }
 }
@@ -109,9 +111,19 @@ void fast_forward() {
                  (unsigned)e.addr, e.peripheral.c_str());
 }
 
+// "stest: <PERIPH>: <feature> not modelled (<read|write><bits> 0x<addr>[ = 0x<value>])"
+[[noreturn]] void abort_not_modelled(const stest::NotModelled& e, uint64_t a, unsigned bytes, bool is_write,
+                                     const uint32_t* v) {
+  if (v)
+    stest_rt_abort("%s (%s%u 0x%08x = 0x%08x)", e.what(), is_write ? "write" : "read", bytes * 8, (unsigned)a,
+                   (unsigned)*v);
+  stest_rt_abort("%s (%s%u 0x%08x)", e.what(), is_write ? "write" : "read", bytes * 8, (unsigned)a);
+}
+
 uint32_t bus_read(uint64_t a, unsigned bytes) {
   try { return g_bus.read(a, bytes); }
   catch (const stest::UnmodelledAccess& e) { abort_access(e); }
+  catch (const stest::NotModelled& e) { abort_not_modelled(e, a, bytes, false, nullptr); }
   catch (const stest::ClockDisabled& e) { stest_rt_abort("%s", e.what()); }
   catch (const std::exception& e) { stest_rt_abort("exception in model at 0x%08x: %s", (unsigned)a, e.what()); }
   catch (...) { stest_rt_abort("unknown exception in model at 0x%08x", (unsigned)a); }
@@ -119,6 +131,7 @@ uint32_t bus_read(uint64_t a, unsigned bytes) {
 void bus_write(uint64_t a, unsigned bytes, uint32_t v) {
   try { g_bus.write(a, bytes, v); }
   catch (const stest::UnmodelledAccess& e) { abort_access(e); }
+  catch (const stest::NotModelled& e) { abort_not_modelled(e, a, bytes, true, &v); }
   catch (const stest::ClockDisabled& e) { stest_rt_abort("%s", e.what()); }
   catch (const std::exception& e) { stest_rt_abort("exception in model at 0x%08x: %s", (unsigned)a, e.what()); }
   catch (...) { stest_rt_abort("unknown exception in model at 0x%08x", (unsigned)a); }
@@ -214,6 +227,7 @@ uint32_t shim_access(uint64_t addr, unsigned width, bool is_write, ShimOp op, vo
     }
   }
   catch (const UnmodelledAccess& e) { abort_access(e); }
+  catch (const NotModelled& e) { abort_not_modelled(e, addr, width, is_write, nullptr); }  // shim: value not known
   catch (const ClockDisabled& e) { stest_rt_abort("%s", e.what()); }
   catch (const std::exception& e) { stest_rt_abort("exception in model at 0x%08x: %s", (unsigned)addr, e.what()); }
   catch (...) { stest_rt_abort("unknown exception in model at 0x%08x", (unsigned)addr); }

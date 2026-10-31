@@ -96,7 +96,7 @@ class Spi : public Peripheral {
     }
     void clear() { n = bytes = 0; }
   };
-  [[noreturn]] void not_modelled(const std::string& what, uint32_t off, uint32_t v) const;
+  [[noreturn]] void not_modelled(const std::string& what) const;  // throws NotModelled
   void check_config(uint32_t cr1, uint32_t cr2, uint32_t off, uint32_t v) const;
   unsigned data_bits() const;
   uint64_t pclk_hz() const;

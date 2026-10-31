@@ -139,10 +139,8 @@ void Adc::reset() {
 
 void Adc::fail(const Inst& a, const std::string& what) const { throw std::runtime_error(label(a) + what); }
 
-void Adc::not_modelled(const Inst* a, const std::string& what, uint32_t off, uint32_t v) const {
-  char b[64];
-  std::snprintf(b, sizeof b, "; write %s at offset 0x%03x)", hex(v).c_str(), off);
-  throw std::runtime_error((a ? label(*a) : name_) + " " + what + b);
+void Adc::not_modelled(const Inst* a, const std::string& what) const {
+  throw NotModelled(a ? label(*a) : name_, what);
 }
 
 uint64_t Adc::adc_hz(const Inst& a) const {
@@ -191,52 +189,52 @@ void Adc::check_inst_write(Inst& a, uint32_t r, uint32_t v) {
   char d[64];
   switch (r) {
     case IER:
-      if (v & IER_INJ) not_modelled(&a, "injected conversions not modelled (IER.JEOCIE/JEOSIE/JQOVFIE", off, v);
-      if (v & IER_AWD) not_modelled(&a, "analog watchdog interrupts not modelled (IER.AWDxIE", off, v);
+      if (v & IER_INJ) not_modelled(&a, "injected conversions (IER.JEOCIE/JEOSIE/JQOVFIE)");
+      if (v & IER_AWD) not_modelled(&a, "analog watchdog interrupts (IER.AWDxIE)");
       return;
     case CFGR:
       if (v & EXTEN) {
         std::snprintf(d, sizeof d, "(CFGR.EXTEN=%u, EXTSEL=%u", (v & EXTEN) >> 10, (v >> 6) & 0xFu);
-        not_modelled(&a, std::string("hardware triggers not modelled ") + d, off, v);
+        not_modelled(&a, std::string("hardware triggers ") + d + ")");
       }
-      if (v & DMAEN) not_modelled(&a, "DMA requests not modelled (CFGR.DMAEN", off, v);
-      if (v & DFSDMCFG) not_modelled(&a, "DFSDM output not modelled (CFGR.DFSDMCFG", off, v);
-      if (v & CONT) not_modelled(&a, "continuous conversion mode not modelled (CFGR.CONT", off, v);
-      if (v & AUTDLY) not_modelled(&a, "auto-delayed conversion mode not modelled (CFGR.AUTDLY", off, v);
-      if (v & DISCEN) not_modelled(&a, "discontinuous mode not modelled (CFGR.DISCEN", off, v);
+      if (v & DMAEN) not_modelled(&a, "DMA requests (CFGR.DMAEN)");
+      if (v & DFSDMCFG) not_modelled(&a, "DFSDM output (CFGR.DFSDMCFG)");
+      if (v & CONT) not_modelled(&a, "continuous conversion mode (CFGR.CONT)");
+      if (v & AUTDLY) not_modelled(&a, "auto-delayed conversion mode (CFGR.AUTDLY)");
+      if (v & DISCEN) not_modelled(&a, "discontinuous mode (CFGR.DISCEN)");
       if (v & (JDISCEN | JQM | JAWD1EN | JAUTO))
-        not_modelled(&a, "injected conversions not modelled (CFGR.JDISCEN/JQM/JAWD1EN/JAUTO", off, v);
-      if (v & AWD1EN) not_modelled(&a, "analog watchdog not modelled (CFGR.AWD1EN", off, v);
+        not_modelled(&a, "injected conversions (CFGR.JDISCEN/JQM/JAWD1EN/JAUTO)");
+      if (v & AWD1EN) not_modelled(&a, "analog watchdog (CFGR.AWD1EN)");
       return;
     case CFGR2:
-      if (v & (ROVSE | JOVSE)) not_modelled(&a, "oversampling not modelled (CFGR2.ROVSE/JOVSE", off, v);
+      if (v & (ROVSE | JOVSE)) not_modelled(&a, "oversampling (CFGR2.ROVSE/JOVSE)");
       return;
     case SQR1:
       if (v & 0xFu) {
         std::snprintf(d, sizeof d, "(SQR1.L=%u: a sequence of %u conversions", v & 0xFu, (v & 0xFu) + 1);
-        not_modelled(&a, std::string("scan mode not modelled ") + d, off, v);
+        not_modelled(&a, std::string("scan mode ") + d + ")");
       }
       return;
     case JSQR:
-      if (v) not_modelled(&a, "injected conversions not modelled (JSQR", off, v);
+      if (v) not_modelled(&a, "injected conversions (JSQR)");
       return;
     case AWD2CR: case AWD3CR:
-      if (v) not_modelled(&a, "analog watchdog not modelled (AWD2CR/AWD3CR", off, v);
+      if (v) not_modelled(&a, "analog watchdog (AWD2CR/AWD3CR)");
       return;
     case DIFSEL:
-      if (v & 0x7FFFFu) not_modelled(&a, "differential inputs not modelled (DIFSEL", off, v);
+      if (v & 0x7FFFFu) not_modelled(&a, "differential inputs (DIFSEL)");
       return;
     default:
       if (r >= OFR1 && r <= OFR4 && (v & (1u << 31)))
-        not_modelled(&a, "offset compensation not modelled (OFRx.OFFSET_EN", off, v);
+        not_modelled(&a, "offset compensation (OFRx.OFFSET_EN)");
       return;
   }
 }
 
 void Adc::check_common_write(uint32_t v) {
-  if (v & CCR_DUAL) not_modelled(nullptr, "dual mode not modelled (CCR.DUAL", CCR, v);
-  if (v & CCR_MDMA) not_modelled(nullptr, "DMA requests not modelled (CCR.MDMA", CCR, v);
-  if (((v & CCR_PRESC) >> 18) >= 12) not_modelled(nullptr, "reserved prescaler not modelled (CCR.PRESC", CCR, v);
+  if (v & CCR_DUAL) not_modelled(nullptr, "dual mode (CCR.DUAL)");
+  if (v & CCR_MDMA) not_modelled(nullptr, "DMA requests (CCR.MDMA)");
+  if (((v & CCR_PRESC) >> 18) >= 12) not_modelled(nullptr, "reserved prescaler (CCR.PRESC)");
   const uint32_t old = regs_.get(CCR);
   if ((old ^ v) & (CCR_CKMODE | CCR_PRESC))
     for (const Inst& a : adc_)
@@ -257,7 +255,7 @@ void Adc::write_cr(Inst& a, uint32_t off, unsigned width, uint32_t v) {
   set_reg(a, CR, cr);
   const std::string me = label(a);
   if (set & (JADSTART | JADSTP))
-    not_modelled(&a, "injected conversions not modelled (CR.JADSTART/JADSTP", a.idx * 0x100 + CR, wv);
+    not_modelled(&a, "injected conversions (CR.JADSTART/JADSTP)");
   auto powered = [&](const char* bit) {
     if ((cr & DEEPPWD) || !(cr & ADVREGEN))
       throw std::runtime_error(me + ": " + bit + " set in deep power-down or with the voltage regulator "
@@ -308,12 +306,13 @@ void Adc::start_conversion(Inst& a) {
   const std::string me = label(a) + " channel " + std::to_string(ch);
   if (ch >= kNumCh) throw std::runtime_error(me + " does not exist (SQR1.SQ1)");
   if (ch == 0) {
-    if (a.idx != 0) throw std::runtime_error(me + " (internal) not modelled");
+    if (a.idx != 0) throw NotModelled(label(a), "channel 0 (internal)");
     if (!(regs_.get(CCR) & VREFEN))
       throw std::runtime_error(me + " (VREFINT) converted with ADC_CCR.VREFEN clear");
   } else if (ch == 17 || ch == 18) {
-    if (a.idx == 1) throw std::runtime_error(me + " (DAC1 output " + std::to_string(ch - 16) + ", internal) not modelled");
-    throw std::runtime_error(me + (ch == 17 ? " (temperature sensor) not modelled" : " (VBAT/3) not modelled"));
+    const std::string c = "channel " + std::to_string(ch);
+    if (a.idx == 1) throw NotModelled(label(a), c + " (DAC1 output " + std::to_string(ch - 16) + ", internal)");
+    throw NotModelled(label(a), c + (ch == 17 ? " (temperature sensor)" : " (VBAT/3)"));
   }
   const uint32_t smp = ch < 10 ? (reg(a, SMPR1) >> (3 * ch)) & 7u : (reg(a, SMPR2) >> (3 * (ch - 10))) & 7u;
   uint64_t smp_half = kSmpHalf[smp];
@@ -393,9 +392,7 @@ uint32_t Adc::read(uint32_t off, unsigned width) {
       return lane_extract(v, off, width);
     }
     if (aligned == CDR) {
-      char b[64];
-      std::snprintf(b, sizeof b, " (read%u at offset 0x%03x)", width * 8, off);
-      throw std::runtime_error(name_ + " dual mode not modelled (common data register CDR" + b + ")");
+      throw NotModelled(name_, "dual mode (common data register CDR)");
     }
     return regs_.read(off, width);
   }

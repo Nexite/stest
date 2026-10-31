@@ -66,7 +66,7 @@ def test_adc_scan_mode_aborts(adc_exe):
     with Sim() as s:
         s.node("n", adc_exe("scan"))
         s.start()
-        with pytest.raises(NodeCrashed, match="scan mode not modelled"):
+        with pytest.raises(NodeCrashed, match=r"stest: ADC1: scan mode \(SQR1\.L=1: a sequence of 2 conversions\) not modelled \(write32 0x50040030 = 0x00000001\)"):
             s.advance(ms=5)
 
 
