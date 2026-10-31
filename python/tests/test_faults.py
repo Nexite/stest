@@ -67,6 +67,19 @@ def test_unmodelled_access_message(faults_exe):
     assert_reaped(pids)
 
 
+def test_write_to_read_only_register_aborts(faults_exe):
+    with Sim() as s:
+        s.node("ro", faults_exe("ro_write"))
+        s.start()
+        with pytest.raises(NodeCrashed) as ei:
+            s.advance(ms=100)
+        first = str(ei.value).splitlines()[0]
+        assert first == (
+            "node 'ro' aborted at virtual t=10.000 ms: "
+            "stest: write to read-only register 0x48000010 (write32, GPIOA) (exit status 70)"
+        )
+
+
 def test_stderr_tail_in_crash_message(faults_exe):
     with Sim() as s:
         # 5000 long lines (> any pipe buffer) before the abort: stderr must be drained

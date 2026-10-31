@@ -2,6 +2,7 @@
  *   SPIN        for(;;){} with no volatile access after 10 ms (wall-clock timeout)
  *   CRASH       null-pointer store at 10 ms (host SIGSEGV/SIGBUS)
  *   UNMODELLED  write to USART1 (0x40013800, not modelled) at 10 ms (strict abort)
+ *   RO_WRITE    write to GPIOA->IDR (read-only register) at 10 ms (strict abort)
  *
  * Time base: SysTick at 1 kHz from the reset clock (MSI 4 MHz); the firmware sleeps
  * in WFI until the 10th tick (virtual t = 10 ms + startup offset). Before that, if the
@@ -15,8 +16,9 @@
 #define SPIN 1
 #define CRASH 2
 #define UNMODELLED 3
+#define RO_WRITE 4
 #ifndef FAULT
-#error "define FAULT=SPIN|CRASH|UNMODELLED"
+#error "define FAULT=SPIN|CRASH|UNMODELLED|RO_WRITE"
 #endif
 
 static volatile uint32_t ticks;
@@ -44,6 +46,8 @@ int main(void)
   *p = 1u; /* plain (non-volatile) store through a null pointer: host crash */
 #elif FAULT == UNMODELLED
   *(volatile uint32_t *)0x40013800u = 1u; /* USART1->CR1: no USART model */
+#elif FAULT == RO_WRITE
+  GPIOA->IDR = 1u; /* read-only register: strict abort, not a silent no-op */
 #else
 #error "unknown FAULT"
 #endif

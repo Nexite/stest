@@ -43,7 +43,7 @@ Rcc::Rcc(std::string name, const nlohmann::json&, Clock&) : name_(std::move(name
   regs_.declare(PLLSAI2CFGR, 0x00001000, 0xFF037F00);
   regs_.declare(CIER, 0x00000000, 0x000006FF);
   regs_.declare(CIFR, 0x00000000, 0);                         // read-only
-  regs_.declare(CICR, 0x00000000, 0);                         // write-only, reads 0
+  regs_.declare_write_only(CICR);                             // reads 0
   regs_.declare(AHB1RSTR, 0, 0x00031103);
   regs_.declare(AHB2RSTR, 0, 0x000777FF);
   regs_.declare(AHB3RSTR, 0, 0x00000101);
@@ -77,7 +77,7 @@ void Rcc::write(uint32_t off, unsigned width, uint32_t v) {
   uint32_t aligned = off & ~3u;
   uint32_t val = lane_value(off, width, v);
   if (aligned == CICR) {
-    regs_.write(off, width, v);  // write-only, stores nothing (rw=0); strictness checks
+    regs_.write(off, width, v);  // write-only: stores nothing; strictness checks
     regs_.set(CIFR, regs_.get(CIFR) & ~(val & 0x000007FFu));
     return;
   }

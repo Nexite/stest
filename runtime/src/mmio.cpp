@@ -98,6 +98,9 @@ void fast_forward() {
 }
 
 [[noreturn]] void abort_access(const stest::UnmodelledAccess& e) {
+  if (e.read_only)
+    stest_rt_abort("write to read-only register 0x%08x (write%u, %s)", (unsigned)e.addr, e.width * 8,
+                   e.peripheral.c_str());
   if (e.peripheral.empty())
     stest_rt_abort("unmodelled %s%u 0x%08x", e.is_write ? "write" : "read", e.width * 8,
                    (unsigned)e.addr);

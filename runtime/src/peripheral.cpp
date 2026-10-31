@@ -7,7 +7,11 @@ nlohmann::json Peripheral::call(std::string_view op, const nlohmann::json&) {
 }
 
 void RegisterFile::declare(uint32_t off, uint32_t reset, uint32_t rw, uint32_t w1c) {
-  regs_[off] = Reg{reset, reset, rw, w1c};
+  regs_[off] = Reg{reset, reset, rw, w1c, false};
+}
+
+void RegisterFile::declare_write_only(uint32_t off, uint32_t reset) {
+  regs_[off] = Reg{reset, reset, 0, 0, true};
 }
 
 RegisterFile::Reg& RegisterFile::find(uint32_t off, unsigned width, bool is_write) {
@@ -35,6 +39,10 @@ uint32_t RegisterFile::read(uint32_t off, unsigned width) const {
 
 void RegisterFile::write(uint32_t off, unsigned width, uint32_t v) {
   Reg& r = find(off, width, true);
+  if (r.rw == 0 && r.w1c == 0) {
+    if (r.write_only) return;
+    throw ReadOnlyRegister(off, width);
+  }
   uint32_t sh = (off & 3u) * 8;
   uint32_t lm = lane_mask(off, width);
   uint32_t vs = (v << sh) & lm;

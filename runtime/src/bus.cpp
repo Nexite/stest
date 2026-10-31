@@ -37,6 +37,8 @@ void Bus::write(uint64_t addr, unsigned width, uint32_t v) {
   if (!m) throw UnmodelledAccess(addr, width, true);
   try {
     m->p->write(static_cast<uint32_t>(addr - m->base), width, v);
+  } catch (const ReadOnlyRegister&) {
+    throw UnmodelledAccess(addr, width, true, std::string(m->p->name()), /*ro=*/true);
   } catch (const UnmodelledRegister&) {
     throw UnmodelledAccess(addr, width, true, std::string(m->p->name()));
   }

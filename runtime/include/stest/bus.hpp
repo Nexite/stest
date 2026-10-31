@@ -10,9 +10,10 @@ namespace stest {
 struct UnmodelledAccess : std::runtime_error {
   uint64_t addr; unsigned width; bool is_write;
   std::string peripheral;  // empty if no peripheral owns the address
-  UnmodelledAccess(uint64_t a, unsigned w, bool wr, std::string p = {})
-      : std::runtime_error("unmodelled access"), addr(a), width(w), is_write(wr),
-        peripheral(std::move(p)) {}
+  bool read_only;          // a write to a read-only register (the peripheral threw ReadOnlyRegister)
+  UnmodelledAccess(uint64_t a, unsigned w, bool wr, std::string p = {}, bool ro = false)
+      : std::runtime_error(ro ? "write to read-only register" : "unmodelled access"), addr(a),
+        width(w), is_write(wr), peripheral(std::move(p)), read_only(ro) {}
 };
 
 class Bus {
@@ -21,7 +22,7 @@ class Bus {
   void map(uint64_t base, uint32_t size, Peripheral* p);
   void unmap(Peripheral* p);  // removes every mapping of p (no-op if none)
   // width in bytes (1,2,4). Throws UnmodelledAccess if unmapped or the peripheral
-  // throws UnmodelledRegister (then .peripheral is set).
+  // throws UnmodelledRegister (then .peripheral is set; .read_only for ReadOnlyRegister).
   uint32_t read(uint64_t addr, unsigned width);
   void write(uint64_t addr, unsigned width, uint32_t v);
   void reset_all();

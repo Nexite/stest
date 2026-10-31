@@ -14,6 +14,14 @@ struct UnmodelledRegister : std::runtime_error {
       : std::runtime_error("unmodelled register"), off(o), width(w), is_write(wr) {}
 };
 
+// A write to a register with no writable and no W1C bit (e.g. an input/status register).
+// Strict mode: the access aborts like an unmodelled one. (Writes to registers that merely
+// contain some read-only bits keep hardware semantics: those bits ignore the write.)
+struct ReadOnlyRegister : UnmodelledRegister {
+  ReadOnlyRegister(uint32_t o, unsigned w) : UnmodelledRegister(o, w, true) {}
+  const char* what() const noexcept override { return "write to read-only register"; }
+};
+
 struct UnknownOp : std::runtime_error {
   explicit UnknownOp(std::string_view op)
       : std::runtime_error("unknown op: " + std::string(op)) {}
@@ -38,16 +46,21 @@ struct Peripheral {  // one instance per mapped block
 class RegisterFile {
  public:
   // rw_mask: bits software may write. w1c_mask: bits cleared by writing 1.
+  // rw_mask == w1c_mask == 0 declares a read-only register: write() throws ReadOnlyRegister.
   void declare(uint32_t off, uint32_t reset, uint32_t rw_mask, uint32_t w1c_mask = 0);
+  // A write-only / model-handled register (BSRR, KEYR, ...): write() performs the
+  // strictness checks and stores nothing; the model applies the write's effect itself.
+  void declare_write_only(uint32_t off, uint32_t reset = 0);
   uint32_t read(uint32_t off, unsigned width) const;   // throws UnmodelledRegister
-  void write(uint32_t off, unsigned width, uint32_t v);  // throws UnmodelledRegister
+  // throws UnmodelledRegister, or ReadOnlyRegister (a subclass) for a read-only register
+  void write(uint32_t off, unsigned width, uint32_t v);
   void reset();                                          // all regs to reset values
   // Model-side access (bypasses masks). Throws UnmodelledRegister if undeclared.
   uint32_t get(uint32_t off) const;
   void set(uint32_t off, uint32_t v);
 
  private:
-  struct Reg { uint32_t value, reset, rw, w1c; };
+  struct Reg { uint32_t value, reset, rw, w1c; bool write_only; };
   Reg& find(uint32_t off, unsigned width, bool is_write);
   const Reg& find(uint32_t off, unsigned width, bool is_write) const;
   std::map<uint32_t, Reg> regs_;

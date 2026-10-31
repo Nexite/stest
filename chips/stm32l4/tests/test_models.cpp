@@ -48,6 +48,8 @@ TEST_CASE("rcc: reset values, ready bits follow enables, SWS mirrors SW") {
   // reserved offset is strict
   CHECK_THROWS_AS(bus.read(RCC + 0x24, 4), UnmodelledAccess);
   CHECK_THROWS_AS(bus.read(RCC + 0xA0, 4), UnmodelledAccess);
+  CHECK_THROWS_AS(bus.write(RCC + 0x1C, 4, 0), UnmodelledAccess);  // CIFR read-only
+  CHECK_NOTHROW(bus.write(RCC + 0x20, 4, 0x7FF));                  // CICR write-only
   // LSI / LSE ready
   bus.write(RCC + 0x94, 4, 1);
   CHECK((bus.read(RCC + 0x94, 4) & 2) != 0);
@@ -70,6 +72,9 @@ TEST_CASE("pwr: VOS read-back, VOSF reads 0") {
   CHECK((bus.read(PWR + 0x14, 4) & (1u << 10)) == 0);
   CHECK(bus.read(PWR + 0x64, 4) == 0);  // PDCRI exists on L496
   CHECK_THROWS_AS(bus.read(PWR + 0x1C, 4), UnmodelledAccess);
+  CHECK_THROWS_AS(bus.write(PWR + 0x10, 4, 0), UnmodelledAccess);  // SR1 read-only
+  CHECK_THROWS_AS(bus.write(PWR + 0x14, 4, 0), UnmodelledAccess);  // SR2 read-only
+  CHECK_NOTHROW(bus.write(PWR + 0x18, 4, 0x1F));                   // SCR write-only
 }
 
 TEST_CASE("flash: ACR latency read-back, CR lock/unlock") {
@@ -89,6 +94,9 @@ TEST_CASE("flash: ACR latency read-back, CR lock/unlock") {
   bus.write(FLASH + 0x14, 4, 0x80000000);  // re-lock
   CHECK(bus.read(FLASH + 0x14, 4) == 0xC0000000);
   CHECK_THROWS_AS(bus.read(FLASH + 0x1C, 4), UnmodelledAccess);
+  CHECK_NOTHROW(bus.write(FLASH + 0x04, 4, 0x04152637));  // PDKEYR write-only
+  CHECK_NOTHROW(bus.write(FLASH + 0x0C, 4, 0x08192A3B));  // OPTKEYR write-only
+  CHECK_NOTHROW(bus.write(FLASH + 0x10, 4, 0x1));         // SR: EOP is w1c
 }
 
 TEST_CASE("gpio: output pin via BSRR/ODR/BRR, IDR, events, calls") {
@@ -104,6 +112,9 @@ TEST_CASE("gpio: output pin via BSRR/ODR/BRR, IDR, events, calls") {
   CHECK(bus.read(GPIOA + 0x0C, 4) == 0x64000000);
   CHECK(bus.read(GPIOA + 0x10, 4) == (1u << 13 | 1u << 15));  // pulled-up SWD pins
   CHECK_THROWS_AS(bus.read(GPIOA + 0x2C, 4), UnmodelledAccess);  // no ASCR on L496
+  try { bus.write(GPIOA + 0x10, 4, 0); FAIL("IDR write did not throw"); }  // IDR is read-only
+  catch (const UnmodelledAccess& e) { CHECK(e.read_only); CHECK(e.peripheral == "GPIOA"); }
+  CHECK_NOTHROW(bus.write(GPIOA + 0x1C, 4, 0));  // LCKR: written by the model's lock sequence
 
   // PA5 output push-pull
   uint32_t m = bus.read(GPIOA, 4);

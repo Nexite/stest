@@ -14,9 +14,9 @@ constexpr uint32_t kStrt = 1u << 16, kOptStrt = 1u << 17;
 
 Flash::Flash(std::string name, const nlohmann::json&, Clock&) : name_(std::move(name)) {
   regs_.declare(ACR, 0x00000600, 0x00007F07);  // ICEN|DCEN; LATENCY, PRFTEN, ICRST, DCRST, RUN_PD, SLEEP_PD
-  regs_.declare(PDKEYR, 0, 0);                 // write-only
-  regs_.declare(KEYR, 0, 0);                   // write-only
-  regs_.declare(OPTKEYR, 0, 0);                // write-only
+  regs_.declare_write_only(PDKEYR);
+  regs_.declare_write_only(KEYR);
+  regs_.declare_write_only(OPTKEYR);
   regs_.declare(SR, 0, 0, 0x0000C3FB);         // error/EOP flags are w1c
   regs_.declare(CR, kLock | kOptLock, 0x0F07FFFF);
   regs_.declare(ECCR, 0, 0x01000000, 0xC0000000);

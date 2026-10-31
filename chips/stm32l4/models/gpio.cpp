@@ -37,13 +37,13 @@ Gpio::Gpio(std::string name, const nlohmann::json& params, Clock& clock)
   regs_.declare(OTYPER, 0, 0x0000FFFF);
   regs_.declare(OSPEEDR, params.value("ospeedr_reset", 0u), 0xFFFFFFFF);
   regs_.declare(PUPDR, params.value("pupdr_reset", 0u), 0xFFFFFFFF);
-  regs_.declare(IDR, 0, 0);   // computed on read
+  regs_.declare(IDR, 0, 0);   // read-only (writes abort); computed on read
   regs_.declare(ODR, 0, 0x0000FFFF);
-  regs_.declare(BSRR, 0, 0);  // write-only
-  regs_.declare(LCKR, 0, 0);  // sequence handled in write()
+  regs_.declare_write_only(BSRR);
+  regs_.declare_write_only(LCKR);  // lock sequence handled in write(); read-back via set()
   regs_.declare(AFRL, 0, 0xFFFFFFFF);
   regs_.declare(AFRH, 0, 0xFFFFFFFF);
-  regs_.declare(BRR, 0, 0);   // write-only
+  regs_.declare_write_only(BRR);
   drive_.fill(-1);
   last_levels_ = levels();
 }
@@ -152,7 +152,7 @@ void Gpio::write(uint32_t off, unsigned width, uint32_t v) {
       break;
     }
     default:
-      regs_.write(off, width, v);  // ODR, or strict throw for IDR (rw=0 is ignored) / unknown
+      regs_.write(off, width, v);  // ODR; strict throw for IDR (read-only) and unknown offsets
       break;
   }
   update();
