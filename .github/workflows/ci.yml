@@ -36,8 +36,8 @@ jobs:
           if-no-files-found: warn
 
   macos:
-    name: macos-14 arm64 (native)
-    runs-on: macos-14
+    name: macos-15 arm64 (native)
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Install toolchain
