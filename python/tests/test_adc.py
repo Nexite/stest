@@ -151,3 +151,16 @@ def test_adc_speed_two_virtual_seconds(adc_exe):
         wall = time.perf_counter() - t
         assert n.var("conv_count") >= 1999
     assert wall <= 0.8, f"2 virtual s took {wall:.3f} s wall (budget 0.8 s)"
+
+
+def test_set_voltage_only_on_analog_pins(adc_exe):
+    with Sim() as s:
+        n = s.node("n", adc_exe())
+        s.start()
+        with pytest.raises(StestError, match=r"PB11 has no analog function on STM32L496RG; analog pins: PA0, PA1,.* PB0, PB1,") as ei:
+            n.pin("PB11").set_voltage(1.0)
+        assert "MODEL_CALL" not in str(ei.value)
+        n.pin("PB1").set_voltage(1.0)  # ADC12_IN16
+        n.pin("PA4").set_voltage(0.5)  # ADC12_IN9 and DAC1_OUT1
+        assert n.pin("PB1").voltage == 1.0 and n.pin("PA4").voltage == 0.5
+        s.advance(ms=1)  # node still runs (REQ_ERROR, not a crash)

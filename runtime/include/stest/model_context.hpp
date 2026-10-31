@@ -94,6 +94,10 @@ class ModelContext {
                            demangled_type_name(typeid(T)));
   }
 
+  // Part name ("STM32L496RG") for diagnostics; empty unless set (Node sets it from ChipDesc).
+  const std::string& chip_name() const { return chip_name_; }
+  void set_chip_name(std::string n) { chip_name_ = std::move(n); }
+
   ClockTree& clocks() const;  // none registered -> std::logic_error
   void set_clock_tree(ClockTree* t) { tree_ = t; }
 
@@ -110,6 +114,7 @@ class ModelContext {
   Cortexm& core_;
   Bus& bus_;
   ClockTree* tree_ = nullptr;
+  std::string chip_name_;
   std::map<std::string, Peripheral*, std::less<>> by_name_;
   std::vector<Peripheral*> order_;
   std::map<int, std::vector<const void*>> irq_high_;  // irqn -> sources currently high

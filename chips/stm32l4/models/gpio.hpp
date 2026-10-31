@@ -22,6 +22,10 @@
 // (set_analog_drive(), used by the DAC for its output pins), like drive_pin overrides the
 // firmware's output. Neither set: voltage() is empty (the pin floats). MODEL_CALL is the
 // outside world driving the pin, so set_voltage works whatever the RCC clock state.
+// set_voltage is accepted only on pins with an analog function: the ADC (from the part
+// TOML's [[analog]] table) and the DAC (its output pins) register theirs in connect() via
+// add_analog_function(). Any other pin -> std::invalid_argument (REQ_ERROR in Python)
+// "PB11 has no analog function on STM32L496RG; analog pins: PA0, PA1, ...".
 // call(): "set_voltage" {pin, volts (finite number)}; "get_voltage" {pin} -> volts | null;
 // "release_voltage" {pin} (drop the external voltage).
 //
@@ -67,6 +71,10 @@ class Gpio : public Peripheral {
   std::optional<double> voltage(unsigned pin) const;
   // On-chip analog driver (DAC output buffer): a voltage, or empty to stop driving.
   void set_analog_drive(unsigned pin, std::optional<double> volts);
+  // Wiring (called from other models' connect()): `pin` has analog function `fn`
+  // ("ADC12_IN16", "DAC1_OUT1"); several functions per pin accumulate.
+  void add_analog_function(unsigned pin, const std::string& fn);
+  const std::string& analog_function(unsigned pin) const { return analog_fn_.at(pin); }  // "" if none
   // Fires once per level change, pins in ascending order, before the causing access returns
   // (the same changes that become "gpio" events). EXTI subscribes in its connect().
   Signal<PinEdge>& edges() { return edges_; }
@@ -81,10 +89,12 @@ class Gpio : public Peripheral {
   void update();  // recompute levels, emit change events
   std::string name_;
   std::string port_;
+  ModelContext& ctx_;
   Clock& clock_;
   RegisterFile regs_;
   std::array<int8_t, 16> drive_{};  // -1: not driven
   std::array<std::optional<double>, 16> ext_volts_{}, drv_volts_{};
+  std::array<std::string, 16> analog_fn_{};  // "ADC12_IN9/DAC1_OUT1"; empty: no analog function
   uint16_t last_levels_ = 0;
   int lck_stage_ = 0;
   uint16_t lck_mask_ = 0;

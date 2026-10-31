@@ -123,6 +123,14 @@ void Adc::connect(ModelContext& ctx) {
   for (Inst& a : adc_)
     for (auto& p : a.pins)
       if (p) p->gpio = &ctx.get<Gpio>("GPIO" + p->port);
+  // Analog functions for Gpio's set_voltage check, named like ST's signals ("ADC12_IN16").
+  for (const auto& e : analog_) {
+    const std::string pin = e.at("pin").get<std::string>();
+    std::string fn = "ADC";
+    for (const auto& n : e.at("adc")) fn += std::to_string(n.get<unsigned>());
+    fn += "_IN" + std::to_string(e.at("channel").get<unsigned>());
+    ctx.get<Gpio>("GPIO" + pin.substr(1, 1)).add_analog_function(static_cast<unsigned>(std::stoul(pin.substr(2))), fn);
+  }
 }
 
 void Adc::reset() {

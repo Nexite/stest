@@ -65,8 +65,12 @@ Dac::Dac(std::string name, const nlohmann::json& params, ModelContext& ctx)
 
 void Dac::connect(ModelContext& ctx) {
   clocks_ = &ctx.clocks();
-  for (Chan& c : ch_)
-    if (!c.pin_name.empty()) c.gpio = &ctx.get<Gpio>("GPIO" + c.pin_name.substr(1, 1));
+  for (unsigned i = 0; i < ch_.size(); ++i) {
+    Chan& c = ch_[i];
+    if (c.pin_name.empty()) continue;
+    c.gpio = &ctx.get<Gpio>("GPIO" + c.pin_name.substr(1, 1));
+    c.gpio->add_analog_function(c.pin, name_ + "_OUT" + std::to_string(i + 1));
+  }
 }
 
 void Dac::reset() {

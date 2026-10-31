@@ -428,3 +428,18 @@ TEST_CASE("dac_hw_trigger_aborts") {
   r.wr(DAC + MCR, 2u);  // buffer off, external pin: fine
   CHECK_THROWS_AS(r.wr(DAC + DOR1, 1), UnmodelledAccess);  // read-only
 }
+
+TEST_CASE("gpio: set_voltage only on pins with an analog function (ADC table, DAC outputs)") {
+  Rig r;
+  r.ctx.set_chip_name("STM32L496RG");
+  CHECK(r.gpiob.analog_function(1) == "ADC12_IN16");
+  CHECK(r.gpioa.analog_function(4) == "ADC12_IN9/DAC1_OUT1");
+  CHECK(r.gpioa.analog_function(5) == "DAC1_OUT2");
+  CHECK(r.gpiob.analog_function(11).empty());
+  CHECK_NOTHROW(r.gpiob.call("set_voltage", {{"pin", 1}, {"volts", 1.0}}));
+  CHECK_NOTHROW(r.gpioa.call("set_voltage", {{"pin", 4}, {"volts", 1.0}}));
+  std::string m = abort_message([&] { r.gpiob.call("set_voltage", {{"pin", 11}, {"volts", 1.0}}); });
+  CHECK(m.rfind("PB11 has no analog function on STM32L496RG; analog pins: PA", 0) == 0);
+  CHECK(m.find("PB1,") != std::string::npos);
+  CHECK(m.find("PB11") == m.rfind("PB11"));  // listed pins exclude PB11
+}

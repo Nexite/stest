@@ -115,6 +115,7 @@ Node::Node(const ChipDesc& chip) {
   impl_->core->set_quantum_hook(&quantum_yield);
   set_quantum_end(UINT64_MAX);
   impl_->ctx = std::make_unique<ModelContext>(runtime_clock(), *impl_->core, runtime_bus());
+  if (chip.name) impl_->ctx->set_chip_name(chip.name);
   if (chip.init) chip.init(*impl_->ctx);
 }
 

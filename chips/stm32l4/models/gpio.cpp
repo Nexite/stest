@@ -30,7 +30,7 @@ unsigned pin_arg(const nlohmann::json& args) {
 }  // namespace
 
 Gpio::Gpio(std::string name, const nlohmann::json& params, ModelContext& ctx)
-    : name_(std::move(name)), port_(params.value("port", std::string{})), clock_(ctx.clock()) {
+    : name_(std::move(name)), port_(params.value("port", std::string{})), ctx_(ctx), clock_(ctx.clock()) {
   if (port_.size() != 1) throw std::invalid_argument("gpio params need port=\"A\"..\"I\"");
   regs_.declare(MODER, params.value("moder_reset", 0xFFFFFFFFu), 0xFFFFFFFF);
   regs_.declare(OTYPER, 0, 0x0000FFFF);
@@ -187,6 +187,12 @@ std::string_view Gpio::reg_name(uint32_t off) const {
   }
 }
 
+void Gpio::add_analog_function(unsigned pin, const std::string& fn) {
+  std::string& f = analog_fn_.at(pin);
+  if (("/" + f + "/").find("/" + fn + "/") != std::string::npos) return;
+  f += (f.empty() ? "" : "/") + fn;
+}
+
 nlohmann::json Gpio::call(std::string_view op, const nlohmann::json& args) {
   if (op == "get_pin") return pin_level(pin_arg(args));
   if (op == "drive_pin") {
@@ -204,6 +210,16 @@ nlohmann::json Gpio::call(std::string_view op, const nlohmann::json& args) {
   }
   if (op == "set_voltage") {
     unsigned p = pin_arg(args);
+    if (analog_fn_[p].empty()) {
+      std::string all;
+      for (Peripheral* m : ctx_.models())
+        if (auto* g = dynamic_cast<Gpio*>(m))
+          for (unsigned i = 0; i < 16; ++i)
+            if (!g->analog_fn_[i].empty()) all += (all.empty() ? "P" : ", P") + g->port_ + std::to_string(i);
+      const std::string chip = ctx_.chip_name().empty() ? "" : " on " + ctx_.chip_name();
+      throw std::invalid_argument("P" + port_ + std::to_string(p) + " has no analog function" + chip +
+                                  "; analog pins: " + (all.empty() ? "none" : all));
+    }
     if (!args.contains("volts") || !args["volts"].is_number() || !std::isfinite(args["volts"].get<double>()))
       throw std::invalid_argument("missing finite number 'volts'");
     ext_volts_[p] = args["volts"].get<double>();

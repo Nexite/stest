@@ -54,8 +54,18 @@ class Pin:
     def set_voltage(self, volts: float) -> None:
         """Apply an analog voltage to the pin from outside (ADC input). It wins over an
         on-chip driver (DAC output) and does not change the digital level (IDR). Works
-        whatever the firmware's RCC clock state: the outside world drives the pin."""
-        self.node.call(self.model, "set_voltage", pin=self.index, volts=float(volts))
+        whatever the firmware's RCC clock state: the outside world drives the pin.
+        Only pins with an analog function (an ADC input from the part's ``[[analog]]``
+        table, or a DAC output) accept a voltage; any other pin raises StestError
+        ("PB11 has no analog function on STM32L496RG; analog pins: ...")."""
+        try:
+            self.node.call(self.model, "set_voltage", pin=self.index, volts=float(volts))
+        except StestError as e:
+            msg = str(e)
+            marker = f"MODEL_CALL {self.model}.set_voltage: "
+            if marker in msg and "has no analog function" in msg:
+                raise StestError(f"node {self.node.name!r}: {msg.split(marker, 1)[1]}") from None
+            raise
 
     def release_voltage(self) -> None:
         """Stop applying an external voltage (a DAC output on the pin shows again)."""
