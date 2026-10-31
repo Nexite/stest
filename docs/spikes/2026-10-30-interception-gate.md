@@ -37,12 +37,19 @@ total = 0.061262 s -> **PASS** (budget 0.40)
 
 total = 0.089944 s -> **PASS** (budget 0.40)
 
-### Linux x86-64
-Pending (CI, Task 8). Not run under emulation.
+### Linux x86-64 (GitHub Actions ubuntu-24.04 runner, stest Docker image, clang 18; CI run 41165400904)
+| | runs (s) | median |
+|---|---|---|
+| mmio_s | 0.000649 0.000658 0.000686 0.000657 0.000651 | 0.000657 |
+| sync_s | 0.229713 0.183819 0.183655 0.229157 0.196736 | 0.196736 |
+
+total = 0.197393 s -> **PASS** (budget 0.40)
 
 ## Verdict
 macOS arm64: PASS (0.061 of 0.40 s). Linux arm64: PASS (0.090 of 0.40 s).
-Sync dominates by ~70-200x (~99%): MMIO interception costs 2-4 ns per access
+Linux x86-64: PASS (0.197 of 0.40 s) on a shared 4-vCPU CI runner, the tightest margin;
+multi-node sync at a CAN-sized quantum should be re-measured there in Plan 3.
+Sync dominates by ~70-300x (~99%): MMIO interception costs 2-4 ns per access
 (under 1 ms per virtual second); the socket round trips cost 6-9 us each. Gate result: continue.
 
 ## Caveats
