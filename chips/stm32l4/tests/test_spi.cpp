@@ -248,7 +248,7 @@ TEST_CASE("spi burst grouping: one event per BSY period, when BSY falls") {
   auto ev = spi_events();
   REQUIRE(ev.size() == 1);
   CHECK(ev[0]["t"] == 100 + 4 * 1600);
-  CHECK(ev[0]["e"] == json{{"kind", "spi"}, {"bus", "SPI1"}, {"t_start", 100},
+  CHECK(ev[0]["e"] == json{{"kind", "spi"}, {"periph", "SPI1"}, {"t_start", 100},
                            {"mosi", "a5010203"}, {"miso", "1020ffff"}});
   CHECK(r.clock.next_event_ns() == kNone);
   // a frame started after BSY fell is a new burst

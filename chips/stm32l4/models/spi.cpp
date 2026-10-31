@@ -139,7 +139,7 @@ void Spi::complete() {
   append_hex(miso_, in.v, in.bytes);
   start_next();
   if (!shifting_) {
-    emit_event(clock_.now_ns(), {{"kind", "spi"}, {"bus", name_}, {"t_start", burst_start_},
+    emit_event(clock_.now_ns(), {{"kind", "spi"}, {"periph", name_}, {"t_start", burst_start_},
                                  {"mosi", mosi_}, {"miso", miso_}});
     mosi_.clear();
     miso_.clear();

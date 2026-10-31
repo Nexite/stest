@@ -377,7 +377,7 @@ class Node:
             if data.get("kind") == "gpio":
                 self._pin_history.setdefault((data["port"], int(data["pin"])), []).append((t, int(data["level"])))
             elif data.get("kind") == "spi":
-                self._spi_bursts.setdefault(data["bus"], []).append(
+                self._spi_bursts.setdefault(data["periph"], []).append(
                     SpiBurst(int(data["t_start"]), bytes.fromhex(data["mosi"]), bytes.fromhex(data["miso"]), t)
                 )
             elif data.get("kind") == "itm":

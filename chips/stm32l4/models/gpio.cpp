@@ -97,7 +97,7 @@ void Gpio::update() {
   for (unsigned p = 0; p < 16; ++p)
     if (changed & (1u << p)) {
       const int level = (now >> p) & 1u;
-      emit_event(t, {{"kind", "gpio"}, {"port", port_}, {"pin", p}, {"level", level}});
+      emit_event(t, {{"kind", "gpio"}, {"periph", name_}, {"port", port_}, {"pin", p}, {"level", level}});
       edges_.emit(PinEdge{port_[0], p, level, t});
     }
 }

@@ -65,7 +65,7 @@ def test_spi_transmit_is_one_burst(spi_exe):
             assert b.t_end_ns - b.t_start_ns == 4 * 1600
         # the event log carries the same burst as sorted-key JSON
         ev = [json.loads(js) for _, _, js in s.event_log if json.loads(js)["kind"] == "spi"]
-        assert ev[0] == {"kind": "spi", "bus": "SPI1", "t_start": bursts[0].t_start_ns,
+        assert ev[0] == {"kind": "spi", "periph": "SPI1", "t_start": bursts[0].t_start_ns,
                          "mosi": "a5010203", "miso": "ffffffff"}
 
 

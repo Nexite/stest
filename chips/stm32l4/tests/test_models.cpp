@@ -139,7 +139,7 @@ TEST_CASE("gpio: output pin via BSRR/ODR/BRR, IDR, events, calls") {
   auto ev = take_events();
   REQUIRE(ev.size() == 1);
   CHECK(ev[0].t_ns == 100);
-  CHECK(ev[0].data.dump() == R"({"kind":"gpio","level":1,"pin":5,"port":"A"})");
+  CHECK(ev[0].data.dump() == R"({"kind":"gpio","level":1,"periph":"GPIOA","pin":5,"port":"A"})");
   bus.write(GPIOA + 0x18, 4, 1u << 5);  // already high: no event
   CHECK(take_events().empty());
   bus.write(GPIOA + 0x28, 4, 1u << 5);  // BRR

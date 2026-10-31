@@ -6,7 +6,7 @@
 //   external drive (drive_pin) if set, else
 //   ODR bit for an output pin (open-drain with ODR=1 releases the line -> pull level),
 //   else the pull level (pull-up 1, pull-down 0, none 0).
-// Every level change emits {"kind":"gpio","port":"A","pin":5,"level":1} at the clock's
+// Every level change emits {"kind":"gpio","periph":"GPIOA","port":"A","pin":5,"level":1} at the clock's
 // current time into the node event buffer (pins in ascending order per access).
 // BSRR: BSx has priority over BRx. LCKR implements the LCKK write sequence; locked
 // pins keep their MODER/OTYPER/OSPEEDR/PUPDR/AFR bits until reset.

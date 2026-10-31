@@ -377,6 +377,7 @@ TEST_CASE("dac_output") {
   auto ev = take_events();
   REQUIRE(ev.size() == 1);
   CHECK(ev[0].data["kind"] == "dac");
+  CHECK(ev[0].data["periph"] == "DAC1");
   CHECK(ev[0].data["channel"] == 1);
   CHECK(ev[0].data["volts"].get<double>() == doctest::Approx(1.6504));
   // views of the holding register

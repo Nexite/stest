@@ -11,7 +11,7 @@
 // the DHR write (RM0351 19.4.5); with TENx = 1 and TSELx = software, one APB1 clock after
 // SWTRIGx is written (SWTRIGx then clears). Event times round up to the next ns.
 // Output: volts = DOR / 4095 * vref while ENx = 1, else none (not driven). Every change of a
-// channel's output emits {"kind":"dac","channel":n,"volts":v|null} and drives its pin
+// channel's output emits {"kind":"dac","periph":"DAC1","channel":n,"volts":v|null} and drives its pin
 // (params.pins, PA4 / PA5) through Gpio::set_analog_drive when MCR.MODEx connects the pin
 // (MODE 0, 1, 2; MODE 3 is on-chip only). An external voltage set on the pin from Python
 // wins over the DAC driver (see gpio.hpp).

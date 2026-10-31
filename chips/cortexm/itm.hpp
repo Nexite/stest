@@ -3,7 +3,7 @@
 //
 // Bytes written to a stimulus port (8/16/32-bit stores, little-endian bytes) accumulate in
 // a per-port line buffer; '\n' completes a line and emits the event
-// {"kind":"itm","port":N,"text":"<line without \n and a trailing \r>"} stamped with the
+// {"kind":"itm","periph":"ITM","port":N,"text":"<line without \n and a trailing \r>"} stamped with the
 // virtual time of the store. A line longer than kMaxLine bytes is emitted early. Invalid
 // UTF-8 bytes are replaced by U+FFFD (events are JSON).
 //

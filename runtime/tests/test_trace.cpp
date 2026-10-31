@@ -73,6 +73,7 @@ TEST_CASE("ITM lines: per-port buffers, widths, CRLF, virtual timestamps") {
   REQUIRE(ev.size() == 2);
   CHECK(ev[0].t_ns == 1234);
   CHECK(ev[0].data["kind"] == "itm");
+  CHECK(ev[0].data["periph"] == "ITM");
   CHECK(ev[0].data["port"] == 0);
   CHECK(ev[0].data["text"] == "abcd");
   CHECK(ev[1].data["port"] == 1);

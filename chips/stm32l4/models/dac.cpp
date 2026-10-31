@@ -146,7 +146,7 @@ void Dac::update_outputs() {
     const std::optional<double> o = output(c);
     if (o != ch.out) {
       ch.out = o;
-      emit_event(clock_.now_ns(), {{"kind", "dac"}, {"channel", c + 1},
+      emit_event(clock_.now_ns(), {{"kind", "dac"}, {"periph", name_}, {"channel", c + 1},
                                    {"volts", o ? nlohmann::json(*o) : nlohmann::json(nullptr)}});
     }
     if (ch.gpio) {

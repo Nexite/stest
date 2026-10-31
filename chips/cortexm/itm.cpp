@@ -49,7 +49,7 @@ void Itm::reset() {
 }
 
 void Itm::emit(unsigned port, std::string text) {
-  emit_event(clock_.now_ns(), {{"kind", "itm"}, {"port", port}, {"text", sanitize_utf8(text)}});
+  emit_event(clock_.now_ns(), {{"kind", "itm"}, {"periph", "ITM"}, {"port", port}, {"text", sanitize_utf8(text)}});
 }
 
 void Itm::put_byte(unsigned port, uint8_t b) {

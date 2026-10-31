@@ -88,7 +88,8 @@ int run_standalone(int argc, char** argv) {
     stest::Node::Stop stop = node->run_until(t);
     if (stop == stest::Node::Stop::Exited)  // unterminated ITM text is flushed as a last event
       for (auto& [port, text] : node->core().take_itm_partial())
-        stest::emit_event(node->now_ns(), {{"kind", "itm"}, {"port", port}, {"text", text}, {"partial", true}});
+        stest::emit_event(node->now_ns(),
+                         {{"kind", "itm"}, {"periph", "ITM"}, {"port", port}, {"text", text}, {"partial", true}});
     print_events();
     if (stop == stest::Node::Stop::Exited) {
       std::fflush(stdout);

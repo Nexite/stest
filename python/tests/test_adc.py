@@ -101,7 +101,7 @@ def test_dac_output(dac_exe):
         assert ch.volts == pytest.approx(1.650, abs=0.001)
         assert n.pin("PA4").voltage == ch.volts
         dac_events = [json.loads(js) for _, _, js in s.event_log if json.loads(js)["kind"] == "dac"]
-        assert dac_events == [{"kind": "dac", "channel": 1, "volts": ch.volts}]
+        assert dac_events == [{"kind": "dac", "periph": "DAC1", "channel": 1, "volts": ch.volts}]
         with pytest.raises(StestError, match="DAC1 channel 2 is disabled"):
             _ = n.dac(1).channel(2).volts
         # an external voltage wins over the DAC output; releasing it shows the DAC again

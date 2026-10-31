@@ -36,7 +36,7 @@
 //
 // Events: one per burst, i.e. per BSY period (frames back to back, BSY never dropping),
 // emitted at the instant BSY falls:
-//   {"kind":"spi","bus":"SPI1","t_start":ns,"mosi":"<hex>","miso":"<hex>"}
+//   {"kind":"spi","periph":"SPI1","t_start":ns,"mosi":"<hex>","miso":"<hex>"}
 // t_start is the start of the first frame. mosi/miso are lowercase hex of the frame values as
 // written to / read from DR (logical values, not wire bit order), one byte per frame for
 // DS <= 8, two bytes little-endian per frame for DS > 8. Note that HAL_SPI_TransmitReceive
