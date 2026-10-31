@@ -19,7 +19,7 @@ stest is an open-source (Apache-2.0) STM32 software-in-the-loop simulator. Real 
 | `chips/cmsis_host/` | Host shim for CMSIS `cmsis_compiler.h` (replaces ARM toolchain header) |
 | `tools/gen_chip.py` | TOML -> generated chip glue (IRQ table, weak handlers, model instances, `stest_chip`) |
 | `cmake/` | `StestToolchain.cmake` (finds upstream LLVM), `StestFetchST.cmake` (pinned ST sources), `stest_add_firmware.cmake` |
-| `selftest/` | Self-test firmwares (`firmware/`: `adc`, `blinky`, `dac`, `exti`, `faults`, `hal_direct`, `itm` (+ `itm_mixed`: printf and ITM interleaved), `pollcount`, `spi`, `tim`) and CTest checks |
+| `selftest/` | Self-test firmwares (`firmware/`: `adc`, `blinky`, `dac`, `exti`, `faults` (variants incl. `faults_abort_output`), `hal_direct`, `itm` (+ `itm_mixed`: printf and ITM interleaved), `pollcount`, `spi`, `tim`) and CTest checks |
 | `spike/` | Interception benchmarks and the speed gate (`run_gate.py`) |
 | `python/stest/`, `python/tests/` | `Sim`/`Node`, protocol mirror, DWARF/Mach-O symbol lookup, typed peripheral helpers (`peripherals.py`: `node.timer()`, `node.adc()`, `node.dac()`, `node.spi()`; `pin.py`: levels and analog voltages), pytest plugin; Python tests |
 | `docs/superpowers/{specs,plans}/` | Design spec and per-plan implementation plans; `docs/spikes/` gate results |
@@ -36,7 +36,7 @@ Build time:
 Run time:
 - One node = one process = one MCU. The firmware runs on its own thread; the thread owning the Node (loop thread) holds the "baton". Exactly one runs at a time (mutex + condvar handoff), so all model/clock/core access is single-threaded. See `runtime/include/stest/node.hpp`.
 - Every MMIO access goes `mmio.cpp` -> `Bus` -> model, charging virtual time. Models schedule `Clock` events; IRQ handlers and events run on the firmware thread.
-- Control channel (`runtime/include/stest/protocol.h`): framed messages (`u32 len | u8 type | payload`) over the socket fd in `STEST_CTRL`: HELLO, RUN_UNTIL, STOPPED (+events), READ_MEM/WRITE_MEM, MODEL_CALL, ERROR (node exits 70), SHUTDOWN, REQ_ERROR. Without `STEST_CTRL` the node runs standalone (`--run-ms N`).
+- Control channel (`runtime/include/stest/protocol.h`): framed messages (`u32 len | u8 type | payload`) over the socket fd in `STEST_CTRL`: HELLO, RUN_UNTIL, STOPPED (+events), READ_MEM/WRITE_MEM, MODEL_CALL, ERROR (node exits 70), SHUTDOWN, REQ_ERROR. Without `STEST_CTRL` the node runs standalone (`--run-ms N`); there a strict abort first prints the aborting quantum's pending events and partial stdout/ITM lines as EVT lines (standalone abort hook in `node_main.cpp`), then exits 70.
 - Python `Sim` advances all nodes in lockstep quanta (default 1000 us). Firmware variables are read/written by name via DWARF (`python/stest/symbols.py`, anchored at the `stest_symbol_anchor` runtime address; Mach-O via `macho.py`).
 - Poll fast-forward (`runtime.hpp`): after 64 store-free loads re-reading seen (addr,width,value) tuples, the clock jumps to the next event or quantum end.
 

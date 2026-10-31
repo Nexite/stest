@@ -9,6 +9,9 @@
 //   EVT <t_ns> <json>                       (any other kind)
 // The firmware's own stdout is captured (stest/stdout_capture.hpp) and appears only as
 // "stdout" events (EVT <t_ns> {"kind":"stdout",...}), so it never interleaves with EVT lines.
+// On a strict-mode abort the abort hook flushes the partial ITM/stdout lines and every pending
+// event (including the aborting quantum's) to the same output before exit, so the last output
+// before a crash is not lost.
 // Exit status: 0 when N ms is reached; firmware main's return value if it returns
 // earlier (with a note on stderr); 70 on a strict-mode abort; 2 on usage errors.
 //
@@ -23,6 +26,7 @@
 #include <string>
 #include "stest/node.hpp"
 #include "stest/protocol.h"
+#include "stest/runtime.hpp"
 #include "stest/stdout_capture.hpp"
 
 extern "C" int stest_firmware_main(void);
@@ -67,6 +71,31 @@ void print_events() {
   }
 }
 
+stest::Node* g_node = nullptr;
+
+// Unterminated ITM/stdout text becomes final "partial" events (normal exit and abort paths).
+void emit_partials(stest::Node& node) {
+  for (auto& [port, text] : node.core().take_itm_partial())
+    stest::emit_event(node.now_ns(),
+                      {{"kind", "itm"}, {"periph", "ITM"}, {"port", port}, {"text", text}, {"partial", true}});
+  if (auto s = stest::take_stdout_partial())
+    stest::emit_event(node.now_ns(), {{"kind", "stdout"}, {"periph", "stdout"}, {"text", *s}, {"partial", true}});
+}
+
+// Standalone abort hook. Runs on the aborting thread (normally the firmware thread, which
+// holds the baton while the loop thread is parked in run_until), so model/event state is
+// consistent and nothing here waits on the loop thread or takes a lock the loop thread could
+// hold. stest_rt_abort has already printed the "stest: ..." message and clears the hook
+// before calling it; the flag guards against any other re-entry.
+void standalone_abort_hook(const char*) {
+  static bool done = false;
+  if (done) return;
+  done = true;
+  if (g_node) emit_partials(*g_node);
+  print_events();
+  std::fflush(g_evt_out);
+}
+
 int run_standalone(int argc, char** argv) {
   uint64_t run_ms = 0, quantum_us = 1000;
   bool have_run = false;
@@ -89,18 +118,14 @@ int run_standalone(int argc, char** argv) {
   // The node is intentionally never destroyed: the process ends with _exit below
   // while the firmware thread is parked.
   auto* node = new stest::Node(stest_chip);
+  g_node = node;
+  stest::set_abort_hook(&standalone_abort_hook);
   node->start(&stest_firmware_main);
   uint64_t t = 0;
   while (t < end_ns) {
     t = (end_ns - t > q_ns) ? t + q_ns : end_ns;
     stest::Node::Stop stop = node->run_until(t);
-    if (stop == stest::Node::Stop::Exited) {  // unterminated ITM/stdout text: last events
-      for (auto& [port, text] : node->core().take_itm_partial())
-        stest::emit_event(node->now_ns(),
-                         {{"kind", "itm"}, {"periph", "ITM"}, {"port", port}, {"text", text}, {"partial", true}});
-      if (auto s = stest::take_stdout_partial())
-        stest::emit_event(node->now_ns(), {{"kind", "stdout"}, {"periph", "stdout"}, {"text", *s}, {"partial", true}});
-    }
+    if (stop == stest::Node::Stop::Exited) emit_partials(*node);  // unterminated text: last events
     print_events();
     if (stop == stest::Node::Stop::Exited) {
       std::fflush(g_evt_out);

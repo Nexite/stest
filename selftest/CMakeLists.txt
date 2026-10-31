@@ -21,10 +21,10 @@ add_test(NAME selftest_blinky_speed
           $<TARGET_FILE:blinky> 5000 2.0)
 
 # Fault-injection firmware: one executable per variant (faults_spin, faults_crash,
-# faults_unmodelled, faults_ro_write, faults_clkoff, faults_printf). Uses no HAL, so the HAL archive is a single file; the HAL config
+# faults_unmodelled, faults_ro_write, faults_clkoff, faults_printf, faults_abort_output). Uses no HAL, so the HAL archive is a single file; the HAL config
 # header is borrowed from blinky.
 stest_st_family_dirs(stm32l4 _st_hal _st_dev)
-foreach(variant SPIN CRASH UNMODELLED RO_WRITE CLKOFF PRINTF)
+foreach(variant SPIN CRASH UNMODELLED RO_WRITE CLKOFF PRINTF ABORT_OUTPUT)
   string(TOLOWER ${variant} v)
   stest_add_firmware(faults_${v}
     CHIP STM32L496RG
@@ -33,6 +33,13 @@ foreach(variant SPIN CRASH UNMODELLED RO_WRITE CLKOFF PRINTF)
     DEFINES FAULT=${variant}
     HAL_SOURCES ${_st_hal}/Src/stm32l4xx_hal.c)
 endforeach()
+
+# Standalone strict abort must still print the aborting quantum's output (printf lines, ITM,
+# partial fragments) as EVT lines before exiting 70.
+add_test(NAME selftest_standalone_abort_output
+  COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:faults_abort_output>
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/check_abort_output.cmake)
+set_tests_properties(selftest_standalone_abort_output PROPERTIES TIMEOUT 30)
 
 # EXTI: HAL_GPIO_EXTI_Callback driven by PC13 rising edges (blinky's CubeMX scaffolding).
 stest_add_firmware(exti

@@ -6,6 +6,9 @@
  *   CLKOFF      write to GPIOB->ODR without enabling the GPIOB clock at 10 ms (strict abort)
  *   PRINTF      no fault: at 10 ms printf("hi\n") to stdout (after STEST_FAULT_STDOUT_LINES lines
  *               "line <i>", if set), then sleep; used to test stdout capture
+ *   ABORT_OUTPUT  at 10 ms, in one quantum: printf "out 1", "out 2", ITM "itm 1", then the
+ *               unterminated printf fragment "frag", then the UNMODELLED write (strict abort);
+ *               used to test that standalone mode prints the aborting quantum's output
  *
  * Every variant except CLKOFF enables the GPIOA clock first (GPIO access with its RCC
  * enable bit clear is itself a strict abort).
@@ -25,6 +28,7 @@
 #define RO_WRITE 4
 #define CLKOFF 5
 #define PRINTF 6
+#define ABORT_OUTPUT 7
 #ifndef FAULT
 #error "define FAULT=SPIN|CRASH|UNMODELLED|RO_WRITE|CLKOFF|PRINTF"
 #endif
@@ -61,6 +65,16 @@ int main(void)
   GPIOA->IDR = 1u; /* read-only register: strict abort, not a silent no-op */
 #elif FAULT == CLKOFF
   GPIOB->ODR = 1u; /* GPIOB clock (RCC AHB2ENR bit 1) never enabled: strict abort */
+#elif FAULT == ABORT_OUTPUT
+  {
+    printf("out 1\n");
+    printf("out 2\n");
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    for (const char *c = "itm 1\n"; *c; c++)
+      ITM_SendChar((uint32_t)(unsigned char)*c);
+    printf("frag");
+    *(volatile uint32_t *)0x40013800u = 1u; /* USART1->CR1: strict abort */
+  }
 #elif FAULT == PRINTF
   {
     const char *lines = getenv("STEST_FAULT_STDOUT_LINES");
