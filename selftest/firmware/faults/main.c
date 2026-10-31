@@ -9,6 +9,9 @@
  *   ABORT_OUTPUT  at 10 ms, in one quantum: printf "out 1", "out 2", ITM "itm 1", then the
  *               unterminated printf fragment "frag", then the UNMODELLED write (strict abort);
  *               used to test that standalone mode prints the aborting quantum's output
+ *   PARTIAL_END   no fault: at 10 ms printf("tail") without a newline, then sleep (a normal
+ *               --run-ms end must emit it as a partial event)
+ *   (ABORT_OUTPUT also prints "early <i>" lines before 10 ms, in earlier quanta)
  *
  * Every variant except CLKOFF enables the GPIOA clock first (GPIO access with its RCC
  * enable bit clear is itself a strict abort).
@@ -29,6 +32,7 @@
 #define CLKOFF 5
 #define PRINTF 6
 #define ABORT_OUTPUT 7
+#define PARTIAL_END 8
 #ifndef FAULT
 #error "define FAULT=SPIN|CRASH|UNMODELLED|RO_WRITE|CLKOFF|PRINTF"
 #endif
@@ -50,8 +54,18 @@ int main(void)
   RCC->AHB2ENR |= RCC_AHB2ENR_GPIOAEN;
 #endif
   SysTick_Config(SystemCoreClock / 1000u);
+#if FAULT == ABORT_OUTPUT
+  for (uint32_t last = 0; ticks < 10u;) {
+    if (ticks != last && ticks < 4u) {
+      last = ticks;
+      printf("early %lu\n", (unsigned long)last);
+    }
+    __WFI();
+  }
+#else
   while (ticks < 10u)
     __WFI();
+#endif
 
 #if FAULT == SPIN
   for (;;) {
@@ -75,6 +89,8 @@ int main(void)
     printf("frag");
     *(volatile uint32_t *)0x40013800u = 1u; /* USART1->CR1: strict abort */
   }
+#elif FAULT == PARTIAL_END
+  printf("tail");
 #elif FAULT == PRINTF
   {
     const char *lines = getenv("STEST_FAULT_STDOUT_LINES");

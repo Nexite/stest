@@ -12,6 +12,7 @@
 // On a strict-mode abort the abort hook flushes the partial ITM/stdout lines and every pending
 // event (including the aborting quantum's) to the same output before exit, so the last output
 // before a crash is not lost.
+// Unterminated ITM/stdout text at the end of a run (normal or abort) is emitted as "partial" events.
 // Exit status: 0 when N ms is reached; firmware main's return value if it returns
 // earlier (with a note on stderr); 70 on a strict-mode abort; 2 on usage errors.
 //
@@ -135,6 +136,8 @@ int run_standalone(int argc, char** argv) {
       _exit(node->exit_code() & 0xFF);
     }
   }
+  emit_partials(*node);  // unterminated text at the end of --run-ms
+  print_events();
   std::fflush(g_evt_out);
   std::fflush(stderr);
   _exit(0);
