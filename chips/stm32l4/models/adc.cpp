@@ -47,12 +47,6 @@ constexpr uint32_t kPresc[12] = {1, 2, 4, 6, 8, 10, 12, 16, 32, 64, 128, 256};
 constexpr uint64_t kAdrdyNs = 1000;   // ADEN -> ADRDY
 constexpr uint64_t kCalHalf = 2 * 116;  // calibration: 116 ADC clock cycles
 
-std::string hex(uint32_t v) {
-  char b[16];
-  std::snprintf(b, sizeof b, "0x%08x", v);
-  return b;
-}
-
 bool env_strict_analog() {
   const char* s = std::getenv("STEST_STRICT_ANALOG");
   return s && std::strcmp(s, "1") == 0;
@@ -193,7 +187,6 @@ void Adc::update_irq(Inst& a) {
 // ---------------------------------------------------------------- configuration checks
 
 void Adc::check_inst_write(Inst& a, uint32_t r, uint32_t v) {
-  const uint32_t off = a.idx * 0x100 + r;
   char d[64];
   switch (r) {
     case IER:
@@ -249,7 +242,7 @@ void Adc::check_common_write(uint32_t v) {
       if (reg(a, CR) & ADEN)
         throw std::runtime_error(name_ + ": CCR.CKMODE/PRESC changed while " + label(a) +
                                  " is enabled (RM0351: only while every ADC is disabled; write " +
-                                 hex(v) + ")");
+                                 hex32(v) + ")");
 }
 
 // ---------------------------------------------------------------- control register

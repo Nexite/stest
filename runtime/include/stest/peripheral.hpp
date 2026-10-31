@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <array>
+#include <cstdio>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -73,6 +74,13 @@ inline uint32_t lane_extract(uint32_t word, uint32_t off, unsigned width) {  // 
 inline uint32_t lane_merge(uint32_t word, uint32_t off, unsigned width, uint32_t v) {
   uint32_t m = lane_mask(off, width);
   return (word & ~m) | ((v << ((off & 3u) * 8)) & m);
+}
+
+// "0x%08x" formatting of a register value or address, for diagnostics (abort messages).
+inline std::string hex32(uint32_t v) {
+  char b[11];
+  std::snprintf(b, sizeof b, "0x%08x", v);
+  return b;
 }
 
 // 32-bit register store with reset values, rw/w1c masks. Sub-word accesses

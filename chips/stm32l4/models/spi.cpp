@@ -20,11 +20,6 @@ constexpr uint32_t RXNE = 1u << 0, TXE = 1u << 1, CRCERR = 1u << 4, OVR = 1u << 
                    FRLVL_POS = 9, FTLVL_POS = 11;
 constexpr unsigned kFifoBytes = 4;
 
-std::string hex32(uint32_t v) {
-  char b[16];
-  std::snprintf(b, sizeof b, "0x%08x", v);
-  return b;
-}
 uint32_t level_code(unsigned bytes) { return bytes >= 3 ? 3u : bytes; }
 void append_hex(std::string& s, uint16_t v, unsigned bytes) {
   static const char* d = "0123456789abcdef";

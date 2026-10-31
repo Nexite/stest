@@ -1,6 +1,5 @@
 #include "stm32l4/models/tim.hpp"
 #include <algorithm>
-#include <cstdio>
 #include <stdexcept>
 #include "stest/cortexm.hpp"
 
@@ -26,12 +25,6 @@ constexpr uint32_t CCPC = 1u << 0;
 const char* const kOcModes[8] = {"frozen",         "active_on_match", "inactive_on_match",
                                  "toggle",         "force_inactive",  "force_active",
                                  "pwm1",           "pwm2"};
-
-std::string hex(uint32_t v) {
-  char b[16];
-  std::snprintf(b, sizeof b, "0x%08x", v);
-  return b;
-}
 }  // namespace
 
 Tim::Tim(std::string name, const nlohmann::json& params, ModelContext& ctx)

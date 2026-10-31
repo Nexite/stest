@@ -118,6 +118,12 @@ TEST_CASE("lane helpers: every offset x width") {
   }
 }
 
+TEST_CASE("hex32: the shared 0x%08x formatter for diagnostics") {
+  CHECK(hex32(0) == "0x00000000");
+  CHECK(hex32(0xC5ACCE55u) == "0xc5acce55");
+  CHECK(hex32(0x1F) == "0x0000001f");
+}
+
 TEST_CASE("RegisterFile: misaligned or oversized declare throws") {
   RegisterFile rf;
   CHECK_THROWS_AS(rf.declare(0x402, 0, 0xFF), std::invalid_argument);

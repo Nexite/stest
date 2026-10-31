@@ -1,5 +1,4 @@
 #include "cortexm/dwt.hpp"
-#include <cstdio>
 #include <stdexcept>
 #include <string>
 
@@ -8,12 +7,6 @@ namespace {
 constexpr uint32_t kCpicnt = 0x08, kPcsr = 0x1C, kComp0 = 0x20;  // COMPn = 0x20 + 0x10*n, MASKn +4, FUNCTIONn +8
 constexpr uint32_t kCtrlRoMask = 0xFF800000u;                    // NUMCOMP, NO*; not writable
 constexpr uint32_t kLarKey = 0xC5ACCE55u;
-
-std::string hex32(uint32_t v) {
-  char b[16];
-  std::snprintf(b, sizeof b, "0x%08x", v);
-  return b;
-}
 }  // namespace
 
 Dwt::Dwt(Clock& clock, const CoreDebug& dbg, ClockFn core_hz, bool debugger_attached)

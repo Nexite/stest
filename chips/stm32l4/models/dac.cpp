@@ -1,5 +1,4 @@
 #include "stm32l4/models/dac.hpp"
-#include <cstdio>
 #include <stdexcept>
 #include "stest/node.hpp"
 #include "stm32l4/models/gpio.hpp"
@@ -18,11 +17,6 @@ constexpr uint32_t EN = 1u << 0, TEN = 1u << 2, TSEL = 7u << 3, WAVE = 3u << 6, 
 constexpr uint32_t TSEL_SW = 7u;
 constexpr uint32_t DMAUDR = 1u << 13;  // SR
 
-std::string hex(uint32_t v) {
-  char b[16];
-  std::snprintf(b, sizeof b, "0x%08x", v);
-  return b;
-}
 }  // namespace
 
 Dac::Dac(std::string name, const nlohmann::json& params, ModelContext& ctx)
