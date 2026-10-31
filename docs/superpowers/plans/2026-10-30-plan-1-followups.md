@@ -54,3 +54,10 @@ Carried out of Plan 1 execution: decisions made during implementation and deferr
 - Task 7: minor (deferred): _cache never evicts superseded keys; docstring omits dSYM in cache key; round-2 not re-run in Docker (pure Python).
 - Task 8: minor (deferred): ci.yml runs Python tests twice per job; gate doc x86 pending until CI; README "Plan 1" jargon; macOS SIGTERM bypasses atexit (documented); stest sections attached on skip/xfail.
 - Task 8: minor (deferred): gc test doesn't discriminate weak vs strong registry; preexec_fn runs Python with other threads alive (pre-existing).
+
+## From /code-review on PR #1 (deferred to Plan 2)
+- Volatile `llvm.memcpy`/`memset` (whole-struct copies to/from volatile peripheral structs) are not instrumented or reported by the pass → host SIGSEGV instead of a strict abort.
+- `RegisterFile` uses `std::map` (O(log n) per access); `Gpio::update()` does ~64 lookups per write — move to a flat array indexed by off/4 and cache registers per update.
+- `var()`/`set_var()` re-run `SymbolTable.load` (path resolve + stats) and a linear scan per call — load once at `Sim.start()`, memoise `resolve(expr)`.
+- Byte-lane helpers duplicated 4x with diverging behaviour (rcc/gpio `lane_value`, peripheral/cortexm `lane_mask`, flash/pwr inline) — one shared helper in peripheral.hpp.
+- `Node._kill` is dead code duplicating `Sim._kill_all`/`close` shutdown logic.
