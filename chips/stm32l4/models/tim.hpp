@@ -52,7 +52,9 @@
 //   (CCR+1)/(ARR+1), center: CCR/ARR; PWM2 = 1 - PWM1; toggle 0.5; forced 0/1; null for
 //   frozen / active / inactive on match (a static level). duty / duty_n: active fraction of
 //   OCx / OCxN; with both outputs enabled each loses the dead time once per period.
-//   enabled needs CCxE (and BDTR.MOE on timers with BDTR).
+//   enabled needs CCxE (and BDTR.MOE on timers with BDTR). duty / duty_n / ref_duty are
+//   reported even when the output is disabled (enabled / enabled_n false): they are the
+//   configured duty the output would have, not a measured pin level.
 #include <array>
 #include <cstdint>
 #include <optional>
@@ -154,6 +156,7 @@ class Tim : public Peripheral {
   unsigned cms_ = 0;
   uint64_t clk_ = 0;
   u128 anchor_ = 0;
+  bool anchor_live_ = false;  // anchor_ is the last tick of a counting interval (resumable)
   int64_t q0_ = 0;
   uint32_t r0_ = 0;  // repetition: wraps still to skip before the next UEV, at q0_
   // Held counter (authoritative while !moving()).

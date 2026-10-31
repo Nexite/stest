@@ -113,6 +113,18 @@ struct Rig {
       wr(base, SR, 0);
     }
   }
+  // Fire events until `base` has CC1IF set; returns that time in ticks of 12.5 ns since t0
+  // and clears only CC1IF (UIF and the other flags stay as they are).
+  uint64_t next_cc1(uint64_t base, uint64_t t0) {
+    for (;;) {
+      uint64_t t = fire_next();
+      if (t == kNone) return kNone;
+      if (rd(base, SR) & CC1IF) {
+        wr(base, SR, ~CC1IF);  // rc_w0: only the 0 bit clears
+        return (t - t0) * 2 / 25;
+      }
+    }
+  }
   // Configure a timer through the HAL's base-init sequence: ARR, PSC, URS+UG, CR1.
   void base_init(uint64_t base, uint32_t psc, uint32_t arr, uint32_t cr1 = 0) {
     wr(base, ARR, arr);
@@ -513,4 +525,97 @@ TEST_CASE("tim: OPM stops at the update, UDIS suppresses it, URS=0 UG sets UIF")
   r.wr(TIM7, EGR, 1);
   CHECK(r.rd(TIM7, SR) == UIF);
   CHECK(r.rd(TIM7, CNT) == 0);
+}
+
+TEST_CASE("tim: after an update, compare events stay on time with UIF left set") {
+  // Regression: after the UEV renumbered the counter positions the next event was computed
+  // in the old numbering, one or more periods late. No test here clears UIF.
+  using V = std::vector<uint64_t>;
+  SUBCASE("up") {
+    Rig r;
+    r.base_init(TIM2, 0, 999);
+    r.wr(TIM2, CCR1, 500);
+    uint64_t t0 = r.clock.now_ns();
+    r.wr(TIM2, CR1, CEN);
+    V cc;
+    for (int i = 0; i < 4; ++i) cc.push_back(r.next_cc1(TIM2, t0));
+    CHECK(cc == V{500, 1500, 2500, 3500});
+    CHECK((r.rd(TIM2, SR) & UIF) != 0);
+  }
+  SUBCASE("up, exact probe times") {
+    Rig r;
+    r.base_init(TIM2, 0, 999);
+    r.wr(TIM2, CCR1, 500);
+    r.wr(TIM2, CR1, CEN);
+    CHECK(r.fire_next() == 6250);
+    r.wr(TIM2, SR, ~CC1IF);
+    CHECK(r.fire_next() == 12500);  // UEV (+ CC2-4 at CNT = 0)
+    CHECK(r.fire_next() == 18750);  // CC1 in the next period
+    CHECK((r.rd(TIM2, SR) & CC1IF) != 0);
+  }
+  SUBCASE("down") {
+    Rig r;
+    r.wr(TIM2, ARR, 999);
+    r.wr(TIM2, CR1, DIR | URS);
+    r.wr(TIM2, EGR, 1);
+    r.wr(TIM2, CR1, DIR);
+    r.wr(TIM2, CCR1, 500);
+    uint64_t t0 = r.clock.now_ns();
+    r.wr(TIM2, CR1, DIR | CEN);
+    V cc;
+    for (int i = 0; i < 4; ++i) cc.push_back(r.next_cc1(TIM2, t0));
+    CHECK(cc == V{499, 1499, 2499, 3499});  // CNT 999 -> 500 takes 499 ticks
+    CHECK((r.rd(TIM2, SR) & UIF) != 0);
+  }
+  SUBCASE("center-aligned 3") {
+    Rig r;
+    r.base_init(TIM2, 0, 1000, 3u << 5);
+    r.wr(TIM2, CCR1, 400);
+    uint64_t t0 = r.clock.now_ns();
+    r.wr(TIM2, CR1, (3u << 5) | CEN);
+    V cc;
+    for (int i = 0; i < 5; ++i) cc.push_back(r.next_cc1(TIM2, t0));
+    CHECK(cc == V{400, 1600, 2400, 3600, 4400});
+    CHECK((r.rd(TIM2, SR) & UIF) != 0);
+  }
+  SUBCASE("RCR chain") {
+    Rig r;
+    r.wr(TIM1, RCR, 2);
+    r.base_init(TIM1, 0, 999);
+    r.wr(TIM1, CCR1, 500);
+    uint64_t t0 = r.clock.now_ns();
+    r.wr(TIM1, CR1, CEN);
+    V cc;
+    for (int i = 0; i < 7; ++i) cc.push_back(r.next_cc1(TIM1, t0));
+    CHECK(cc == V{500, 1500, 2500, 3500, 4500, 5500, 6500});
+    CHECK((r.rd(TIM1, SR) & UIF) != 0);
+  }
+}
+
+TEST_CASE("tim: time blocked by ARR = 0 is not counted when the counter resumes") {
+  SUBCASE("ARR written while blocked") {
+    Rig r;
+    r.base_init(TIM7, 0, 0);
+    r.wr(TIM7, CR1, CEN);
+    r.to(1000125);
+    r.wr(TIM7, ARR, 999);
+    CHECK(r.rd(TIM7, CNT) == 0);
+    CHECK(r.fire_next() == 1000125 + 12500);
+  }
+  SUBCASE("ARR = 0 transferred from the preload at an update") {
+    Rig r;
+    r.base_init(TIM7, 0, 999, ARPE);
+    r.wr(TIM7, CR1, ARPE | CEN);
+    r.wr(TIM7, ARR, 0);  // buffered
+    CHECK(r.fire_next() == 12500);
+    CHECK(r.clock.next_event_ns() == kNone);  // blocked
+    r.to(500000);
+    r.wr(TIM7, ARR, 999);  // buffered, and no update can happen while blocked
+    CHECK(r.clock.next_event_ns() == kNone);
+    r.to(1000125);
+    r.wr(TIM7, SR, 0);     // UIF from the 12500 ns update; otherwise nothing needs an event
+    r.wr(TIM7, CR1, CEN);  // ARPE off: ARR = 999 takes effect now
+    CHECK(r.rd(TIM7, CNT) == 0);
+    CHECK(r.fire_next() == 1000125 + 12500);
+  }
 }

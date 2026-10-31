@@ -155,6 +155,7 @@ void Tim::reset() {
   ccr_a_.fill(0);
   running_ = false;
   cnt_ = rep_ = 0;
+  anchor_live_ = false;
   down_ = false;
   clk_ = 0;
   update_irqs();
@@ -385,6 +386,7 @@ void Tim::move_anchor(int64_t q) {
   anchor_ += static_cast<u128>(q - q0_) * unit();
   r0_ = rep_at(q);
   q0_ = q;
+  anchor_live_ = true;
 }
 
 void Tim::freeze() {
@@ -394,6 +396,8 @@ void Tim::freeze() {
     cnt_ = cnt_of(q);
     down_ = down_of(q);
     rep_ = r0_;
+  } else {
+    anchor_live_ = false;  // not counting (stopped, ARR = 0, no clock): no tick to resume from
   }
   running_ = false;
 }
@@ -403,12 +407,13 @@ void Tim::thaw(bool restart) {
   mode_ = mode_of(cr1);
   cms_ = (cr1 & CMS) >> 5;
   uint64_t clk = timer_clk();
-  if (restart || clk_ == 0)
+  if (restart || clk_ == 0 || !anchor_live_)  // the blocked interval is not elapsed ticks
     anchor_ = static_cast<u128>(clock_.now_ns()) * clk;
   else if (clk != clk_)
     anchor_ = anchor_ * clk / clk_;  // RCC changed: keep the anchor's time, in the new unit
   clk_ = clk;
   running_ = true;
+  anchor_live_ = true;
   r0_ = rep_;
   if (arr_a_ != 0) q0_ = q_from(cnt_, down_);
 }
@@ -443,6 +448,7 @@ void Tim::on_event() {
   }
   set_sr(set);
   uint32_t cr1 = regs_.get(CR1);
+  int64_t from = q;  // position of this event in the coordinates schedule_from() uses
   if (!(cr1 & UDIS) && is_wrap(q) && rep_at(q - 1) == 0) {  // counter update event
     const bool overflow = mode_ == Mode::Up ||
                           (mode_ == Mode::Center && q % period() == 0);
@@ -456,11 +462,15 @@ void Tim::on_event() {
     else if (overflow) { cnt_ = arr_a_; down_ = true; }
     else { cnt_ = 0; down_ = false; }
     running_ = false;
-    if (cr1 & OPM) regs_.set(CR1, cr1 & ~CEN);  // one-pulse: the counter stops
-    else thaw(false);
+    if (cr1 & OPM) {
+      regs_.set(CR1, cr1 & ~CEN);  // one-pulse: the counter stops
+    } else {
+      thaw(false);  // renumbers positions: this tick (the anchor) is now q0_
+      from = q0_;
+    }
   }
   update_irqs();
-  if (running_) schedule_from(q);
+  if (running_) schedule_from(from);
 }
 
 void Tim::cancel_event() {
