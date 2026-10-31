@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Give the STM32L496 package the peripherals the Sakura lighting and steering_wheel boards (and typical CubeMX projects) use — EXTI/SYSCFG, TIM, ADC, SPI, ITM/DWT — on top of a model-wiring layer (clock tree, RCC enable gating, cross-model signals), plus the per-peripheral `register`/`hal` mode switch proven with a GPIO HAL shim.
+**Goal:** Give the STM32L496 package the peripherals the Sakura lighting and steering_wheel boards (and typical CubeMX projects) use — EXTI/SYSCFG, TIM (all counter modes, complementary outputs), ADC (sync + async clocks), DAC, SPI, ITM/DWT — on top of a model-wiring layer (clock tree, RCC enable gating, cross-model signals), plus the per-peripheral `register`/`hal` mode switch proven with a GPIO HAL shim.
 
 **Architecture:** Models are built in two phases by the generated chip init: construct all, then `connect(ModelContext&)` so models can look each other up by name and type. RCC exposes the clock tree; the Bus refuses accesses to peripherals whose RCC enable bit is clear. Models talk to Python only through the existing `MODEL_CALL`/event channel; Python grows typed helpers (`node.adc(...)`, `node.timer(...)`, `node.spi(...)`, `node.log`). `stest_add_firmware(MODELS GPIO=hal)` swaps ST's `stm32l4xx_hal_gpio.c` for an stest shim at link time.
 
@@ -43,14 +43,14 @@ runtime/src/          peripheral.cpp bus.cpp node.cpp mmio.cpp (modify); model_c
 compiler/mmio_pass/StestMmioPass.cpp  (modify) volatile mem intrinsics
 chips/stm32l4/models/
   rcc.*  gpio.*  (modify)   clock tree; GPIO level signal; hal-mode API
-  syscfg.*  exti.*  tim.*  adc.*  spi.*  (new)
+  syscfg.*  exti.*  tim.*  adc.*  dac.*  spi.*  (new)
 chips/cortexm/  itm.* dwt.* (new; core-generic, mapped by Cortexm)
 chips/stm32l4/hal/stm32l4xx_hal_gpio_shim.c  (new)
 chips/stm32l4/family.cmake    (new) hal-shim table for MODELS=
 chips/stm32l4/parts/stm32l496rg.toml (modify) new peripherals, rcc_enable
 tools/gen_chip.py (modify) two-phase init, rcc_enable gates
 cmake/stest_add_firmware.cmake (modify) MODELS=
-selftest/firmware/{exti,tim,adc,spi,itm}/main.c  (new)
+selftest/firmware/{exti,tim,adc,dac,spi,itm}/main.c  (new)
 python/stest/{node.py,sim.py,symbols.py,peripherals.py} (modify/new)
 python/tests/test_{exti,tim,adc,spi,itm,hal_mode}.py (new)
 docs/adding-a-peripheral.md, docs/adding-a-chip.md (new)
@@ -98,6 +98,8 @@ struct ClockTree {            // implemented by the family's RCC model
   virtual uint64_t hclk_hz() const = 0;
   virtual uint64_t pclk1_hz() const = 0;
   virtual uint64_t pclk2_hz() const = 0;
+  virtual uint64_t pllsai1r_hz() const = 0;   // 0 when PLLSAI1 off or R output disabled
+  virtual uint32_t adcsel() const = 0;         // RCC CCIPR ADCSEL field (0 none, 1 PLLSAI1R, 2 PLLSAI2R, 3 SYSCLK)
   virtual bool enabled(uint32_t reg_off, unsigned bit) const = 0;  // RCC enable bit state
 };
 template <class T> class Signal {   // synchronous, ordered by subscription; no threads
@@ -120,7 +122,7 @@ class Bus { void set_gate(Peripheral* p, std::function<bool()> clocked, std::str
 // gated access with clocked()==false -> abort "access to <NAME> while its clock is disabled (RCC <REG> bit <n>)"
 }
 ```
-RCC computes SYSCLK from CFGR.SW (MSI per CR.MSIRANGE / ICSCR, HSI16, HSE = `params.hse_hz` default 8 000 000, PLL from PLLCFGR M/N/R with PLLSRC), HCLK = SYSCLK/HPRE, PCLK1/2 from PPRE1/2. Cross-check: Sakura-style config (HSE 8 MHz bypass, M=2 N=40 R=2) → SYSCLK 80 MHz.
+RCC computes SYSCLK from CFGR.SW (MSI per CR.MSIRANGE / ICSCR, HSI16, HSE = `params.hse_hz` default 8 000 000, PLL from PLLCFGR M/N/R with PLLSRC), HCLK = SYSCLK/HPRE, PCLK1/2 from PPRE1/2, PLLSAI1 R from PLLSAI1CFGR (N, R, shared M and source from PLLCFGR; PLLSAI2 R likewise). Cross-check: Sakura-style config (HSE 8 MHz bypass, M=2 N=40 R=2) → SYSCLK 80 MHz.
 TOML: each gated `[[peripheral]]` gets `rcc_enable = { reg = "AHB2ENR", bit = 0 }` (GPIOA). GPIOA–I get theirs in this task; later tasks add theirs. Ungated (no key): RCC, PWR? — **PWR is gated** (APB1ENR1 bit 28, HAL enables it), RCC/FLASH/core blocks ungated. Generated init: construct all → `ctx.add` → `set_clock_tree(&rcc)` → `connect()` on each in TOML order → `bus.map` + `set_gate`.
 
 - [ ] **Step 1: Failing tests**: doctest — `get<Gpio>("GPIOA")` works, `get<Rcc>("GPIOA")` throws mentioning both names; Signal ordering; RCC clocks: reset → MSI 4 MHz (SYSCLK=HCLK=PCLK1=PCLK2=4 000 000); Sakura-style PLL config → 80 000 000 with PPRE1=PPRE2=1. Python `test_access_with_clock_disabled_aborts`: new faults variant `CLKOFF` writes `GPIOB->ODR` without enabling GPIOB → `NodeCrashed` matching `access to GPIOB while its clock is disabled \(RCC AHB2ENR bit 1\)`.
@@ -159,30 +161,32 @@ void __stest_mmio_memset(volatile void *dst, int c, size_t n);
 **Files:** Create `chips/stm32l4/models/tim.{hpp,cpp}`, `selftest/firmware/tim/main.c`, `python/tests/test_tim.py`; Modify TOML (TIM1 0x40012C00, TIM2 0x40000000, TIM3 0x40000400, TIM4 0x40000800, TIM5 0x40000C00, TIM6 0x40001000, TIM7 0x40001400, TIM8 0x40013400, TIM15 0x40014000, TIM16 0x40014400, TIM17 0x40014800, each with its RCC enable bit and `params.kind = "basic"|"general"|"advanced"`, `width = 16|32`), `selftest/CMakeLists.txt`, `python/stest/{node.py,peripherals.py}`; possibly `runtime/src/control_channel.cpp`, `python/stest/{protocol.py,sim.py}` (event cost, Step 5).
 
 **Interfaces — Produces:**
-- Model: up-counting edge-aligned mode (CR1 CEN/UDIS/URS/OPM/ARPE, DIR/CMS → strict abort if down/center: "not modelled"), PSC (always preloaded), ARR (+ARPE), CNT derived from virtual time (`cnt = ticks_since_start % (ARR+1)` with ticks = elapsed_ns × timer_clk / (PSC+1)), EGR.UG, SR.UIF (rc_w0), DIER.UIE → update IRQ (`TIM6_DAC`, `TIM7`, `TIM2` … from TOML `irq`), next update scheduled as a Clock event (model contract). Timer clock = PCLKx, ×2 when the APB prescaler ≠ 1 (RM0351 §6.2.14). Channels 1–4 (general/advanced): CCMR OCxM PWM mode 1/2, CCRx (+OCxPE preload), CCER CCxE/CCxP, CCxIF on compare + DIER.CCxIE IRQ; BDTR.MOE required for advanced output.
+- Model: all counter modes — up, down (CR1.DIR), center-aligned 1/2/3 (CR1.CMS; DIR read-only while CMS≠0) — with CR1 CEN/UDIS/URS/OPM/ARPE; update event on overflow (up), underflow (down), both (center; RCR repetition counter on advanced timers gates the UEV), PSC (always preloaded), ARR (+ARPE), CNT derived from virtual time (`cnt = ticks_since_start % (ARR+1)` with ticks = elapsed_ns × timer_clk / (PSC+1)), EGR.UG, SR.UIF (rc_w0), DIER.UIE → update IRQ (`TIM6_DAC`, `TIM7`, `TIM2` … from TOML `irq`), next update scheduled as a Clock event (model contract). Timer clock = PCLKx, ×2 when the APB prescaler ≠ 1 (RM0351 §6.2.14). Channels 1–4 (general/advanced): CCMR OCxM PWM mode 1/2, CCRx (+OCxPE preload), CCER CCxE/CCxP, CCxIF on compare (once per crossing in center-aligned modes, per CMS rules) + DIER.CCxIE IRQ; BDTR.MOE required for advanced output. Advanced timers (TIM1/TIM8, and TIM15–17 CH1N): complementary outputs CCxNE/CCxNP and BDTR.DTG dead-time, reported per channel as `duty_n` and `dead_time_ns` (DTG decoding per RM0351 BDTR, with t_DTS from CR1.CKD). Center-aligned PWM duty = CCR/ARR (PWM1) per RM0351 §31.3.
 - `call("state")` → `{"running": bool, "cnt": int, "arr": int, "psc": int, "clk_hz": int, "update_hz": float, "channels": [{"ch":1,"enabled":bool,"mode":"pwm1"|"pwm2"|"frozen"|…, "duty": float}]}`.
 - Python (`python/stest/peripherals.py`): `node.timer(name) -> Timer` with `Timer.state() -> dict`, `Timer.update_hz -> float`, `Timer.channel(n).duty -> float`.
 - Selftest firmware `tim`: CubeMX-style TIM7, Prescaler 0, Period 3999 (→ 20 kHz at 80 MHz PCLK1), `HAL_TIM_Base_Start_IT`; `HAL_TIM_PeriodElapsedCallback` runs a software PWM on PA6 at 25 % duty over 100 updates (5 ms period), and increments `tick_count`.
 
-- [ ] **Step 1: Failing tests**: doctests `tim_update_rate` (80 MHz, PSC 0, ARR 3999 → updates exactly every 50 000 ns), `tim_arr_zero_no_storm`, `tim_stop_no_irq`, `tim_preload` (ARR write with ARPE takes effect at next update), `tim_apb_x2` (PPRE1=/2 → timer clk ×2), `tim_pwm_state`. Python `test_tim7_20khz`: after `advance(ms=100)`, `var("tick_count") == 2000` and PA6 high fraction over the window is 0.25 ± 0.01 from `pin.history`; `test_tim_speed_two_virtual_seconds`: 2 virtual s of the `tim` firmware completes in ≤ 0.8 s wall (0.4 s/virtual-s) — measured with `time.perf_counter`, Release runtime.
+- [ ] **Step 1: Failing tests**: doctests `tim_update_rate` (80 MHz, PSC 0, ARR 3999 → updates exactly every 50 000 ns), `tim_arr_zero_no_storm`, `tim_stop_no_irq`, `tim_preload` (ARR write with ARPE takes effect at next update), `tim_apb_x2` (PPRE1=/2 → timer clk ×2), `tim_pwm_state`, `tim_down_count_underflow` (DIR=1, ARR 999 → UEV every 1000 ticks, CNT counts down), `tim_center_aligned_update_rate` (CMS=1, ARR 1000 → UEV every 2000 ticks, CC1IF on both crossings in CMS=3 and on the down-crossing only in CMS=1), `tim_rcr_gates_uev` (TIM1 RCR=2 → UEV every 3rd period), `tim1_complementary_dead_time` (CC1E+CC1NE, DTG=0x20 at t_DTS 12.5 ns → dead_time_ns 400, duty + duty_n reported). Python `test_tim7_20khz`: after `advance(ms=100)`, `var("tick_count") == 2000` and PA6 high fraction over the window is 0.25 ± 0.01 from `pin.history`; `test_tim_speed_two_virtual_seconds`: 2 virtual s of the `tim` firmware completes in ≤ 0.8 s wall (0.4 s/virtual-s) — measured with `time.perf_counter`, Release runtime.
 - [ ] **Step 2: Run** → FAIL.
 - [ ] **Step 3: Implement** the model and helpers.
 - [ ] **Step 4: Run.** If `test_tim_speed_two_virtual_seconds` fails, profile first (`py-spy`/`perf` or simple timers) and record where time goes in the report. Expected culprit: one JSON event per GPIO edge (40 000/virtual s). Prescribed fix if so: GPIO edges travel as fixed 16-byte binary records in STOPPED (new event section after the JSON events: `u32 n_gpio; n × {u64 t_ns, u8 port, u8 pin, u8 level, u8 pad[5]}`), decoded in Python with `struct.iter_unpack`; JSON events unchanged for other kinds; `Sim.event_log` keeps GPIO edges as tuples, not dicts; pin history stays complete. Update `protocol.h`/`protocol.py` together and bump proto_version to 2. Re-run → PASS native + Docker; paste timings.
 - [ ] **Step 5: Commit** `feat(l4): TIM models with update IRQ and PWM state` (+ `perf(protocol): binary GPIO events` if Step 4 needed it).
 
-### Task 6: ADC (ADC1–3 + common) and analog inputs
+### Task 6: ADC (ADC1–3 + common), DAC1, and analog pins
 
-**Files:** Create `chips/stm32l4/models/adc.{hpp,cpp}`, `selftest/firmware/adc/main.c`, `python/tests/test_adc.py`; Modify TOML (one model `ADC` at 0x50040000 size 0x400: ADC1 @+0x000, ADC2 @+0x100, ADC3 @+0x200, common @+0x300; gate AHB2ENR bit 13; IRQ `ADC1_2`, `ADC3`; `params.vref = 3.3`), `python/stest/peripherals.py`.
+**Files:** Create `chips/stm32l4/models/{adc,dac}.{hpp,cpp}`, `selftest/firmware/{adc,dac}/main.c`, `python/tests/test_adc.py`; Modify TOML (one model `ADC` at 0x50040000 size 0x400: ADC1 @+0x000, ADC2 @+0x100, ADC3 @+0x200, common @+0x300; gate AHB2ENR bit 13; IRQ `ADC1_2`, `ADC3`; `params.vref = 3.3`), `python/stest/peripherals.py`.
 
 **Interfaces — Produces:**
-- Model (per ADC instance): CR DEEPPWD/ADVREGEN/ADCAL/ADEN/ADDIS/ADSTART/ADSTP; ISR ADRDY/EOC/EOS/OVR (rc_w1); CFGR RES/ALIGN/CONT; SQR1 L + SQ1–4 (sequence length > 1 → strict abort "scan mode not modelled"), SMPR1/2, DR; CCR CKMODE/PRESC. Semantics: ADCAL self-clears after 116 ADC clock cycles (event); ADEN → ADRDY after 1 µs; ADSTART → EOC after (SMPx + 12.5) ADC cycles, ADC clock = HCLK/CKMODE (1,2,4) when CKMODE≠0, else strict abort "asynchronous ADC clock not modelled" unless RCC CCIPR ADCSEL selects SYSCLK (then SYSCLK/PRESC). Conversion value = `round(clamp(v, 0, vref) / vref * (2^res − 1))`, right-aligned unless ALIGN. Channel 0/17/18 internal (VREFINT reads 1.212 V, VBAT/temp strict abort). EOC IRQ if IER.EOCIE.
-- `call("set_input", {"adc": 1, "channel": 16, "volts": 1.2})`, `call("get_input", …)`. Unset channel → 0 V + one stderr warning per (adc, channel) (Review Focus 3).
+- Model (per ADC instance): CR DEEPPWD/ADVREGEN/ADCAL/ADEN/ADDIS/ADSTART/ADSTP; ISR ADRDY/EOC/EOS/OVR (rc_w1); CFGR RES/ALIGN/CONT; SQR1 L + SQ1–4 (sequence length > 1 → strict abort "scan mode not modelled"), SMPR1/2, DR; CCR CKMODE/PRESC. Semantics: ADCAL self-clears after 116 ADC clock cycles (event); ADEN → ADRDY after 1 µs; ADSTART → EOC after (SMPx + 12.5) ADC cycles, ADC clock = HCLK/CKMODE (1,2,4) when CKMODE≠0 (synchronous); when CKMODE=0 (asynchronous) the kernel clock comes from `clocks().adcsel()` — PLLSAI1R / PLLSAI2R / SYSCLK — divided by CCR.PRESC (1,2,4,6,8,10,12,16,32,64,128,256); ADCSEL=0 ("no clock", the reset value) → strict abort "ADC1 has no clock: RCC CCIPR ADCSEL selects none" at ADEN (on hardware ADRDY never sets and HAL times out — the abort names the real cause). Conversion value = `round(clamp(v, 0, vref) / vref * (2^res − 1))`, right-aligned unless ALIGN. Channel 0/17/18 internal (VREFINT reads 1.212 V, VBAT/temp strict abort). EOC IRQ if IER.EOCIE.
+- `call("set_input", {"adc": 1, "channel": 16, "volts": 1.2})`, `call("get_input", …)`. Unset channel → 0 V + one stderr warning per (adc, channel) (Review Focus 3); with strict analog on (node env `STEST_STRICT_ANALOG=1`; Python `Sim(strict_analog=True)`, pytest `--stest-strict-analog` / marker `strict_analog=`), converting an unset channel aborts `stest: ADC1 channel 16 converted with no input set`. Calibration never converts a channel, so it is unaffected.
+- DAC1 (same task; 0x40007400, APB1ENR1 bit 29, IRQ `TIM6_DAC`): CR EN1/EN2, TEN (trigger enable → strict abort "DAC hardware triggers not modelled" unless TSEL=software with SWTRIGR), DMAEN (strict abort), DHR12R1/DHR12L1/DHR8R1 (and ch2, dual DHR12RD…), DOR1/2, SR, CCR/MCR/SHSR/SHHR/SHRR declared (sample-and-hold mode strict abort). DOR updates from DHR one APB clock after the write (no trigger) or on SWTRIGR; output volts = DOR/4095 × vref → event `{"kind":"dac","channel":1,"volts":…}` on change; channel outputs drive pins PA4 (ch1) / PA5 (ch2) as analog.
+- Python: `node.dac(1).channel(n).volts -> float`; `node.pin("PA4").voltage -> float` (DAC output, or the value set via `set_voltage`).
 - Python: `node.adc(n: int) -> Adc` with `Adc.set(channel: int, volts: float)`; also `node.pin("PB1").set_voltage(volts)` resolving pin→(adc, channel) from a TOML `[[analog]] pin = "PB1", adc = [1,2], channel = 16` table (fill for every ADC-capable LQFP64 pin from DS11585 Table 16).
 - Selftest firmware `adc`: CubeMX-style ADC1 with `ADC_CLOCK_SYNC_PCLK_DIV4`, 12-bit, calibration, `HAL_ADC_ConfigChannel` CH16, `HAL_ADC_Start` + `HAL_ADC_PollForConversion(…, 2)` + `HAL_ADC_GetValue` into global `last_raw` every 1 ms.
 
-- [ ] **Step 1: Failing tests**: doctests for calibration, ADRDY, conversion timing, 12/10/8/6-bit scaling, clamp, async-clock abort. Python `test_adc_reads_voltage`: `node.pin("PB1").set_voltage(1.65)` → after 2 ms `var("last_raw") == 2048` (±1); `test_unset_channel_warns_once` (stderr contains the warning exactly once after 10 conversions); `test_adc_scan_mode_aborts`.
+- [ ] **Step 1: Failing tests**: doctests for calibration, ADRDY, conversion timing, 12/10/8/6-bit scaling, clamp, async-clock abort. Python `test_adc_reads_voltage`: `node.pin("PB1").set_voltage(1.65)` → after 2 ms `var("last_raw") == 2048` (±1); `test_unset_channel_warns_once` (stderr contains the warning exactly once after 10 conversions); `test_unset_channel_strict_analog_aborts` (`Sim(strict_analog=True)` → NodeCrashed matching `channel 16 converted with no input set`); `test_adc_scan_mode_aborts`; `test_adc_async_clock_sysclk` (firmware variant with `ADC_CLOCK_ASYNC_DIV1` and `__HAL_RCC_ADC_CONFIG(RCC_ADCCLKSOURCE_SYSCLK)` reads the voltage correctly); `test_adc_async_no_clock_aborts` (same without ADCSEL → NodeCrashed matching `RCC CCIPR ADCSEL selects none`); `test_dac_output` (firmware variant `dac`: `HAL_DAC_SetValue(…, DAC_ALIGN_12B_R, 2048)` + `HAL_DAC_Start` → `node.dac(1).channel(1).volts` ≈ 1.650 ± 0.001 and `node.pin("PA4").voltage` equal); doctest `dac_hw_trigger_aborts`.
 - [ ] **Step 2–4:** FAIL → implement → PASS native + Docker.
-- [ ] **Step 5: Commit** `feat(l4): ADC1-3 with calibration, single conversions, analog pin inputs`.
+- [ ] **Step 5: Commit** `feat(l4): ADC1-3 (sync/async clocks) and DAC1 with analog pins`.
 
 ### Task 7: SPI master + byte-stream capture
 
@@ -204,13 +208,13 @@ void __stest_mmio_memset(volatile void *dst, int c, size_t n);
 **Files:** Create `chips/cortexm/{itm,dwt}.{hpp,cpp}` (mapped by `Cortexm`: ITM 0xE0000000, DWT 0xE0001000, CoreDebug DEMCR/DHCSR at 0xE000EDF0), `selftest/firmware/itm/main.c`, `python/tests/test_itm.py`; Modify `runtime/src/cortexm.cpp`, `python/stest/node.py` (stdout pipe + drain), `python/stest/pytest_plugin.py` (report section).
 
 **Interfaces — Produces:**
-- ITM: TER/TCR/TPR/LAR/LSR + 32 stimulus ports; reset state models "debugger attached": `TCR.ITMENA=1`, `TER=0x1`, DEMCR.TRCENA=1 (CMSIS `ITM_SendChar` then works unchanged). Port writes (8/16/32-bit) append bytes to a per-port line buffer; `\n` completes a line → event `{"kind":"itm","port":0,"text":"..."}`. FIFOREADY always 1.
+- ITM: TER/TCR/TPR/LAR/LSR + 32 stimulus ports; default reset state models "debugger attached": `TCR.ITMENA=1`, `TER=0x1`, DEMCR.TRCENA=1, DHCSR.C_DEBUGEN=1 (CMSIS `ITM_SendChar` then works unchanged). With node env `STEST_DEBUGGER=0` (Python `Sim(debugger_attached=False)`, pytest `--stest-no-debugger` / marker `debugger_attached=`) the real power-on state is used instead: TCR/TER/TRCENA/C_DEBUGEN all 0, so `ITM_SendChar` drops output exactly as on an unattached board (firmware that enables ITM itself still logs). Port writes (8/16/32-bit) append bytes to a per-port line buffer; `\n` completes a line → event `{"kind":"itm","port":0,"text":"..."}`. FIFOREADY always 1.
 - DWT: CTRL.CYCCNTENA, CYCCNT = core cycles since enable (derived from virtual time × SystemCoreClock; wraps 32-bit), LAR; other DWT registers declared, comparators strict.
 - Node stdout is piped and drained like stderr (firmware `printf` on hosts where `sk_log`-style code picks stdout).
 - Python: `Node.log -> list[str]` (ITM port-0 lines, in order) · `Node.stdout_tail -> list[str]` (last 200) · `Node.wait_for_log(pattern: str, timeout_ms: float) -> re.Match` (regex over new ITM lines). pytest failure report gains "stest node <n> log" (ITM) and "stdout" sections.
 - Selftest firmware `itm`: CMSIS `ITM_SendChar` loop printing `"hello %d\n"` every 100 ms; enables DWT CYCCNT and stores CYCCNT delta across `HAL_Delay(9)` (ST's HAL_Delay adds one tick → 10 ms) in global `cycles_10ms`.
 
-- [ ] **Step 1: Failing tests**: Python `test_itm_lines` (`n.log[:3] == ["hello 0","hello 1","hello 2"]` after 250 ms), `test_wait_for_log`, `test_dwt_cyccnt` (`var("cycles_10ms")` = 800 000 ± 8 000, i.e. 10 ms at 80 MHz ± 1 %), `test_stdout_captured` (faults-style firmware variant `PRINTF` writes via `printf`, `n.stdout_tail[-1] == "hi"`).
+- [ ] **Step 1: Failing tests**: Python `test_itm_lines` (`n.log[:3] == ["hello 0","hello 1","hello 2"]` after 250 ms), `test_wait_for_log`, `test_dwt_cyccnt` (`var("cycles_10ms")` = 800 000 ± 8 000, i.e. 10 ms at 80 MHz ± 1 %), `test_no_debugger_drops_itm` (`Sim(debugger_attached=False)` → `n.log == []` after 250 ms and the firmware's loop counter still advanced, i.e. it did not block), `test_stdout_captured` (faults-style firmware variant `PRINTF` writes via `printf`, `n.stdout_tail[-1] == "hi"`).
 - [ ] **Step 2–4:** FAIL → implement → PASS native + Docker (both arm64 and x86: the ITM path must work regardless of `__ARM_ARCH`).
 - [ ] **Step 5: Commit** `feat(cortexm): ITM/DWT models and firmware output capture`.
 
