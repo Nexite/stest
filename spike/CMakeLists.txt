@@ -1,5 +1,6 @@
 foreach(opt O0 O2)
-  add_executable(mmio_order_${opt} mmio_order_test.c mmio_stubs.c)
+  add_executable(mmio_order_${opt} mmio_order_test.c mmio_stubs.c mmio_mem_ir.ll)
+  set_source_files_properties(mmio_mem_ir.ll PROPERTIES LANGUAGE C COMPILE_OPTIONS "-x;ir")
   target_compile_options(mmio_order_${opt} PRIVATE -${opt})
   stest_enable_mmio(mmio_order_${opt})
   add_test(NAME mmio_order_${opt} COMMAND mmio_order_${opt})

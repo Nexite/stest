@@ -11,13 +11,16 @@ FetchContent_MakeAvailable(doctest nlohmann_json)
 # Never instrumented by the MMIO pass: runtime volatile accesses must not recurse.
 find_package(Threads REQUIRED)
 add_library(stest_runtime STATIC src/mmio.cpp src/bus.cpp src/clock.cpp src/peripheral.cpp src/cortexm.cpp
-                                 src/node.cpp src/control_channel.cpp)
-target_include_directories(stest_runtime PUBLIC include)
+                                 src/node.cpp src/control_channel.cpp src/model_context.cpp src/stdout_capture.cpp
+                                 # Core-generic ITM/DWT/CoreDebug models (chips/cortexm), mapped by Cortexm.
+                                 ../chips/cortexm/coredebug.cpp ../chips/cortexm/itm.cpp ../chips/cortexm/dwt.cpp)
+target_include_directories(stest_runtime PUBLIC include ${PROJECT_SOURCE_DIR}/chips)
 target_link_libraries(stest_runtime PUBLIC nlohmann_json::nlohmann_json Threads::Threads)
 # Hot path of every firmware access: always optimised, even in Debug/unset configs.
 target_compile_options(stest_runtime PRIVATE -O2)
 
-add_executable(runtime_tests tests/main.cpp tests/test_bus.cpp tests/test_clock.cpp tests/test_mmio.cpp)
+add_executable(runtime_tests tests/main.cpp tests/test_bus.cpp tests/test_clock.cpp tests/test_mmio.cpp
+                             tests/test_stdout_capture.cpp)
 target_link_libraries(runtime_tests PRIVATE stest_runtime doctest::doctest)
 add_test(NAME runtime_unit COMMAND runtime_tests)
 
@@ -47,7 +50,9 @@ set(_stest_abort_cases
   "clock_throw_int|stest: unknown exception in clock event"
   "clock_throw_std|stest: exception in clock event: tick"
   "capi_no_core|stest: no Cortex-M core installed"
-  "sysresetreq|stest: exception in model at 0xe000ed0c: .*SYSRESETREQ"
+  "not_modelled_read|^stest: FAKE1: frobnication \\(CR.FROB\\) not modelled \\(read16 0x40001002\\)"
+  "not_modelled_clock|^stest: FAKE2: widgets not modelled\n"
+  "sysresetreq|^stest: SCB: system reset \\(AIRCR.SYSRESETREQ\\) not modelled \\(write32 0xe000ed0c = 0x05fa0004\\)"
   "null_handler|stest: .*no handler for exception 16"
   "wfi_deadlock|stest: .*wfi.*nothing can wake"
   "systick_no_getter|stest: exception in model at 0xe000e010: .*core clock getter")
@@ -86,6 +91,16 @@ add_test(NAME runtime_node COMMAND runtime_node_tests)
 add_executable(runtime_poll_skip_tests tests/main.cpp tests/test_poll_skip.cpp)
 target_link_libraries(runtime_poll_skip_tests PRIVATE stest_runtime doctest::doctest)
 add_test(NAME runtime_poll_skip COMMAND runtime_poll_skip_tests)
+
+# ---- Plan 2 Task 2: model context, signals, clock-enable gating ----
+add_executable(runtime_model_context_tests tests/main.cpp tests/test_model_context.cpp)
+target_link_libraries(runtime_model_context_tests PRIVATE stest_runtime doctest::doctest)
+add_test(NAME runtime_model_context COMMAND runtime_model_context_tests)
+
+# ---- Plan 2 Task 8: ITM / DWT / CoreDebug (chips/cortexm) ----
+add_executable(runtime_trace_tests tests/main.cpp tests/test_trace.cpp)
+target_link_libraries(runtime_trace_tests PRIVATE stest_runtime doctest::doctest)
+add_test(NAME runtime_trace COMMAND runtime_trace_tests)
 
 # Every CTest that runs a firmware/node executable gets a 30 s timeout.
 get_property(_stest_rt_tests DIRECTORY PROPERTY TESTS)

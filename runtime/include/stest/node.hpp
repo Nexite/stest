@@ -27,6 +27,7 @@
 #include "stest/bus.hpp"
 #include "stest/clock.hpp"
 #include "stest/cortexm.hpp"
+#include "stest/model_context.hpp"
 #include "stest/peripheral.hpp"
 
 namespace stest {
@@ -49,7 +50,8 @@ struct ChipDesc {
   unsigned nvic_prio_bits;
   const IrqHandler* irq_table;            // index = IRQn + 16
   size_t n_irqs;                          // table entries (16 + external IRQs)
-  void (*init)(Bus&, Clock&, Cortexm&);   // maps + registers models; may be null
+  // Builds, wires (ModelContext), maps, gates and registers the models; may be null.
+  void (*init)(ModelContext&);
   void (*startup)(void);                  // e.g. CMSIS SystemInit, on the firmware thread; may be null
 };
 
@@ -60,7 +62,8 @@ class Node {
   enum class Stop { Quantum, Exited };
 
   // stest_rt_init(), builds + installs the Cortex-M core on runtime_bus()/runtime_clock(),
-  // runs chip.init. Throws std::logic_error if another Node exists.
+  // creates the ModelContext and runs chip.init on it. Throws std::logic_error if another
+  // Node exists.
   explicit Node(const ChipDesc& chip);
   // Unmaps registered models, clears the registry/event buffer, uninstalls hooks. A
   // firmware thread still parked mid-run is abandoned (detached, never resumed).
@@ -79,6 +82,7 @@ class Node {
   int exit_code() const;  // firmware main's return value (valid when exited())
   uint64_t now_ns() const;
   Cortexm& core();
+  ModelContext& models();  // lives as long as the Node
   const ChipDesc& chip() const;
 
   struct Impl;

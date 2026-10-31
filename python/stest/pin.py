@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+from .errors import StestError
+
 if TYPE_CHECKING:
     from .node import Node
 
@@ -48,6 +50,35 @@ class Pin:
     def release(self) -> None:
         """Stop driving the pin externally."""
         self.node.call(self.model, "release_pin", pin=self.index)
+
+    def set_voltage(self, volts: float) -> None:
+        """Apply an analog voltage to the pin from outside (ADC input). It wins over an
+        on-chip driver (DAC output) and does not change the digital level (IDR). Works
+        whatever the firmware's RCC clock state: the outside world drives the pin.
+        Only pins with an analog function (an ADC input from the part's ``[[analog]]``
+        table, or a DAC output) accept a voltage; any other pin raises StestError
+        ("PB11 has no analog function on STM32L496RG; analog pins: ...")."""
+        try:
+            self.node.call(self.model, "set_voltage", pin=self.index, volts=float(volts))
+        except StestError as e:
+            msg = str(e)
+            marker = f"MODEL_CALL {self.model}.set_voltage: "
+            if marker in msg and "has no analog function" in msg:
+                raise StestError(f"node {self.node.name!r}: {msg.split(marker, 1)[1]}") from None
+            raise
+
+    def release_voltage(self) -> None:
+        """Stop applying an external voltage (a DAC output on the pin shows again)."""
+        self.node.call(self.model, "release_voltage", pin=self.index)
+
+    @property
+    def voltage(self) -> float:
+        """The pin's analog voltage: set via :meth:`set_voltage`, else driven by an on-chip
+        DAC output. StestError if neither (the pin floats)."""
+        v = self.node.call(self.model, "get_voltage", pin=self.index)
+        if v is None:
+            raise StestError(f"{self.node.name}.{self.name} has no analog voltage (not set, not driven by a DAC)")
+        return float(v)
 
     def wait_high(self, timeout_ms: float) -> None:
         """Advance the simulation until the pin reads 1 (checked every quantum)."""

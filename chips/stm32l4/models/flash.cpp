@@ -12,7 +12,7 @@ constexpr uint32_t kLock = 1u << 31, kOptLock = 1u << 30;
 constexpr uint32_t kStrt = 1u << 16, kOptStrt = 1u << 17;
 }  // namespace
 
-Flash::Flash(std::string name, const nlohmann::json&, Clock&) : name_(std::move(name)) {
+Flash::Flash(std::string name, const nlohmann::json&, ModelContext&) : name_(std::move(name)) {
   regs_.declare(ACR, 0x00000600, 0x00007F07);  // ICEN|DCEN; LATENCY, PRFTEN, ICRST, DCRST, RUN_PD, SLEEP_PD
   regs_.declare_write_only(PDKEYR);
   regs_.declare_write_only(KEYR);
@@ -58,9 +58,9 @@ void Flash::write(uint32_t off, unsigned width, uint32_t v) {
       return;  // locked: ignored
     }
     regs_.write(off, width, v);
-    uint32_t val = (width == 4) ? v : (v << ((off & 3u) * 8u));
+    uint32_t val = lane_merge(0, off, width, v);
     if (val & (kStrt | kOptStrt))
-      throw std::runtime_error("FLASH program/erase (CR.STRT/OPTSTRT) is not modelled");
+      throw NotModelled("FLASH", "program/erase (CR.STRT/OPTSTRT)");
     if (val & kLock) regs_.set(CR, regs_.get(CR) | kLock);
     if (val & kOptLock) regs_.set(CR, regs_.get(CR) | kOptLock);
     return;

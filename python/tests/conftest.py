@@ -41,7 +41,7 @@ def blinky_exe() -> Path:
 
 @pytest.fixture
 def faults_exe():
-    """Factory: faults_exe("spin" | "crash" | "unmodelled" | "ro_write") -> path of that variant."""
+    """Factory: faults_exe("spin" | "crash" | "unmodelled" | "ro_write" | "clkoff") -> path of that variant."""
 
     def get(variant: str) -> Path:
         return _exe(f"faults_{variant.lower()}")
@@ -53,3 +53,63 @@ def faults_exe():
 @pytest.fixture
 def pollcount_exe() -> Path:
     return _exe("pollcount")
+
+
+@pytest.fixture
+def exti_exe() -> Path:
+    return _exe("exti")
+
+
+@pytest.fixture
+def tim_exe() -> Path:
+    return _exe("tim")
+
+
+@pytest.fixture
+def adc_exe():
+    """Factory: adc_exe("" | "async" | "async_noclk" | "scan") -> path of that adc firmware."""
+
+    def get(variant: str = "") -> Path:
+        return _exe(f"adc_{variant}" if variant else "adc")
+
+    return get
+
+
+@pytest.fixture
+def dac_exe() -> Path:
+    return _exe("dac")
+
+
+@pytest.fixture
+def spi_exe():
+    """Factory: spi_exe("" | "tx") -> path of that spi firmware (TransmitReceive / Transmit)."""
+
+    def get(variant: str = "") -> Path:
+        return _exe(f"spi_{variant}" if variant else "spi")
+
+    return get
+
+
+@pytest.fixture
+def itm_exe() -> Path:
+    return _exe("itm")
+
+
+@pytest.fixture
+def itm_mixed_exe() -> Path:
+    return _exe("itm_mixed")
+
+
+@pytest.fixture
+def blinky_gpio_hal_exe() -> Path:
+    return _exe("blinky_gpio_hal")
+
+
+@pytest.fixture
+def exti_gpio_hal_exe() -> Path:
+    return _exe("exti_gpio_hal")
+
+
+@pytest.fixture
+def hal_direct_gpio_hal_exe() -> Path:
+    return _exe("hal_direct_gpio_hal")

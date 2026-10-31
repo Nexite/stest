@@ -5,6 +5,11 @@
 //   uintN_t __stest_mmio_loadN (const volatile void *a);
 //   void    __stest_mmio_storeN(volatile void *a, uintN_t v);      N in {8,16,32,64}
 // Non-integer values are bit-cast to/from the integer of the same width.
+// Volatile llvm.memcpy/memmove/memset (incl. the .inline forms) become
+//   void __stest_mmio_memcpy(volatile void *dst, const volatile void *src, size_t n);
+//   void __stest_mmio_memset(volatile void *dst, int c, size_t n);
+// (memmove maps to the overlap-safe memcpy; the runtime splits both into aligned
+// accesses of at most 4 bytes through the normal load/store path).
 // Volatile atomic accesses are left untouched and reported as an optimization remark.
 //
 // Registration choice: the pass is registered ONLY at registerPipelineStartEPCallback.
@@ -22,6 +27,8 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/Config/llvm-config.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
@@ -109,6 +116,34 @@ private:
     return CI;
   }
 
+  // size_t-typed length (the ABI uses the target's pointer-sized integer).
+  static Value *sizeArg(IRBuilder<> &B, Module &M, Value *Len) {
+    Type *IntPtr = M.getDataLayout().getIntPtrType(M.getContext());
+    return B.CreateZExtOrTrunc(Len, IntPtr);
+  }
+
+  static void callMemTransfer(MemTransferInst *MT, Module &M) {
+    LLVMContext &C = M.getContext();
+    IRBuilder<> B(MT);
+    Type *IntPtr = M.getDataLayout().getIntPtrType(C);
+    FunctionCallee F = M.getOrInsertFunction(
+        "__stest_mmio_memcpy", Type::getVoidTy(C), PointerType::getUnqual(C),
+        PointerType::getUnqual(C), IntPtr);
+    B.CreateCall(F, {MT->getRawDest(), MT->getRawSource(), sizeArg(B, M, MT->getLength())});
+  }
+
+  static void callMemSet(MemSetInst *MS, Module &M) {
+    LLVMContext &C = M.getContext();
+    IRBuilder<> B(MS);
+    Type *IntPtr = M.getDataLayout().getIntPtrType(C);
+    Type *I32 = Type::getInt32Ty(C);
+    FunctionCallee F = M.getOrInsertFunction(
+        "__stest_mmio_memset", Type::getVoidTy(C), PointerType::getUnqual(C), I32, IntPtr);
+    // int c: zero-extended byte (the runtime uses the low 8 bits).
+    Value *V = B.CreateZExt(MS->getValue(), I32);
+    B.CreateCall(F, {MS->getRawDest(), V, sizeArg(B, M, MS->getLength())});
+  }
+
   static void remark(OptimizationRemarkEmitter &ORE, Instruction &I, StringRef Why) {
     ORE.emit([&] {
       return OptimizationRemarkMissed(kRemarkPass, "VolatileNotInstrumented", &I)
@@ -130,11 +165,38 @@ private:
         } else if (auto *S = dyn_cast<StoreInst>(&I)) {
           if (S->isVolatile())
             Work.push_back(S);
+        } else if (auto *MI = dyn_cast<MemIntrinsic>(&I)) {
+          if (MI->isVolatile())
+            Work.push_back(MI);
         }
+#if LLVM_VERSION_MAJOR >= 21
+        else if (auto *II = dyn_cast<IntrinsicInst>(&I)) {
+          // llvm.experimental.memset.pattern(ptr, val, count, i1 isvolatile)
+          if (II->getIntrinsicID() == Intrinsic::experimental_memset_pattern &&
+              cast<ConstantInt>(II->getArgOperand(3))->isOne())
+            remark(ORE, I, "volatile memset.pattern left untouched");
+        }
+#endif
       }
 
     bool Changed = false;
     for (Instruction *I : Work) {
+      if (auto *MI = dyn_cast<MemIntrinsic>(I)) {
+        bool AS0 = MI->getDestAddressSpace() == 0;
+        if (auto *MT = dyn_cast<MemTransferInst>(MI))
+          AS0 &= MT->getSourceAddressSpace() == 0;
+        if (!AS0) {
+          remark(ORE, *I, "unsupported address space");
+          continue;
+        }
+        if (auto *MT = dyn_cast<MemTransferInst>(MI))
+          callMemTransfer(MT, M);
+        else
+          callMemSet(cast<MemSetInst>(MI), M);
+        I->eraseFromParent();
+        Changed = true;
+        continue;
+      }
       Value *Ptr;
       Type *ValTy;
       bool Atomic;

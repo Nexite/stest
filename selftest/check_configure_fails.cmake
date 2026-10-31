@@ -1,11 +1,18 @@
 # Configures a tiny project that misuses stest_add_firmware and expects the configure
 # step to fail with a specific message.
-# Inputs: CASE (bad_include|bad_compiler), STEST_ROOT, WORK, STEST_CLANG, STEST_LLVM_ROOT,
+# Inputs: CASE (bad_include|bad_compiler|models_unknown|models_unsupported), STEST_ROOT, WORK, STEST_CLANG, STEST_LLVM_ROOT,
 #         STEST_CLANGXX, LLVM_DIR, CMAKE_BIN, GEN, MAKE_PROGRAM.
 file(REMOVE_RECURSE "${WORK}")
 file(MAKE_DIRECTORY "${WORK}/bin" "${WORK}/src" "${WORK}/inc")
 file(WRITE "${WORK}/inc/core_cm4.h" "/* a user's own CMSIS-Core copy */\n")
 file(WRITE "${WORK}/src/main.c" "int main(void) { return 0; }\n")
+# Extra stest_add_firmware arguments per case (the CMSIS-Core include dir only for bad_include).
+set(fw_extra "INCLUDE_DIRS ${WORK}/inc")
+if(CASE STREQUAL "models_unknown")
+  set(fw_extra "MODELS GPIO=hal FOO=hal")
+elseif(CASE STREQUAL "models_unsupported")
+  set(fw_extra "MODELS TIM=hal")
+endif()
 file(WRITE "${WORK}/CMakeLists.txt" "
 cmake_minimum_required(VERSION 3.23)
 include(${STEST_ROOT}/cmake/StestToolchain.cmake)
@@ -13,7 +20,7 @@ project(tiny LANGUAGES C CXX)
 include(${STEST_ROOT}/cmake/stest_add_firmware.cmake)
 add_subdirectory(${STEST_ROOT}/compiler/mmio_pass mmio_pass)
 stest_add_firmware(fw CHIP STM32L496RG SOURCES ${WORK}/src/main.c
-                   INCLUDE_DIRS ${WORK}/inc)
+                   ${fw_extra})
 ")
 set(args -S "${WORK}" -B "${WORK}/build" -DSTEST_CLANG=${STEST_CLANG} -DLLVM_DIR=${LLVM_DIR}
     -G ${GEN} -DCMAKE_MAKE_PROGRAM=${MAKE_PROGRAM} -DCMAKE_CXX_COMPILER=${STEST_CLANGXX})
@@ -33,6 +40,10 @@ elseif(CASE STREQUAL "bad_compiler")
   endif()
   list(APPEND args -DCMAKE_C_COMPILER=${OTHER_CC})
   set(pattern "the C compiler is")
+elseif(CASE STREQUAL "models_unknown")
+  set(pattern "MODELS FOO=hal: unknown peripheral type FOO .*hal mode is supported for: GPIO")
+elseif(CASE STREQUAL "models_unsupported")
+  set(pattern "MODELS TIM=hal: TIM has no hal shim .*hal mode is supported for: GPIO")
 else()
   message(FATAL_ERROR "unknown CASE ${CASE}")
 endif()
