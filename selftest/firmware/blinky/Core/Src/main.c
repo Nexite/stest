@@ -6,6 +6,7 @@
 
 static volatile uint32_t blink_count;
 
+void tick_fn(void);
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 
@@ -20,6 +21,7 @@ int main(void)
     HAL_Delay(499);
     HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
     blink_count++;
+    tick_fn();
   }
 }
 

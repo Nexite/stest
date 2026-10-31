@@ -3,6 +3,7 @@ set(_bl ${CMAKE_CURRENT_SOURCE_DIR}/firmware/blinky/Core)
 stest_add_firmware(blinky
   CHIP STM32L496RG
   SOURCES ${_bl}/Src/main.c ${_bl}/Src/stm32l4xx_it.c ${_bl}/Src/stm32l4xx_hal_msp.c
+          ${_bl}/Src/vars.c ${_bl}/Src/vars2.c
   INCLUDE_DIRS ${_bl}/Inc)
 
 add_test(NAME selftest_blinky_standalone

@@ -65,6 +65,27 @@ class Node:
     def write_mem(self, addr: int, data: bytes) -> None:
         self._request(proto.write_mem(addr, data), proto.Msg.OK, f"WRITE_MEM {addr:#x}")
 
+    def var(self, expr: str) -> Any:
+        """Read a firmware variable by name: "count", "vars.c:count", "func::s_local",
+        "g_cfg.lamps[2].duty". Ints, floats, bool, enums (an int that equals its enumerator
+        name), structs (read-only mapping), arrays (list). The sim is paused between calls."""
+        r, slide = self._resolve_var(expr)
+        return r.type.decode(self.read_mem(r.addr + slide, r.type.size))
+
+    def set_var(self, expr: str, value: Any) -> None:
+        """Write a scalar firmware variable (int, float, bool or enumerator name); the value
+        is range-checked against the variable's DWARF type before anything is written."""
+        r, slide = self._resolve_var(expr)
+        self.write_mem(r.addr + slide, r.type.encode(value))
+
+    def _resolve_var(self, expr: str):
+        from .symbols import SymbolTable
+
+        if self.anchor_addr is None:
+            raise StestError(f"node {self.name!r}: variables are available after sim.start()")
+        table = SymbolTable.load(self.exe)
+        return table.resolve(expr), self.anchor_addr - table.anchor_addr
+
     def __repr__(self) -> str:
         return f"<Node {self.name!r} pid={self.pid} t={self.now_ns} ns>"
 

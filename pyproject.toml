@@ -5,7 +5,9 @@ description = "STM32 software-in-the-loop simulator: Python test harness"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "pyelftools>=0.33",
+]
 
 [dependency-groups]
 dev = ["pytest>=8"]

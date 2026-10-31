@@ -23,3 +23,7 @@ class WallClockTimeout(StestError):
 
 class SymbolError(StestError):
     """A firmware symbol could not be resolved (used by the symbol layer)."""
+
+
+class SymbolRangeError(SymbolError, ValueError):
+    """A value written to a firmware variable does not fit the variable's type."""
