@@ -32,7 +32,13 @@ Exti::Exti(std::string name, const nlohmann::json& params, ModelContext& ctx)
   regs_.declare(PR2, 0, 0, kLines2);
 }
 
-void Exti::reset() { regs_.reset(); }
+// Reset clears PR, so every line source that was high drops (the IRQ levels follow), as on
+// hardware; otherwise a pending+enabled line would keep its NVIC input asserted and re-pend.
+void Exti::reset() {
+  const uint32_t before = active();
+  regs_.reset();
+  pend_new(before);
+}
 
 void Exti::connect(ModelContext& ctx) {
   syscfg_ = &ctx.get<Syscfg>("SYSCFG");

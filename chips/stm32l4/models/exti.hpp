@@ -11,6 +11,7 @@
 // handler return if the ISR left PR set. A second edge while PR is still set is not a new
 // event; clearing PR re-arms. PR is write-1-to-clear. A 0->1 write to SWIER sets PR (and
 // SWIER clears with PR, as on hardware). Events (EMR) are stored but have no consumer.
+// reset() clears PR and so drops every line's IRQ source.
 //
 // params: {"irq": [16 NVIC IRQ numbers for lines 0..15]}  (required; from the part's TOML)
 #include <array>

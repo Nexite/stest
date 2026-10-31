@@ -258,3 +258,21 @@ TEST_CASE("exti drives its IRQs through set_irq_source (safe on a shared vector)
   r.core.clear_pending(40);
   CHECK_FALSE(r.core.pending(40));
 }
+
+TEST_CASE("exti: reset() drops every line's IRQ source (no re-pend after reset)") {
+  Rig r;
+  r.bus.write(EXTI + IMR1, 4, r.bus.read(EXTI + IMR1, 4) | (1u << 13) | (1u << 0));
+  r.bus.write(EXTI + SWIER1, 4, (1u << 13) | (1u << 0));  // PR13 / PR0 set: lines 40 / 6 high
+  CHECK(r.core.pending(40));
+  CHECK(r.core.pending(6));
+  r.exti->reset();
+  CHECK(r.bus.read(EXTI + PR1, 4) == 0);
+  r.core.clear_pending(40);  // ICPR: re-pends only if the line's level is still high
+  r.core.clear_pending(6);
+  CHECK_FALSE(r.core.pending(40));
+  CHECK_FALSE(r.core.pending(6));
+  // The line works again after reset: a new SWIER edge pends it.
+  r.bus.write(EXTI + IMR1, 4, r.bus.read(EXTI + IMR1, 4) | (1u << 13));
+  r.bus.write(EXTI + SWIER1, 4, 1u << 13);
+  CHECK(r.core.pending(40));
+}
