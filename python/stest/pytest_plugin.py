@@ -13,9 +13,10 @@ Registered through the ``pytest11`` entry point (installed with the package).
   disabled; ``ITM_SendChar`` drops output). Default: a debugger is attached.
 * marker ``@pytest.mark.stest(quantum_us=..., wall_timeout_s=..., poll_skip=..., strict_analog=...,
   debugger_attached=...)`` overrides them per test (marker > CLI > default).
-* on failure each node's last 200 stderr lines, ITM port-0 log, last 200 stdout lines and the
-  merged event log are attached to the report as ``stest node <name> stderr`` / ``log`` /
-  ``stdout`` and ``stest events`` sections.
+* on failure each node's last 200 stderr lines, ITM port-0 log, last 200 firmware output lines
+  (``Node.output``: ITM port 0 + stdout in virtual-time order), last 200 raw stdout lines and
+  the merged event log are attached to the report as ``stest node <name> stderr`` / ``log`` /
+  ``output`` / ``stdout`` and ``stest events`` sections.
 """
 
 from __future__ import annotations
@@ -99,6 +100,12 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
             log = n.log
             item.add_report_section(
                 call.when, f"stest node {n.name} log", "\n".join(log[-ITM_LOG_LINES:]) if log else "(no ITM output)"
+            )
+            output = n.output
+            item.add_report_section(
+                call.when,
+                f"stest node {n.name} output",
+                "\n".join(output[-ITM_LOG_LINES:]) if output else "(no firmware output)",
             )
             out = n.stdout_lines(200)
             item.add_report_section(

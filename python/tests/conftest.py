@@ -96,6 +96,11 @@ def itm_exe() -> Path:
 
 
 @pytest.fixture
+def itm_mixed_exe() -> Path:
+    return _exe("itm_mixed")
+
+
+@pytest.fixture
 def blinky_gpio_hal_exe() -> Path:
     return _exe("blinky_gpio_hal")
 

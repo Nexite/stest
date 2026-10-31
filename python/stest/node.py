@@ -30,6 +30,8 @@ STDERR_TAIL_LINES = 20  # shown in NodeCrashed messages / Node.stderr_tail
 STDERR_KEEP_LINES = 200  # retained per node (the pytest plugin's failure report)
 STDOUT_KEEP_LINES = 200  # retained firmware stdout lines (Node.stdout_tail)
 _ITM_PARTIAL_PREFIX = "stest: ITM unterminated "
+_STDOUT_PARTIAL_PREFIX = "stest: stdout unterminated "
+LOG_SOURCES = ("any", "itm", "stdout")
 
 
 class Node:
@@ -54,7 +56,9 @@ class Node:
         self._stdout_lock = threading.Lock()  # held by the drain thread from read() to append
         self._stdout_thread: threading.Thread | None = None
         self._itm: dict[int, list[str]] = {}  # port -> completed lines
-        self._log_cursor = 0  # Node.wait_for_log has consumed log[:cursor]
+        self._stdout_log: list[str] = []  # firmware stdout lines ("stdout" events), all of them
+        self._output: list[tuple[str, str]] = []  # (source, line): ITM port 0 + stdout, in virtual-time order
+        self._log_cursor = {s: 0 for s in LOG_SOURCES}  # Node.wait_for_log consumed lines[:cursor] per source
         self._seq = 0
         self._symbols = None  # SymbolTable, loaded once by Sim.start()
         self._symbols_error: Exception | None = None
@@ -80,14 +84,26 @@ class Node:
         A final unterminated line is appended if the node exits or aborts mid-line."""
         return list(self._itm.get(0, ()))
 
+    @property
+    def output(self) -> list[str]:
+        """Firmware text output: ITM port-0 lines and stdout lines (``printf``, ``puts``,
+        ``putchar``, ``fwrite(..., stdout)``) merged in virtual-time order (lines at the same
+        instant keep the order the firmware wrote them; deterministic). Use this (and
+        :meth:`wait_for_log`) for firmware logs: it reads the same whether the firmware logs
+        through ITM or stdout, so code that picks its log backend by host architecture
+        (``#if defined(__ARM_ARCH)``) behaves the same on every host. As of the last
+        completed quantum; unterminated lines are appended if the node exits or aborts."""
+        return [line for _, line in self._output]
+
     def itm_port(self, port: int) -> list[str]:
         """Lines written to ITM stimulus port ``port`` (0 is :attr:`log`)."""
         return list(self._itm.get(int(port), ()))
 
     @property
     def stdout_tail(self) -> list[str]:
-        """The node's last 200 firmware stdout lines (``printf``; line-buffered by the
-        runtime, complete as of the last completed quantum)."""
+        """The node's last 200 firmware stdout lines as raw text from the process's stdout
+        pipe (complete as of the last completed quantum). For timestamped, ordered firmware
+        logs use :attr:`output` / :meth:`wait_for_log`."""
         return self.stdout_lines(STDOUT_KEEP_LINES)
 
     def stdout_lines(self, n: int = STDOUT_KEEP_LINES) -> list[str]:
@@ -96,25 +112,39 @@ class Node:
         with self._stdout_lock:
             return list(self._stdout)[-n:] if n > 0 else []
 
-    def wait_for_log(self, pattern: str, timeout_ms: float) -> re.Match:
-        """Advances the simulation until a ITM port-0 line not yet consumed by an earlier
-        ``wait_for_log`` matches the regex ``pattern`` (``re.search``); returns the match and
-        consumes lines up to and including the matching one. Raises WaitTimeout after
-        ``timeout_ms`` of virtual time. Checked at every quantum boundary."""
+    def wait_for_log(self, pattern: str, timeout_ms: float, source: str = "any") -> re.Match:
+        """Advances the simulation until a firmware log line not yet consumed by an earlier
+        ``wait_for_log`` (with the same ``source``) matches the regex ``pattern``
+        (``re.search``); returns the match and consumes lines up to and including the
+        matching one. ``source``: ``"any"`` (default: :attr:`output`, ITM port 0 and stdout,
+        the same on every host), ``"itm"`` (:attr:`log`) or ``"stdout"``. Each source keeps
+        its own cursor. Raises WaitTimeout after ``timeout_ms`` of virtual time. Checked at
+        every quantum boundary."""
+        if source not in LOG_SOURCES:
+            raise ValueError(f"wait_for_log: source must be one of {', '.join(LOG_SOURCES)} (got {source!r})")
         rx = re.compile(pattern)
         found: list[re.Match] = []
 
+        def lines() -> list:
+            if source == "itm":
+                return self._itm.get(0, [])
+            if source == "stdout":
+                return self._stdout_log
+            return self._output
+
         def cond() -> bool:
-            lines = self._itm.get(0, [])
-            for i in range(self._log_cursor, len(lines)):
-                m = rx.search(lines[i])
+            ls = lines()
+            for i in range(self._log_cursor[source], len(ls)):
+                line = ls[i][1] if source == "any" else ls[i]
+                m = rx.search(line)
                 if m:
-                    self._log_cursor = i + 1
+                    self._log_cursor[source] = i + 1
                     found.append(m)
                     return True
             return False
 
-        self.sim.wait_for(cond, timeout_ms, what=f"log line matching {pattern!r} on node {self.name!r}")
+        where = "" if source == "any" else f" ({source})"
+        self.sim.wait_for(cond, timeout_ms, what=f"log line{where} matching {pattern!r} on node {self.name!r}")
         return found[0]
 
     def pin(self, name: str) -> Pin:
@@ -246,7 +276,17 @@ class Node:
             if line.startswith(_ITM_PARTIAL_PREFIX):  # runtime flushed an unterminated ITM line
                 try:
                     d = json.loads(line[len(_ITM_PARTIAL_PREFIX):])
-                    self._itm.setdefault(int(d["port"]), []).append(str(d["text"]))
+                    port, text = int(d["port"]), str(d["text"])
+                    self._itm.setdefault(port, []).append(text)
+                    if port == 0:
+                        self._output.append(("itm", text))
+                except (ValueError, KeyError, TypeError):
+                    pass
+            elif line.startswith(_STDOUT_PARTIAL_PREFIX):  # ... or an unterminated stdout line
+                try:
+                    text = str(json.loads(line[len(_STDOUT_PARTIAL_PREFIX):])["text"])
+                    self._stdout_log.append(text)
+                    self._output.append(("stdout", text))
                 except (ValueError, KeyError, TypeError):
                     pass
 
@@ -381,7 +421,13 @@ class Node:
                     SpiBurst(int(data["t_start"]), bytes.fromhex(data["mosi"]), bytes.fromhex(data["miso"]), t)
                 )
             elif data.get("kind") == "itm":
-                self._itm.setdefault(int(data["port"]), []).append(data["text"])
+                port = int(data["port"])
+                self._itm.setdefault(port, []).append(data["text"])
+                if port == 0:
+                    self._output.append(("itm", data["text"]))
+            elif data.get("kind") == "stdout":
+                self._stdout_log.append(data["text"])
+                self._output.append(("stdout", data["text"]))
             out.append((t, self.index, self._seq, self.name, js))
             self._seq += 1
         return out

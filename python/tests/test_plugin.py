@@ -301,3 +301,18 @@ def test_failure_report_has_itm_and_stdout_sections(pytester, itm_exe, faults_ex
     out = r.stdout.str()
     assert "stest node a log" in out and "hello 1" in out
     assert "stest node b stdout" in out
+
+
+def test_failure_report_has_output_section(pytester, itm_mixed_exe):
+    pytester.makepyfile(
+        f"""
+        def test_mixed_fails(sim):
+            n = sim.node("m", r"{itm_mixed_exe}")
+            sim.start()
+            sim.advance(ms=150)
+            assert False, "boom"
+        """
+    )
+    r = pytester.runpytest("--strict-markers")
+    r.assert_outcomes(failed=1)
+    r.stdout.fnmatch_lines(["*Captured stest node m output call*", "out 0", "itm 0", "pc A!", "out 1"])

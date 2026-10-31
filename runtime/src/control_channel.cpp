@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <optional>
 #include <chrono>
 #include <string>
 #include <thread>
@@ -29,6 +30,7 @@
 #include "stest/node.hpp"
 #include "stest/protocol.h"
 #include "stest/runtime.hpp"
+#include "stest/stdout_capture.hpp"
 
 namespace stest {
 namespace {
@@ -130,10 +132,12 @@ void send_or_exit(uint8_t type, const std::string& payload) {
   if (!send_msg(type, payload)) _exit(0);  // Python went away: nothing left to report to
 }
 
-// Unterminated ITM text (a log line without its '\n') at exit/abort is written to stderr as
+// Unterminated ITM / stdout text (a log line without its '\n') at exit/abort is written to
+// stderr as
 //   stest: ITM unterminated {"port":N,"text":"..."}
-// so it reaches the crash report and the Python side (Node._drain_stderr turns port-0 ones
-// into a final Node.log entry).
+//   stest: stdout unterminated {"text":"..."}
+// so it reaches the crash report and the Python side (Node._drain_stderr turns them into
+// final Node.log / Node.output entries).
 void report_itm_partial() {
   try {
     if (Cortexm* c = Cortexm::installed())
@@ -141,6 +145,10 @@ void report_itm_partial() {
         nlohmann::json j = {{"port", port}, {"text", text}};
         std::fprintf(stderr, "stest: ITM unterminated %s\n", j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace).c_str());
       }
+    if (std::optional<std::string> s = take_stdout_partial()) {
+      nlohmann::json j = {{"text", *s}};
+      std::fprintf(stderr, "stest: stdout unterminated %s\n", j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace).c_str());
+    }
     std::fflush(stderr);
   } catch (...) {
   }
@@ -263,9 +271,9 @@ void run_control_channel(int fd, const ChipDesc& chip, FirmwareMain fw, const vo
   (void)::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
 #endif
   set_abort_hook(&abort_hook);
-  // Firmware printf output goes to a pipe the host drains: line-buffer it so lines appear
-  // as they are printed (and flush partial lines whenever the node reports STOPPED).
-  std::setvbuf(stdout, nullptr, _IOLBF, 0);
+  // Firmware stdout: every line becomes a virtual-timestamped "stdout" event and the bytes
+  // still go (unbuffered) to fd 1, a pipe the host drains (stest/stdout_capture.hpp).
+  install_stdout_capture(/*forward_to_fd1=*/true);
   watch_parent();
   if (const char* c = std::getenv("STEST_ACCESS_COST_NS")) {
     char* end = nullptr;

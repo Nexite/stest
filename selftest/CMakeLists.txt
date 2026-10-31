@@ -100,6 +100,13 @@ stest_add_firmware(itm
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/firmware/itm/main.c ${_bl}/Src/stm32l4xx_it.c
           ${_bl}/Src/stm32l4xx_hal_msp.c
   INCLUDE_DIRS ${_bl}/Inc)
+# itm_mixed: the same firmware logging through printf/stdio and ITM interleaved (Node.output).
+stest_add_firmware(itm_mixed
+  CHIP STM32L496RG
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/firmware/itm/main.c ${_bl}/Src/stm32l4xx_it.c
+          ${_bl}/Src/stm32l4xx_hal_msp.c
+  INCLUDE_DIRS ${_bl}/Inc
+  DEFINES ITM_MIXED=1)
 
 # HAL mode (MODELS GPIO=hal): stest's GPIO shim replaces ST's stm32l4xx_hal_gpio.c. blinky and
 # exti rebuilt unchanged in hal mode (their event logs must match register mode), plus

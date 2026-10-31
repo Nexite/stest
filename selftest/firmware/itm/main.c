@@ -5,7 +5,15 @@
  *    drops the output when no debugger enabled the ITM (Sim(debugger_attached=False)).
  *  - loops counts iterations of the logging loop (it must advance with or without a debugger).
  * Env STEST_ITM_PARTIAL=1: after the first line, sends "partial" without a newline and
- * returns from main (strict abort), to test flushing of unterminated ITM text. */
+ * returns from main (strict abort), to test flushing of unterminated ITM text.
+ *
+ * Built with ITM_MIXED=1 (exe itm_mixed): every 100 ms, iteration i logs
+ *   "out <i>"  with printf (stdout), then 10 ms later
+ *   "itm <i>"  on ITM port 0, then at once
+ *   "pc <c>!"  through fputs + putchar + fwrite + puts (stdout),
+ * the way firmware mixes printf and ITM logging; Node.output must merge them in order.
+ * Env STEST_STDOUT_PARTIAL=1: after the first iteration prints "half" without a newline and
+ * returns from main (strict abort), to test flushing of unterminated stdout text. */
 #include <stdio.h>
 #include <stdlib.h>
 #include "main.h"
@@ -44,6 +52,27 @@ int main(void)
   HAL_Delay(9);
   cycles_10ms = DWT->CYCCNT - start;
 
+#if defined(ITM_MIXED) && ITM_MIXED
+  while (1)
+  {
+    printf("out %lu\n", (unsigned long)i);
+    HAL_Delay(9);
+    snprintf(buf, sizeof buf, "itm %lu\n", (unsigned long)i);
+    itm_puts(buf);
+    fputs("pc ", stdout);
+    putchar('A' + (int)(i % 26u));
+    fwrite("!", 1, 1, stdout);
+    puts("");
+    i++;
+    loops++;
+    if (getenv("STEST_STDOUT_PARTIAL"))
+    {
+      fputs("half", stdout);
+      return 1;
+    }
+    HAL_Delay(89);
+  }
+#endif
   while (1)
   {
     snprintf(buf, sizeof buf, "hello %lu\n", (unsigned long)i++);

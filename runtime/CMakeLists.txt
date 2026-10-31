@@ -11,7 +11,7 @@ FetchContent_MakeAvailable(doctest nlohmann_json)
 # Never instrumented by the MMIO pass: runtime volatile accesses must not recurse.
 find_package(Threads REQUIRED)
 add_library(stest_runtime STATIC src/mmio.cpp src/bus.cpp src/clock.cpp src/peripheral.cpp src/cortexm.cpp
-                                 src/node.cpp src/control_channel.cpp src/model_context.cpp
+                                 src/node.cpp src/control_channel.cpp src/model_context.cpp src/stdout_capture.cpp
                                  # Core-generic ITM/DWT/CoreDebug models (chips/cortexm), mapped by Cortexm.
                                  ../chips/cortexm/coredebug.cpp ../chips/cortexm/itm.cpp ../chips/cortexm/dwt.cpp)
 target_include_directories(stest_runtime PUBLIC include ${PROJECT_SOURCE_DIR}/chips)
@@ -19,7 +19,8 @@ target_link_libraries(stest_runtime PUBLIC nlohmann_json::nlohmann_json Threads:
 # Hot path of every firmware access: always optimised, even in Debug/unset configs.
 target_compile_options(stest_runtime PRIVATE -O2)
 
-add_executable(runtime_tests tests/main.cpp tests/test_bus.cpp tests/test_clock.cpp tests/test_mmio.cpp)
+add_executable(runtime_tests tests/main.cpp tests/test_bus.cpp tests/test_clock.cpp tests/test_mmio.cpp
+                             tests/test_stdout_capture.cpp)
 target_link_libraries(runtime_tests PRIVATE stest_runtime doctest::doctest)
 add_test(NAME runtime_unit COMMAND runtime_tests)
 

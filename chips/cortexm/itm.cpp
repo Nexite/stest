@@ -1,38 +1,12 @@
 #include "cortexm/itm.hpp"
 #include <nlohmann/json.hpp>
 #include "stest/node.hpp"
+#include "stest/stdout_capture.hpp"  // sanitize_utf8
 
 namespace stest {
 namespace {
 constexpr uint32_t kTcrWritable = 0x007F0F1Fu;  // ITMENA..SWOENA, TSPrescale, GTSFREQ, TraceBusID
 
-// Length of the valid UTF-8 sequence at s[i], or 0.
-size_t utf8_len(const std::string& s, size_t i) {
-  auto c = static_cast<unsigned char>(s[i]);
-  size_t n = c < 0x80 ? 1 : (c >= 0xC2 && c <= 0xDF) ? 2 : (c >= 0xE0 && c <= 0xEF) ? 3 : (c >= 0xF0 && c <= 0xF4) ? 4 : 0;
-  if (n == 0 || i + n > s.size()) return 0;
-  for (size_t k = 1; k < n; ++k)
-    if ((static_cast<unsigned char>(s[i + k]) & 0xC0) != 0x80) return 0;
-  if (n == 3) {
-    auto c1 = static_cast<unsigned char>(s[i + 1]);
-    if ((c == 0xE0 && c1 < 0xA0) || (c == 0xED && c1 >= 0xA0)) return 0;
-  } else if (n == 4) {
-    auto c1 = static_cast<unsigned char>(s[i + 1]);
-    if ((c == 0xF0 && c1 < 0x90) || (c == 0xF4 && c1 >= 0x90)) return 0;
-  }
-  return n;
-}
-
-std::string sanitize_utf8(const std::string& s) {
-  std::string out;
-  out.reserve(s.size());
-  for (size_t i = 0; i < s.size();) {
-    size_t n = utf8_len(s, i);
-    if (n) { out.append(s, i, n); i += n; }
-    else { out += "\xEF\xBF\xBD"; ++i; }
-  }
-  return out;
-}
 }  // namespace
 
 Itm::Itm(Clock& clock, const CoreDebug& dbg, bool debugger_attached)
