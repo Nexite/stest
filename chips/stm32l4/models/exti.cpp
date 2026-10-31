@@ -14,7 +14,7 @@ constexpr uint32_t kMask16 = 0x0000FFFF;
 }  // namespace
 
 Exti::Exti(std::string name, const nlohmann::json& params, ModelContext& ctx)
-    : name_(std::move(name)), core_(ctx.core()) {
+    : name_(std::move(name)), ctx_(ctx) {
   if (!params.contains("irq") || !params["irq"].is_array() || params["irq"].size() != 16)
     throw std::invalid_argument("exti params need irq = [16 NVIC IRQ numbers for lines 0..15]");
   for (size_t i = 0; i < 16; ++i) irq_[i] = params["irq"][i].get<int>();
@@ -44,16 +44,12 @@ void Exti::connect(ModelContext& ctx) {
 
 uint32_t Exti::active() const { return regs_.get(PR1) & regs_.get(IMR1) & kMask16; }
 
-// Drive each routed IRQ's level: high while any of its lines has PR & IMR set.
+// Each line is a source on its IRQ (high while PR & IMR); the IRQ level is their OR.
 void Exti::pend_new(uint32_t before) {
   uint32_t now = active();
-  if (now == before) return;
-  for (unsigned line = 0; line < 16; ++line) {
-    bool high = false;
-    for (unsigned l = 0; l < 16; ++l)
-      if (irq_[l] == irq_[line] && (now & (1u << l))) high = true;
-    core_.set_irq_level(irq_[line], high);
-  }
+  uint32_t changed = now ^ before;
+  for (unsigned line = 0; changed && line < 16; ++line)
+    if (changed & (1u << line)) ctx_.set_irq_source(irq_[line], &line_tag_[line], (now >> line) & 1u);
 }
 
 void Exti::on_edge(const PinEdge& e) {

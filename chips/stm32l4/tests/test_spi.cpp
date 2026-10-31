@@ -360,3 +360,17 @@ TEST_CASE("spi call ops: queue_miso, state") {
   r.spi1.reset();
   CHECK(r.spi1.call("state", json::object())["miso_queued"] == 0);
 }
+
+TEST_CASE("spi drives its IRQ through set_irq_source (safe on a shared vector)") {
+  Rig r;
+  r.master();
+  int other = 0;
+  r.ctx.set_irq_source(IRQ_SPI1, &other, true);
+  r.wr(SPI1 + CR2, DS8 | FRXTH | TXEIE);  // SPI's source rises...
+  r.wr(SPI1 + CR2, DS8 | FRXTH);          // ...and drops; the other keeps the line high
+  r.core.clear_pending(IRQ_SPI1);
+  CHECK(r.core.pending(IRQ_SPI1));
+  r.ctx.set_irq_source(IRQ_SPI1, &other, false);
+  r.core.clear_pending(IRQ_SPI1);
+  CHECK_FALSE(r.core.pending(IRQ_SPI1));
+}

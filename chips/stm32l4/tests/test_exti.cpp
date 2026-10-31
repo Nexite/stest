@@ -244,3 +244,17 @@ TEST_CASE("exti/syscfg: masks let firmware clear reset-1 bits and set I2C4_FMP")
   r.bus.write(SYSCFG + 0x04, 4, 0xFFFFFFFF);
   CHECK(r.bus.read(SYSCFG + 0x04, 4) == 0xFCFF0101);  // bit 23 writable, bit 9 reserved
 }
+
+TEST_CASE("exti drives its IRQs through set_irq_source (safe on a shared vector)") {
+  Rig r;
+  int other = 0;
+  r.ctx.set_irq_source(40, &other, true);  // another source holds EXTI15_10's line high
+  r.bus.write(EXTI + IMR1, 4, r.bus.read(EXTI + IMR1, 4) | (1u << 10));
+  r.bus.write(EXTI + SWIER1, 4, 1u << 10);
+  r.bus.write(EXTI + PR1, 4, 1u << 10);  // EXTI's source drops; the other keeps the line high
+  r.core.clear_pending(40);
+  CHECK(r.core.pending(40));
+  r.ctx.set_irq_source(40, &other, false);
+  r.core.clear_pending(40);
+  CHECK_FALSE(r.core.pending(40));
+}

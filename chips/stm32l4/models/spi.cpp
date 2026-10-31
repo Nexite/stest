@@ -43,7 +43,7 @@ int hexval(char c) {
 }  // namespace
 
 Spi::Spi(std::string name, const nlohmann::json& params, ModelContext& ctx)
-    : name_(std::move(name)), clock_(ctx.clock()), core_(ctx.core()) {
+    : name_(std::move(name)), clock_(ctx.clock()), ctx_(ctx) {
   const std::string bus = params.value("bus", "");
   if (bus != "apb1" && bus != "apb2")
     throw std::invalid_argument(name_ + ": spi params.bus must be \"apb1\" or \"apb2\"");
@@ -162,7 +162,7 @@ void Spi::sync() {
                   ((cr2 & ERRIE) && (sr & OVR));
   if (irq_ >= 0 && lv != level_) {
     level_ = lv;
-    core_.set_irq_level(irq_, lv);
+    ctx_.set_irq_source(irq_, this, lv);
   }
 }
 

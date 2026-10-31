@@ -43,7 +43,7 @@
 // alternates TX and RX, so its frames fall into several BSY periods (bursts); use the chip
 // select's GPIO history to group bursts into transactions.
 //
-// IRQ (level, Cortexm::set_irq_level, params.irq): TXEIE & TXE | RXNEIE & RXNE | ERRIE & OVR.
+// IRQ (level, ModelContext::set_irq_source, params.irq): TXEIE & TXE | RXNEIE & RXNE | ERRIE & OVR.
 //
 // Strict aborts (std::runtime_error "<NAME>: <feature> not modelled (...)"):
 //   on any CR1 write: BIDIMODE ("bidirectional mode"), CRCEN/CRCNEXT ("CRC"), RXONLY
@@ -110,7 +110,7 @@ class Spi : public Peripheral {
 
   std::string name_;
   Clock& clock_;
-  Cortexm& core_;
+  ModelContext& ctx_;
   const ClockTree* clocks_ = nullptr;
   bool apb2_ = false;
   int irq_ = -1;

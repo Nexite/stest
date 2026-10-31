@@ -5,7 +5,8 @@
 // subscribed in connect(); an edge on pin N of port P is line N's event iff
 // SYSCFG EXTICR selects P for line N, and it sets PR bit N if RTSR (rising) / FTSR (falling)
 // allows it. PR latches whether or not the line is masked; each NVIC IRQ's level is driven
-// (Cortexm::set_irq_level) as "any line routed to it has PR & IMR set": it pends when that
+// (ModelContext::set_irq_source, one source per line, so a vector shared with another
+// model stays the OR of all sources) as "any line routed to it has PR & IMR set": it pends when that
 // becomes true (on the edge, or when IMR is later set) and, as on hardware, pends again on
 // handler return if the ISR left PR set. A second edge while PR is still set is not a new
 // event; clearing PR re-arms. PR is write-1-to-clear. A 0->1 write to SWIER sets PR (and
@@ -36,7 +37,8 @@ class Exti : public Peripheral {
   uint32_t active() const;                 // PR1 & IMR1 for lines 0-15
   void pend_new(uint32_t active_before);   // update the NVIC level of each routed IRQ
   std::string name_;
-  Cortexm& core_;
+  ModelContext& ctx_;
+  std::array<char, 16> line_tag_{};        // set_irq_source identity of each line
   RegisterFile regs_;
   std::array<int, 16> irq_{};
   Syscfg* syscfg_ = nullptr;
