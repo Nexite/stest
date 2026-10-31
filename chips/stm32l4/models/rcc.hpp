@@ -13,6 +13,8 @@
 //   PLLSAI1/2 R = src / M * N / R with N, R from PLLSAIxCFGR and source + M shared with
 //   PLLCFGR; 0 unless CR.PLLSAIxON and PLLSAIxCFGR.PLLSAIxREN. The oscillators are ideal
 //   (instantly ready), so the RDY bits are not consulted.
+// Every write (and reset()) that changes one of these outputs emits
+// ModelContext::clock_tree_changed() after the registers are updated.
 // params: {"hse_hz": u64 (default 8000000)}
 #include <string>
 #include <nlohmann/json.hpp>
@@ -46,6 +48,17 @@ class Rcc : public Peripheral, public ClockTree {
   uint64_t pll_input_hz() const;  // PLLSRC / M (shared by PLL, PLLSAI1, PLLSAI2)
   uint64_t hse_hz_;
   void follow();  // ready/status bits follow their enables
+  struct Outputs {
+    uint64_t sysclk, hclk, pclk1, pclk2, sai1r, sai2r;
+    uint32_t adcsel;
+    bool operator==(const Outputs& o) const {
+      return sysclk == o.sysclk && hclk == o.hclk && pclk1 == o.pclk1 && pclk2 == o.pclk2 &&
+             sai1r == o.sai1r && sai2r == o.sai2r && adcsel == o.adcsel;
+    }
+  };
+  Outputs outputs() const;
+  void notify_if_changed(const Outputs& before);
+  ModelContext& ctx_;
   std::string name_;
   RegisterFile regs_;
 };

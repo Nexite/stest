@@ -12,7 +12,15 @@
 //          "advanced" TIM1/8: 4 channels (CH1-3 complementary), RCR, BDTR, CCMR3/CCR5/CCR6.
 //   width = 16 | 32 (CNT/ARR/CCRx width; TIM2/TIM5 are 32-bit)
 //   bus   = "apb1" | "apb2": timer kernel clock = PCLKx, x2 when the APB prescaler != 1
-//           (RM0351 6.2.14). Read from the RCC clock tree whenever the timer (re)schedules.
+//           (RM0351 6.2.14). Read from the RCC clock tree when the counter starts (CEN) and
+//           on every clock-tree change (ModelContext::clock_tree_changed(), emitted by the
+//           RCC at the virtual time of the write): a running counter is re-anchored at the
+//           change time with exact integer math. CNT is continuous across the change, the
+//           prescaler keeps the kernel clocks it has already counted towards the next tick
+//           (the rest of that tick and every later one run at the new rate), no tick is
+//           gained or lost, and the next UEV / compare event is rescheduled at the new rate,
+//           also while UIF/CCxIF are set and nothing is scheduled. A new rate of 0 Hz holds
+//           the counter; when the clock returns it resumes from the change time.
 //   irq   = {"update": n, "cc": n, "break": n, "trg_com": n} (missing key: no vector).
 //           Each source is a flag-driven level (UIF&UIE, CCxIF&CCxIE, (BIF|B2IF|SBIF)&BIE,
 //           (TIF&TIE)|(COMIF&COMIE)) driven through ModelContext::set_irq_source, so shared
@@ -82,7 +90,7 @@ class Tim : public Peripheral {
   enum class Kind { Basic, General, Advanced };
   enum class Mode { Up, Down, Center };
   enum Src { kUpdate, kCc, kBreak, kTrgCom, kNumSrc };
-  using u128 = unsigned __int128;
+  using i128 = __int128;  // anchor arithmetic (ns x Hz); may be < 0 after a clock change
   static constexpr int64_t kNever = INT64_MAX;
 
   // --- configuration helpers ---
@@ -102,7 +110,7 @@ class Tim : public Peripheral {
   // --- counter position (valid while moving()) ---
   bool moving() const { return running_ && arr_a_ != 0 && clk_ != 0; }
   int64_t period() const;  // L: ARR+1 (up/down) or 2*ARR (center)
-  u128 unit() const { return static_cast<u128>(psc_a_ + 1u) * 1000000000u; }
+  i128 unit() const { return static_cast<i128>(psc_a_ + 1u) * 1000000000; }
   int64_t q_at(uint64_t t_ns) const;
   uint64_t time_of(int64_t q) const;
   uint32_t cnt_of(int64_t q) const;
@@ -117,6 +125,7 @@ class Tim : public Peripheral {
   void move_anchor(int64_t q);
   void freeze();              // running -> held cnt_/down_/rep_ (anchor kept at the last tick)
   void thaw(bool restart);    // held -> running; restart: prescaler starts now
+  void on_clock_change();     // RCC changed the clock tree: re-anchor at the new rate
 
   // --- events / flags ---
   void do_ug();
@@ -155,7 +164,7 @@ class Tim : public Peripheral {
   Mode mode_ = Mode::Up;
   unsigned cms_ = 0;
   uint64_t clk_ = 0;
-  u128 anchor_ = 0;
+  i128 anchor_ = 0;
   bool anchor_live_ = false;  // anchor_ is the last tick of a counting interval (resumable)
   int64_t q0_ = 0;
   uint32_t r0_ = 0;  // repetition: wraps still to skip before the next UEV, at q0_

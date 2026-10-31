@@ -144,7 +144,10 @@ Tim::Tim(std::string name, const nlohmann::json& params, ModelContext& ctx)
   arr_a_ = max_;
 }
 
-void Tim::connect(ModelContext& ctx) { clocks_ = &ctx.clocks(); }
+void Tim::connect(ModelContext& ctx) {
+  clocks_ = &ctx.clocks();
+  ctx.clock_tree_changed().subscribe([this](const ClockTree&) { on_clock_change(); });
+}
 
 void Tim::reset() {
   cancel_event();
@@ -262,13 +265,13 @@ int64_t Tim::period() const {
 
 int64_t Tim::q_at(uint64_t t_ns) const {
   if (!moving()) return q0_;
-  u128 t = static_cast<u128>(t_ns) * clk_;
+  const i128 t = static_cast<i128>(t_ns) * clk_;
   if (t <= anchor_) return q0_;
   return q0_ + static_cast<int64_t>((t - anchor_) / unit());
 }
 
 uint64_t Tim::time_of(int64_t q) const {
-  u128 num = anchor_ + static_cast<u128>(q - q0_) * unit();
+  const i128 num = anchor_ + static_cast<i128>(q - q0_) * unit();  // > 0 for q > q0_
   return static_cast<uint64_t>((num + clk_ - 1) / clk_);
 }
 
@@ -379,7 +382,7 @@ int64_t Tim::next_match(unsigned ch, int64_t qf) const {
 }
 
 void Tim::move_anchor(int64_t q) {
-  anchor_ += static_cast<u128>(q - q0_) * unit();
+  anchor_ += static_cast<i128>(q - q0_) * unit();
   r0_ = rep_at(q);
   q0_ = q;
   anchor_live_ = true;
@@ -404,7 +407,7 @@ void Tim::thaw(bool restart) {
   cms_ = (cr1 & CMS) >> 5;
   uint64_t clk = timer_clk();
   if (restart || clk_ == 0 || !anchor_live_)  // the blocked interval is not elapsed ticks
-    anchor_ = static_cast<u128>(clock_.now_ns()) * clk;
+    anchor_ = static_cast<i128>(clock_.now_ns()) * clk;
   else if (clk != clk_)
     anchor_ = anchor_ * clk / clk_;  // RCC changed: keep the anchor's time, in the new unit
   clk_ = clk;
@@ -412,6 +415,33 @@ void Tim::thaw(bool restart) {
   anchor_live_ = true;
   r0_ = rep_;
   if (arr_a_ != 0) q0_ = q_from(cnt_, down_);
+}
+
+// The RCC changed the clock tree (at clock_.now_ns()). Only a running counter cares: a
+// stopped one reads the clock in thaw() when CEN is set again.
+void Tim::on_clock_change() {
+  if (!running_) return;
+  const uint64_t clk = timer_clk();
+  if (clk == clk_) return;
+  const uint64_t now = clock_.now_ns();
+  if (moving() && clk != 0) {
+    // Position units are ns x Hz, i.e. kernel clocks x 1e9, so the part of the current
+    // tick already counted (r) is the same in both units. Advance the anchor to the last
+    // whole tick, then place it so that the remaining unit() - r of that tick runs at the
+    // new rate: tick q0_ + 1 lands at now + (unit() - r) / clk. Exact; CNT does not jump.
+    const i128 e = static_cast<i128>(now) * clk_ - anchor_;
+    const int64_t n = e > 0 ? static_cast<int64_t>(e / unit()) : 0;
+    const i128 r = e > 0 ? e % unit() : 0;
+    move_anchor(q0_ + n);
+    anchor_ = static_cast<i128>(now) * clk - r;
+    clk_ = clk;
+  } else {
+    // Blocked (ARR = 0), clock stopping (clk = 0) or returning (clk_ = 0): hold the
+    // counter here; thaw() resumes it from now at the new rate (or keeps it held at 0 Hz).
+    freeze();
+    thaw(false);
+  }
+  schedule();
 }
 
 // ---------------------------------------------------------------- events and flags

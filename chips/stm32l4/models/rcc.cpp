@@ -26,8 +26,8 @@ constexpr uint32_t kResetFlags = 0xFF000000u;  // CSR FWRSTF..LPWRRSTF
 constexpr uint32_t kRmvf = bit(23);
 }  // namespace
 
-Rcc::Rcc(std::string name, const nlohmann::json& params, ModelContext&)
-    : name_(std::move(name)), hse_hz_(params.value("hse_hz", uint64_t{8000000})) {
+Rcc::Rcc(std::string name, const nlohmann::json& params, ModelContext& ctx)
+    : ctx_(ctx), name_(std::move(name)), hse_hz_(params.value("hse_hz", uint64_t{8000000})) {
   // off, reset, rw mask (RM0351, STM32L496)
   regs_.declare(CR, 0x00000063, kCrRw);                       // MSION|MSIRDY|MSIRANGE=6 (4 MHz)
   regs_.declare(ICSCR, 0x40000000, 0x7F00FF00);               // HSITRIM=64; *CAL factory -> 0
@@ -63,7 +63,19 @@ Rcc::Rcc(std::string name, const nlohmann::json& params, ModelContext&)
   regs_.declare(CCIPR2, 0x00000000, 0x00000003);              // I2C4SEL
 }
 
-void Rcc::reset() { regs_.reset(); }
+void Rcc::reset() {
+  const Outputs before = outputs();
+  regs_.reset();
+  notify_if_changed(before);
+}
+
+Rcc::Outputs Rcc::outputs() const {
+  return {sysclk_hz(), hclk_hz(), pclk1_hz(), pclk2_hz(), pllsai1r_hz(), pllsai2r_hz(), adcsel()};
+}
+
+void Rcc::notify_if_changed(const Outputs& before) {
+  if (!(outputs() == before)) ctx_.clock_tree_changed().emit(*this);
+}
 
 uint32_t Rcc::read(uint32_t off, unsigned width) { return regs_.read(off, width); }
 
@@ -75,9 +87,11 @@ void Rcc::write(uint32_t off, unsigned width, uint32_t v) {
     regs_.set(CIFR, regs_.get(CIFR) & ~(val & 0x000007FFu));
     return;
   }
+  const Outputs before = outputs();
   regs_.write(off, width, v);
   if (aligned == CSR && (val & kRmvf)) regs_.set(CSR, regs_.get(CSR) & ~kResetFlags);
   follow();
+  notify_if_changed(before);
 }
 
 void Rcc::follow() {

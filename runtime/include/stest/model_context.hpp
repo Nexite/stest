@@ -100,6 +100,14 @@ class ModelContext {
 
   ClockTree& clocks() const;  // none registered -> std::logic_error
   void set_clock_tree(ClockTree* t) { tree_ = t; }
+  // Emitted by the clock-tree model (the family's RCC) after a register write or reset
+  // that changed any ClockTree output (SYSCLK, HCLK, PCLK1/2, PLLSAI1R/2R, ADCSEL), at the
+  // virtual time of that write; the argument is the tree, already showing the new values.
+  // Models that run on a clock across time (a counting timer, ...) subscribe in connect()
+  // and re-derive their state at the change instant (see tim.hpp and
+  // docs/adding-a-peripheral.md, "Clock changes"). Not emitted for writes that leave every
+  // output unchanged (enable bits, oscillator ready bits, ...).
+  Signal<ClockTree>& clock_tree_changed() { return clock_tree_changed_; }
 
   // Shared level-sensitive IRQ line: several flag sources (e.g. TIM1 update and TIM16 on
   // TIM1_UP_TIM16, TIM6 and the DAC on TIM6_DAC) drive one NVIC input. `source` is any
@@ -114,6 +122,7 @@ class ModelContext {
   Cortexm& core_;
   Bus& bus_;
   ClockTree* tree_ = nullptr;
+  Signal<ClockTree> clock_tree_changed_;
   std::string chip_name_;
   std::map<std::string, Peripheral*, std::less<>> by_name_;
   std::vector<Peripheral*> order_;

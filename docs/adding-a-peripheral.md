@@ -116,8 +116,23 @@ How `tim` satisfies the contract without hurting speed:
 - **Derive counters from virtual time.** CNT is computed from an exact anchor, the clock period and PSC. It is not incremented by events (header comment of `tim.hpp`, `Tim::q_at` / `cnt_of`). A read returns the live value.
 - **Schedule only the next instant something observable changes.** `Tim::schedule_from` (`tim.cpp`) computes the next update event or compare match whose flag is still clear and schedules one event. If every relevant flag is already set, or the counter is stopped, nothing is scheduled. That rules out event storms.
 - **No per-tick events, ever.** A 20 kHz timer costs one event per update, not one per counter tick. This is what keeps the speed budget (≤ 0.4 s wall per virtual second per node) for the 20 kHz TIM7 test.
-- **Reschedule on every timing-affecting write**: CR1, SR (clearing a flag re-arms), EGR, CNT, ARR, PSC/CCRx/RCR, and the clock tree. `Tim::write` ends each case with `schedule()`. It reads the kernel clock from the clock tree whenever it (re)schedules, and never caches a frequency across configuration changes.
+- **Reschedule on every timing-affecting write**: CR1, SR (clearing a flag re-arms), EGR, CNT, ARR, PSC/CCRx/RCR, and the clock tree. `Tim::write` ends each case with `schedule()`. RCC writes reach the timer through `ModelContext::clock_tree_changed()` (see "Clock changes" below).
 - **Cancel stale events** before scheduling (`Tim::cancel_event` in `tim.cpp`) and in `reset()`.
+
+### Clock changes
+
+A model that runs on a clock **across time** (a counter derived from an anchor, a scheduled event computed from a rate) holds the rate it is currently running at, so it must hear about RCC changes; reading `ctx.clocks()` only when the firmware touches the model's own registers is not enough. Firmware may change SYSCLK, HPRE or PPREx while the model runs, and a timer whose UIF is left set has no event and no register access that would make it re-read the clock.
+
+The RCC emits `ModelContext::clock_tree_changed()` (a `Signal<ClockTree>`) after any register write or reset that changes a `ClockTree` output (SYSCLK, HCLK, PCLK1/2, PLLSAI1R/2R, ADCSEL), at the virtual time of the write and with the new values already visible. Subscribe in `connect()`:
+
+```cpp
+void Tim::connect(ModelContext& ctx) {
+  clocks_ = &ctx.clocks();
+  ctx.clock_tree_changed().subscribe([this](const ClockTree&) { on_clock_change(); });
+}
+```
+
+In the handler, re-derive your state **at the change instant** and reschedule. `Tim::on_clock_change` (`tim.cpp`) is the reference: it advances the anchor to the last whole tick at the old rate, keeps the part of the current tick already counted (in kernel clocks, so the same number in both units) and places the anchor so the rest of that tick and every later one run at the new rate. Use exact integer math (positions in ns × Hz, `__int128`), never a floating-point ratio, so the counter is continuous and no tick is gained or lost; then `schedule()`. A model whose time-driven work is short and re-reads the clock at each start (one SPI frame, one ADC conversion) may instead document that an in-flight operation finishes at the old rate. Either way, state the semantics in the model header.
 
 If something is "instant" on hardware within the accuracy you need, just do it synchronously in the write. The RCC sets `xxRDY` the moment `xxON` is written (header comment of `rcc.hpp`).
 
@@ -148,7 +163,7 @@ In `connect(ModelContext& ctx)` (`runtime/include/stest/model_context.hpp`):
   return pclk != clocks_->hclk_hz() ? 2 * pclk : pclk;  // x2 when the APB prescaler != 1
   ```
 
-- **`Signal<T>`** (`model_context.hpp`) gives synchronous notifications. `emit()` calls every subscriber in order on the calling thread before returning (no queues); a subscriber may subscribe more handlers while it runs (they see the next emit). `Gpio::edges()` is a `Signal<PinEdge>` that fires on every pin level change, whether caused by firmware or by Python `drive_pin`. EXTI subscribes to it in `connect()` and latches PR synchronously, so the IRQ pends inside the very access that made the edge. If you add a Signal, expose it as a public accessor and document what fires it.
+- **`Signal<T>`** (`model_context.hpp`) gives synchronous notifications. `emit()` calls every subscriber in order on the calling thread before returning (no queues); a subscriber may subscribe more handlers while it runs (they see the next emit). `Gpio::edges()` is a `Signal<PinEdge>` that fires on every pin level change, whether caused by firmware or by Python `drive_pin`. EXTI subscribes to it in `connect()` and latches PR synchronously, so the IRQ pends inside the very access that made the edge. If you add a Signal, expose it as a public accessor and document what fires it. Chip-wide signals live on `ModelContext` itself: `clock_tree_changed()` (section 4).
 
 Keep a model's dependencies one-directional where possible. A model publishes a Signal, and its consumers subscribe to it.
 
@@ -298,7 +313,8 @@ That command writes into the host `build/`. If you also build natively in the sa
 
 - [ ] `chips/<family>/models/<kind>.hpp`: class `stest::<family>::<Kind>`, a header comment (RM section, registers, `params`, not-modelled list, `call()` ops and schema, events).
 - [ ] `chips/<family>/models/<kind>.cpp`: layouts and masks from the CMSIS device header, reset values from the RM.
-- [ ] Time-driven behaviour follows the model contract: derived counters, one next-instant event, rescheduled on timing writes, cancelled in `reset()`.
+- [ ] Time-driven behaviour follows the model contract: derived counters, one next-instant event, rescheduled on timing writes and on `clock_tree_changed()` (section 4, "Clock changes"), cancelled in `reset()`.
+- [ ] `reset()` lowers every IRQ source the model raised (recompute the levels after the register reset).
 - [ ] IRQs are levels (`set_irq_level`, or `set_irq_source` on shared vectors), and IRQ numbers come from `params`.
 - [ ] Unsupported features throw `NotModelled(name, feature)` (printed `stest: <NAME>: <feature> not modelled (<access>)`).
 - [ ] `chips/<family>/CMakeLists.txt`: the `.cpp` added to `stest_chip_<family>`, plus a doctest executable and `add_test(NAME chip_<family>_<kind> ...)` with `TIMEOUT 30`.

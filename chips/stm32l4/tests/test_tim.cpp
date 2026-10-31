@@ -619,3 +619,76 @@ TEST_CASE("tim: time blocked by ARR = 0 is not counted when the counter resumes"
     CHECK(r.fire_next() == 1000125 + 12500);
   }
 }
+
+TEST_CASE("tim: a running timer follows RCC clock changes (re-anchored at the change)") {
+  // TIM2 at 80 MHz, PSC 7 -> one tick per 100 ns, ARR 999 -> UEV every 100 us. PPRE1 /1 ->
+  // /4 (PCLK1 20 MHz, timer clock x2 = 40 MHz) halves the rate: a tick per 200 ns.
+  constexpr uint32_t CFGR = 0x08, PLL = 3u, PPRE1_DIV4 = 5u << 8;
+  SUBCASE("mid-tick change: CNT continuous, rest of the tick and later ticks at the new rate") {
+    Rig r;
+    r.base_init(TIM2, 7, 999);
+    const uint64_t t0 = r.clock.now_ns();
+    r.wr(TIM2, CR1, CEN);
+    r.to(t0 + 30050);  // tick 300 at 30 000 ns, plus 4 of its 8 kernel clocks
+    CHECK(r.rd(TIM2, CNT) == 300);
+    r.wr(RCC, CFGR, PLL | PPRE1_DIV4);
+    CHECK(r.rd(TIM2, CNT) == 300);  // no jump at the change
+    json st = r.tim2.call("state", json::object());
+    CHECK(st["clk_hz"] == 40000000);
+    CHECK(st["update_hz"].get<double>() == doctest::Approx(5000.0));
+    // remaining 4 kernel clocks at 40 MHz = 100 ns -> tick 301 at 30 150 ns
+    r.to(t0 + 30149);
+    CHECK(r.rd(TIM2, CNT) == 300);
+    r.to(t0 + 30150);
+    CHECK(r.rd(TIM2, CNT) == 301);
+    // UEV at q = 1000: 699 more ticks of 200 ns
+    CHECK(r.fire_next() == t0 + 30150 + 699 * 200);
+    CHECK((r.rd(TIM2, SR) & UIF) != 0);
+    CHECK(r.rd(TIM2, CNT) == 0);
+    r.wr(TIM2, SR, 0);
+    CHECK(r.next_uif(TIM2) == t0 + 30150 + 699 * 200 + 1000 * 200);
+  }
+  SUBCASE("faster (HPRE /2 -> /1, 40 -> 80 MHz): no tick gained") {
+    Rig r;
+    r.wr(RCC, CFGR, PLL | (8u << 4));  // HPRE /2: HCLK = PCLK1 = 40 MHz, timer 40 MHz
+    r.base_init(TIM2, 7, 999);
+    const uint64_t t0 = r.clock.now_ns();
+    r.wr(TIM2, CR1, CEN);  // tick per 200 ns
+    r.to(t0 + 60150);      // tick 300 at 60 000, 6 of 8 kernel clocks into tick 301
+    CHECK(r.rd(TIM2, CNT) == 300);
+    r.wr(RCC, CFGR, PLL);  // 80 MHz: remaining 2 kernel clocks = 25 ns
+    CHECK(r.rd(TIM2, CNT) == 300);
+    CHECK(r.tim2.call("state", json::object())["clk_hz"] == 80000000);
+    r.to(t0 + 60174);
+    CHECK(r.rd(TIM2, CNT) == 300);
+    r.to(t0 + 60175);
+    CHECK(r.rd(TIM2, CNT) == 301);
+    CHECK(r.fire_next() == t0 + 60175 + 699 * 100);
+  }
+  SUBCASE("UIF (and every CCxIF) left set: nothing scheduled, CNT still follows the new rate") {
+    Rig r;
+    r.base_init(TIM2, 7, 999);
+    const uint64_t t0 = r.clock.now_ns();
+    r.wr(TIM2, CR1, CEN);
+    // CC1-4 match at CNT = 0 (CCRx = 0) at the wrap: UIF and CC1-4IF set together.
+    CHECK(r.fire_next() == t0 + 100000);
+    CHECK((r.rd(TIM2, SR) & 0x1Fu) == 0x1Fu);
+    CHECK(r.clock.next_event_ns() == kNone);  // every flag set: no event (no storm)
+    r.to(t0 + 120000);
+    CHECK(r.rd(TIM2, CNT) == 200);
+    r.wr(RCC, CFGR, PLL | PPRE1_DIV4);
+    CHECK(r.tim2.call("state", json::object())["clk_hz"] == 40000000);
+    r.to(t0 + 160000);  // 40 us at 200 ns per tick
+    CHECK(r.rd(TIM2, CNT) == 400);
+    r.wr(TIM2, SR, 0);  // re-arms: next UEV 600 ticks of 200 ns later
+    CHECK(r.fire_next() == t0 + 160000 + 600 * 200);
+  }
+  SUBCASE("a stopped timer reads the new clock when it starts") {
+    Rig r;
+    r.base_init(TIM2, 7, 999);
+    r.wr(RCC, CFGR, PLL | PPRE1_DIV4);
+    const uint64_t t0 = r.clock.now_ns();
+    r.wr(TIM2, CR1, CEN);
+    CHECK(r.fire_next() == t0 + 1000 * 200);
+  }
+}

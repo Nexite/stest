@@ -137,3 +137,29 @@ TEST_CASE("rcc clocks: hse_hz param") {
   bus.write(RCC + CFGR, 4, 2u);
   CHECK(rcc.sysclk_hz() == 12000000);
 }
+
+TEST_CASE("rcc: clock_tree_changed fires only when a clock-tree output changes") {
+  Fixture f;
+  int n = 0;
+  uint64_t seen_pclk1 = 0;
+  f.ctx.clock_tree_changed().subscribe([&](const ClockTree& t) {
+    ++n;
+    seen_pclk1 = t.pclk1_hz();  // the new values are already visible
+  });
+  f.set(APB1ENR1, 1u);          // enable bit: no clock-tree output changes
+  f.set(CR, 1u << 8);           // HSION (+HSIRDY): SYSCLK still MSI
+  CHECK(n == 0);
+  f.wr(CFGR, 1u);               // SW = HSI16
+  CHECK(n == 1);
+  CHECK(seen_pclk1 == 16000000);
+  f.wr(CFGR, 1u | (4u << 8));   // PPRE1 /2
+  CHECK(n == 2);
+  CHECK(seen_pclk1 == 8000000);
+  f.wr(CFGR, 1u | (4u << 8));   // same value again
+  CHECK(n == 2);
+  f.wr(CCIPR, 3u << 28);        // ADCSEL = SYSCLK
+  CHECK(n == 3);
+  f.rcc.reset();                // back to MSI 4 MHz
+  CHECK(n == 4);
+  CHECK(seen_pclk1 == 4000000);
+}
