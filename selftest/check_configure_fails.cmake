@@ -40,6 +40,8 @@ execute_process(COMMAND "${CMAKE_BIN}" ${args} RESULT_VARIABLE rc ERROR_VARIABLE
 if(rc EQUAL 0)
   message(FATAL_ERROR "configure unexpectedly succeeded for ${CASE}")
 endif()
-if(NOT err MATCHES "${pattern}")
+# CMake word-wraps message() text by path length, so match on collapsed whitespace.
+string(REGEX REPLACE "[ \t\r\n]+" " " err_flat "${err}")
+if(NOT err_flat MATCHES "${pattern}")
   message(FATAL_ERROR "configure failed without the expected message '${pattern}':\n${err}")
 endif()
