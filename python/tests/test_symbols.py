@@ -108,3 +108,40 @@ def test_symbol_table_cached_and_static_resolve(blinky_exe):
     r = t.resolve("lamps[1].duty")
     assert r.addr == t.resolve("lamps").addr + 4 + 0  # sizeof(struct lamp) == 4, duty at offset 0
     assert r.type.size == 2
+
+
+def test_member_offset_decoding():
+    from stest.symbols import decode_member_offset as d
+
+    assert d(8) == 8
+    assert d([0x23, 0x08]) == 8  # DW_OP_plus_uconst 8
+    assert d([0x23, 0x80, 0x01]) == 128  # multi-byte ULEB
+    assert d([0x23, 0x80]) is None  # truncated ULEB
+    assert d([0x10, 0x08]) is None  # other op: unsupported, never silently 0
+    assert d(None) is None
+
+
+def test_discarded_variable_address_zero_is_skipped():
+    from stest.symbols import decode_static_location as d
+
+    assert d(bytes([0x03]) + (0x1000).to_bytes(8, "little"), None) == 0x1000
+    assert d(bytes([0x03]) + bytes(8), None) is None  # stripped: addr 0
+    assert d(bytes([0xA1, 0x02]), lambda i: 0) is None  # addrx resolving to 0
+    assert d(bytes([0xA1, 0x02]), lambda i: 0x2000 + i) == 0x2002
+
+
+def test_cache_invalidated_when_exe_rebuilt(blinky_exe, tmp_path):
+    import os
+    import shutil
+
+    exe = tmp_path / "blinky"
+    shutil.copy(blinky_exe, exe)
+    dsym = blinky_exe.with_name(blinky_exe.name + ".dSYM")
+    if dsym.is_dir():
+        shutil.copytree(dsym, exe.with_name("blinky.dSYM"))
+    a = SymbolTable.load(exe)
+    assert SymbolTable.load(exe) is a
+    st = exe.stat()
+    os.utime(exe, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
+    b = SymbolTable.load(exe)
+    assert b is not a and b.anchor_addr == a.anchor_addr

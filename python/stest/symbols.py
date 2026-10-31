@@ -35,7 +35,7 @@ ANCHOR = "stest_symbol_anchor"
 # DWARF constants
 DW_ATE_boolean, DW_ATE_float, DW_ATE_signed, DW_ATE_signed_char = 0x02, 0x04, 0x05, 0x06
 DW_ATE_unsigned, DW_ATE_unsigned_char, DW_ATE_UTF = 0x07, 0x08, 0x10
-DW_OP_addr, DW_OP_addrx = 0x03, 0xA1
+DW_OP_addr, DW_OP_addrx, DW_OP_plus_uconst = 0x03, 0xA1, 0x23
 
 
 # ---------------------------------------------------------------- values
@@ -241,7 +241,55 @@ class _Var:
 _HEAD = re.compile(r"(?:(?P<file>[^:\[\].\s][^:\[\]\s]*):(?!:))?(?:(?P<func>\w+)::)?(?P<name>[A-Za-z_]\w*)")
 _STEP = re.compile(r"\.([A-Za-z_]\w*)|\[\s*(\d+)\s*\]")
 
-_cache: dict[Path, SymbolTable] = {}
+def _uleb(b: bytes) -> int | None:
+    """Decode a ULEB128 that spans exactly all of ``b`` (None if malformed)."""
+    val = shift = 0
+    for i, byte in enumerate(b):
+        val |= (byte & 0x7F) << shift
+        shift += 7
+        if not byte & 0x80:
+            return val if i == len(b) - 1 else None
+    return None
+
+
+def decode_static_location(b: bytes, get_addr) -> int | None:
+    """Static address of a DW_AT_location expression, or None if it is not a plain static
+    address. Address 0 means the linker discarded the variable (gc-sections/dead-strip)."""
+    addr = None
+    if len(b) == 9 and b[0] == DW_OP_addr:
+        addr = int.from_bytes(b[1:], "little")
+    elif len(b) >= 2 and b[0] == DW_OP_addrx:
+        idx = _uleb(b[1:])
+        if idx is not None:
+            addr = get_addr(idx)
+    return addr if addr else None
+
+
+def decode_member_offset(value: Any) -> int | None:
+    """Byte offset from a DW_AT_data_member_location value: an int, or the exprloc
+    ``DW_OP_plus_uconst <uleb>``. None for anything else (unsupported)."""
+    if isinstance(value, int):
+        return value
+    if isinstance(value, (list, bytes)):
+        b = bytes(value)
+        if len(b) >= 2 and b[0] == DW_OP_plus_uconst:
+            return _uleb(b[1:])
+    return None
+
+
+def _cache_key(exe: Path) -> tuple:
+    """Path plus size/mtime of the executable (and, on macOS, of its dSYM DWARF file), so a
+    rebuilt executable never reuses stale addresses."""
+    st = exe.stat()
+    key = [str(exe), st.st_mtime_ns, st.st_size]
+    dsym = exe.with_name(exe.name + ".dSYM") / "Contents" / "Resources" / "DWARF" / exe.name
+    if dsym.is_file():
+        ds = dsym.stat()
+        key += [ds.st_mtime_ns, ds.st_size]
+    return tuple(key)
+
+
+_cache: dict[tuple, SymbolTable] = {}
 
 
 def _s(v: Any) -> str:
@@ -263,10 +311,13 @@ class SymbolTable:
     # ---- loading ----
     @classmethod
     def load(cls, exe: Path | str) -> SymbolTable:
-        key = Path(exe).resolve()
+        path = Path(exe).resolve()
+        if not path.is_file():
+            raise SymbolError(f"executable {path} not found")
+        key = _cache_key(path)
         t = _cache.get(key)
         if t is None:
-            t = _cache[key] = cls._load(key)
+            t = _cache[key] = cls._load(path)
         return t
 
     @classmethod
@@ -347,16 +398,7 @@ class SymbolTable:
         v = loc.value
         if not isinstance(v, (list, bytes)):  # location list: not a static address
             return None
-        b = bytes(v)
-        if len(b) == 9 and b[0] == DW_OP_addr:
-            return int.from_bytes(b[1:], "little")
-        if len(b) >= 2 and b[0] == DW_OP_addrx:
-            idx = shift = 0
-            for byte in b[1:]:
-                idx |= (byte & 0x7F) << shift
-                shift += 7
-            return self._dwarf.get_addr(cu, idx)
-        return None
+        return decode_static_location(bytes(v), lambda idx: self._dwarf.get_addr(cu, idx))
 
     # ---- types ----
     def _type_of(self, die: Any) -> Type:
@@ -442,10 +484,15 @@ class SymbolTable:
             if m.tag != "DW_TAG_member":
                 continue
             ma = m.attributes
-            off = ma["DW_AT_data_member_location"].value if "DW_AT_data_member_location" in ma else 0
-            if not isinstance(off, int):
-                off = 0
+            off = 0
+            bad_off = False
+            if "DW_AT_data_member_location" in ma:
+                dec = decode_member_offset(ma["DW_AT_data_member_location"].value)
+                bad_off = dec is None
+                off = dec or 0
             mt = self._type_of(m)
+            if bad_off:
+                mt = UnsupportedType("member with a computed (non-constant) offset")
             if "DW_AT_bit_size" in ma:
                 mt = UnsupportedType("bit-field")
             mn = ma.get("DW_AT_name")
