@@ -234,6 +234,7 @@ class Node:
         return mtype, payload
 
     def _request(self, msg: bytes, expect: proto.Msg, what: str) -> bytes:
+        self.sim._check_usable()  # first: after a crash or close() the channel is gone too
         if not self._chan:
             raise StestError(f"node {self.name!r} is not running (call sim.start() first)")
         self._send(msg)

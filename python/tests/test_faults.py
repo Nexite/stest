@@ -6,7 +6,7 @@ import os
 
 import pytest
 
-from stest import NodeCrashed, Sim, WallClockTimeout
+from stest import NodeCrashed, Sim, StestError, WallClockTimeout
 
 
 def assert_reaped(pids):
@@ -79,3 +79,27 @@ def test_stderr_tail_in_crash_message(faults_exe):
         # last 20 stderr lines only: chatter lines 4981..4999 plus the abort line
         assert "chatter 4999 " in msg and "chatter 4981 " in msg and "chatter 4980 " not in msg
         assert len(n.stderr_tail) == 20 and n.stderr_tail[-1].startswith("stest: unmodelled")
+
+
+def test_requests_after_crash_report_the_crash(faults_exe):
+    with Sim() as s:
+        n = s.node("crash", faults_exe("crash"))
+        s.start()
+        with pytest.raises(NodeCrashed):
+            s.advance(ms=100)
+        with pytest.raises(NodeCrashed, match=r"no longer usable after: node 'crash' crashed at .*SIG(SEGV|BUS)"):
+            n.var("ticks")
+        with pytest.raises(NodeCrashed, match=r"no longer usable after: node 'crash' crashed"):
+            n.pin("PA5").level
+
+
+def test_requests_after_close_report_closed(blinky_exe):
+    s = Sim()
+    n = s.node("b", blinky_exe)
+    s.start()
+    s.advance(ms=1)
+    s.close()
+    with pytest.raises(StestError, match=r"simulation is closed"):
+        n.var("uwTick")
+    with pytest.raises(StestError, match=r"simulation is closed"):
+        n.pin("PA5").level
