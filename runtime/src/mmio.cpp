@@ -18,6 +18,7 @@ uint64_t g_cost_ns = 25;
 stest::DeliveryHook g_hook = nullptr;
 uint64_t g_quantum_end = UINT64_MAX;
 stest::QuantumHook g_qhook = nullptr;
+stest::AbortHook g_abort_hook = nullptr;
 
 // ---- poll streak (see runtime.hpp) ----
 constexpr unsigned kMaxTuples = 8;
@@ -174,6 +175,7 @@ void set_delivery_hook(DeliveryHook h) { g_hook = h; }
 void set_quantum_end(uint64_t t_ns) { g_quantum_end = t_ns; }
 uint64_t quantum_end() { return g_quantum_end; }
 void set_quantum_hook(QuantumHook h) { g_qhook = h; }
+void set_abort_hook(AbortHook h) { g_abort_hook = h; }
 void set_poll_skip_threshold(uint32_t loads) {
   g_skip_threshold = loads;
   streak_reset();
@@ -188,14 +190,21 @@ void poll_streak_break() {
 extern "C" {
 
 void stest_rt_abort(const char* fmt, ...) {
+  // Formatted into a fixed buffer (no allocation: may run on any thread, in any state).
+  static char buf[1024];
+  int n = snprintf(buf, sizeof buf, "stest: ");
   va_list ap;
   va_start(ap, fmt);
-  fputs("stest: ", stderr);
-  vfprintf(stderr, fmt, ap);
-  fputc('\n', stderr);
+  vsnprintf(buf + n, sizeof buf - (size_t)n, fmt, ap);
   va_end(ap);
+  fputs(buf, stderr);
+  fputc('\n', stderr);
   fflush(stderr);
   fflush(stdout);
+  if (stest::AbortHook h = g_abort_hook) {
+    g_abort_hook = nullptr;  // no recursion if the hook itself aborts
+    h(buf);
+  }
   _exit(70);
 }
 

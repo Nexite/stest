@@ -16,7 +16,8 @@ void __stest_mmio_store16(volatile void *addr, uint16_t v);
 void __stest_mmio_store32(volatile void *addr, uint32_t v);
 void __stest_mmio_store64(volatile void *addr, uint64_t v);
 
-/* Prints "stest: " + formatted message to stderr and exits with status 70. */
+/* Prints "stest: " + formatted message to stderr, calls the abort hook if set
+ * (stest::set_abort_hook; control mode sends ERROR), and exits with status 70. */
 void stest_rt_abort(const char *fmt, ...) __attribute__((noreturn, format(printf, 1, 2)));
 /* Current virtual time of the process-global clock, in nanoseconds. */
 uint64_t stest_rt_now_ns(void);

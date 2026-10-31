@@ -27,6 +27,13 @@ void set_quantum_end(uint64_t t_ns);  // default UINT64_MAX (never)
 uint64_t quantum_end();
 void set_quantum_hook(QuantumHook h);  // null by default
 
+// Abort hook: stest_rt_abort() prints "stest: <msg>" to stderr, then calls the hook
+// (once) with that same "stest: <msg>" text, then _exit(70)s. Runs on whichever thread
+// aborted (usually the firmware thread, with the loop thread parked), so the hook must
+// not depend on the loop thread. The control channel uses it to send ERROR.
+using AbortHook = void (*)(const char* msg);
+void set_abort_hook(AbortHook h);  // null by default
+
 // Poll fast-forward. A "poll streak" is a run of consecutive loads (in or out of the
 // peripheral windows) with no store and no exception taken, in which every load's
 // (addr, width, value) is one of at most 8 distinct tuples (re-reading an address with
