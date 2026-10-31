@@ -203,7 +203,7 @@ struct Cortexm::Impl {
 
   Impl(Bus& b, Clock& k, unsigned bits, const IrqHandler* t, size_t n)
       : bus(b), clock(k), prio_bits(bits), prio_mask(static_cast<uint8_t>(0xFFu << (8 - bits))),
-        table(t), n_exc(n), en(n, 0), pend(n, 0), act(n, 0), prio(n, 0),
+        table(t), n_exc(n), en(n, 0), pend(n, 0), act(n, 0), prio(n, 0), lvl(n, 0),
         nvic(*this), scb(*this), systick(*this) {}
 
   Bus& bus;
@@ -213,6 +213,7 @@ struct Cortexm::Impl {
   const IrqHandler* table;
   size_t n_exc;
   std::vector<uint8_t> en, pend, act, prio;  // indexed by exception number
+  std::vector<uint8_t> lvl;                  // level-driven input state (set_irq_level)
   size_t n_pend = 0;
   std::vector<int> stack;                    // active exceptions, innermost last
   bool primask = false, faultmask = false;
@@ -288,6 +289,7 @@ struct Cortexm::Impl {
     h();
     stack.pop_back();
     act[exc] = 0;
+    if (lvl[exc]) set_pend(exc, true);  // input still asserted on exception return: re-pend
   }
   void deliver() {
     for (int e; (e = select()) >= 0;) run(e);
@@ -427,6 +429,12 @@ Cortexm::~Cortexm() {
 }
 
 void Cortexm::set_pending(int irqn) { impl_->set_pend(impl_->exc_of(irqn), true); }
+void Cortexm::set_irq_level(int irqn, bool high) {
+  int e = impl_->exc_of(irqn);
+  bool rose = high && !impl_->lvl[e];
+  impl_->lvl[e] = high;
+  if (rose) impl_->set_pend(e, true);
+}
 void Cortexm::clear_pending(int irqn) { impl_->set_pend(impl_->exc_of(irqn), false); }
 bool Cortexm::pending(int irqn) const { return impl_->pend[impl_->exc_of(irqn)] != 0; }
 bool Cortexm::active(int irqn) const { return impl_->act[impl_->exc_of(irqn)] != 0; }

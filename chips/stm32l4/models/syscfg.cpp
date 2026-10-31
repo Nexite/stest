@@ -11,7 +11,7 @@ enum : uint32_t {
 
 Syscfg::Syscfg(std::string name, const nlohmann::json&, ModelContext&) : name_(std::move(name)) {
   regs_.declare(MEMRMP, 0x00000000, 0x00000107);  // MEM_MODE[2:0], FB_MODE
-  regs_.declare(CFGR1, 0x7C000001, 0xFC7F0301);   // FPU_IE[5:0], I2Cx_FMP, ANASWVDD, BOOSTEN, FWDIS
+  regs_.declare(CFGR1, 0x7C000001, 0xFCFF0101);   // FPU_IE[5:0], I2C*_FMP (bits 16-23), BOOSTEN, FWDIS
   for (uint32_t i = 0; i < 4; ++i) regs_.declare(EXTICR1 + 4 * i, 0, 0x0000FFFF);
   regs_.declare(SCSR, 0x00000000, 0x00000001);    // SRAM2ER; SRAM2BSY (bit 1) never busy
   regs_.declare(CFGR2, 0x00000000, 0x0000000F, 0x00000100);  // CLL SPL PVDL ECCL; SPF is w1c

@@ -55,6 +55,13 @@ class Cortexm {
 
   // Peripherals call these. Valid irqn: external [0, n_irqs-16), SVCall, PendSV, SysTick.
   void set_pending(int irqn);
+  // Flag-driven (level-sensitive) interrupt input: what peripheral models use for an IRQ
+  // that stays asserted while a status flag is set (EXTI PR&IMR, TIM SR&DIER, ...), as on
+  // STM32. A low-to-high change pends the IRQ (setting an already-high level again is a no-op); if the line is still high when its handler returns
+  // (the ISR did not clear the flag) it is pended again and the handler re-enters. Going
+  // low does not clear an already latched pending bit (NVIC latches the rising edge).
+  // Use set_pending for pulse-style sources. Level state is separate from the pending bit.
+  void set_irq_level(int irqn, bool high);
   void clear_pending(int irqn);
   bool pending(int irqn) const;
   bool active(int irqn) const;

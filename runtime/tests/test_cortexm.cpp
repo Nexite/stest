@@ -528,3 +528,51 @@ TEST_CASE("cortexm: wfi with PRIMASK set wakes on a pending IRQ without running 
   CHECK(r.clock.now_ns() == 5 * MS);
   CHECK(r.count_irq(3) == 1);
 }
+
+// ---- level-driven IRQ inputs (set_irq_level) ----
+
+namespace {
+int g_level_entries = 0, g_level_clear_after = 0;
+void level_h() {  // IRQ 6: clears its level input only after g_level_clear_after entries
+  ++g_level_entries;
+  if (g_level_entries >= g_level_clear_after) g_core->set_irq_level(6, false);
+}
+}  // namespace
+
+TEST_CASE("cortexm: a level that stays high re-enters the handler on return") {
+  Rig r;
+  r.table[6 + 16] = &level_h;
+  r.enable(6);
+  g_level_entries = 0;
+  g_level_clear_after = 3;  // the "ISR" fixes the cause on the third entry
+  r.core->set_irq_level(6, true);
+  r.core->deliver();
+  CHECK(g_level_entries == 3);
+  CHECK_FALSE(r.core->pending(6));
+  r.core->deliver();
+  CHECK(g_level_entries == 3);
+}
+
+TEST_CASE("cortexm: a level dropped inside the handler runs it once") {
+  Rig r;
+  r.table[6 + 16] = &level_h;
+  r.enable(6);
+  g_level_entries = 0;
+  g_level_clear_after = 1;
+  r.core->set_irq_level(6, true);
+  r.core->deliver();
+  r.core->deliver();
+  CHECK(g_level_entries == 1);
+  CHECK_FALSE(r.core->pending(6));
+}
+
+TEST_CASE("cortexm: set_irq_level high while masked pends; dropping it keeps the latched pending") {
+  Rig r;
+  r.core->set_irq_level(7, true);
+  CHECK(r.core->pending(7));
+  r.core->set_irq_level(7, false);
+  CHECK(r.core->pending(7));  // NVIC latched the edge
+  r.enable(7);
+  r.core->deliver();
+  CHECK(r.count_irq(7) == 1);
+}

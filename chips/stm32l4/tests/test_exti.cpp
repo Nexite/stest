@@ -172,3 +172,72 @@ TEST_CASE("gpio: edges signal reports port, pin, level and time") {
   CHECK(got[0].t_ns == 500);
   CHECK(got[1].level == 0);
 }
+
+namespace {
+stm32l4::Exti* g_exti = nullptr;
+Bus* g_bus = nullptr;
+int g_isr_runs = 0, g_isr_clear_after = 0;
+void exti_isr() {  // firmware-style EXTI15_10 handler; clears PR only on the Nth entry
+  ++g_isr_runs;
+  if (g_isr_runs >= g_isr_clear_after) g_bus->write(EXTI + PR1, 4, 1u << 13);
+}
+}  // namespace
+
+TEST_CASE("exti: an ISR that does not clear PR re-enters (level-sensitive IRQ)") {
+  Bus bus;
+  Clock clock;
+  static IrqHandler table[16 + 82];
+  table[40 + 16] = &exti_isr;
+  Cortexm core(bus, clock, 4, table, 16 + 82);
+  ModelContext ctx(clock, core, bus);
+  stm32l4::Syscfg syscfg("SYSCFG", json::object(), ctx);
+  stm32l4::Gpio c("GPIOC", json{{"port", "C"}}, ctx);
+  stm32l4::Exti exti("EXTI", json{{"irq", {6, 7, 8, 9, 10, 23, 23, 23, 23, 23, 40, 40, 40, 40, 40, 40}}}, ctx);
+  ctx.add(&syscfg); ctx.add(&c); ctx.add(&exti);
+  syscfg.connect(ctx); c.connect(ctx); exti.connect(ctx);
+  bus.map(SYSCFG, 0x400, &syscfg);
+  bus.map(EXTI, 0x400, &exti);
+  bus.map(GPIOC, 0x400, &c);
+  g_bus = &bus;
+  g_isr_runs = 0;
+  g_isr_clear_after = 3;
+  bus.write(SYSCFG + EXTICR4, 4, 2u << 4);
+  bus.write(EXTI + RTSR1, 4, 1u << 13);
+  bus.write(EXTI + IMR1, 4, bus.read(EXTI + IMR1, 4) | (1u << 13));
+  bus.write(0xE000E100 + 4, 4, 1u << (40 - 32));  // NVIC ISER1: enable IRQ 40
+  c.call("drive_pin", {{"pin", 13}, {"level", 1}});
+  core.deliver();
+  CHECK(g_isr_runs == 3);
+  CHECK(bus.read(EXTI + PR1, 4) == 0);
+  CHECK_FALSE(core.pending(40));
+  core.deliver();
+  CHECK(g_isr_runs == 3);
+}
+
+TEST_CASE("exti: lines sharing an IRQ keep it high until every PR is cleared") {
+  Rig r;
+  r.bus.write(EXTI + IMR1, 4, r.bus.read(EXTI + IMR1, 4) | (3u << 10));
+  r.bus.write(EXTI + SWIER1, 4, 3u << 10);
+  CHECK(r.core.pending(40));
+  r.core.clear_pending(40);
+  r.bus.write(EXTI + PR1, 4, 1u << 10);  // line 11 still set: level stays high, nothing new pends
+  CHECK_FALSE(r.core.pending(40));
+  r.bus.write(EXTI + PR1, 4, 1u << 11);
+  CHECK_FALSE(r.core.pending(40));
+}
+
+TEST_CASE("exti/syscfg: masks let firmware clear reset-1 bits and set I2C4_FMP") {
+  Rig r;
+  r.bus.write(EXTI + IMR1, 4, r.bus.read(EXTI + IMR1, 4) & ~(1u << 23));
+  CHECK(r.bus.read(EXTI + IMR1, 4) == (0xFF820000u & ~(1u << 23)));
+  r.bus.write(EXTI + 0x04, 4, 0xFFFFFFFF);  // EMR1: IM0..IM31 all writable
+  CHECK(r.bus.read(EXTI + 0x04, 4) == 0xFFFFFFFF);
+  r.bus.write(EXTI + 0x20, 4, r.bus.read(EXTI + 0x20, 4) & ~1u);  // IMR2 line 32
+  CHECK(r.bus.read(EXTI + 0x20, 4) == 0x186);
+  r.bus.write(EXTI + 0x20, 4, 0xFFFFFFFF);
+  CHECK(r.bus.read(EXTI + 0x20, 4) == 0x1FF);
+  r.bus.write(EXTI + 0x24, 4, 0xFFFFFFFF);
+  CHECK(r.bus.read(EXTI + 0x24, 4) == 0x1FF);
+  r.bus.write(SYSCFG + 0x04, 4, 0xFFFFFFFF);
+  CHECK(r.bus.read(SYSCFG + 0x04, 4) == 0xFCFF0101);  // bit 23 writable, bit 9 reserved
+}
