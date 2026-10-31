@@ -27,6 +27,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/Config/llvm-config.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
@@ -168,6 +169,14 @@ private:
           if (MI->isVolatile())
             Work.push_back(MI);
         }
+#if LLVM_VERSION_MAJOR >= 21
+        else if (auto *II = dyn_cast<IntrinsicInst>(&I)) {
+          // llvm.experimental.memset.pattern(ptr, val, count, i1 isvolatile)
+          if (II->getIntrinsicID() == Intrinsic::experimental_memset_pattern &&
+              cast<ConstantInt>(II->getArgOperand(3))->isOne())
+            remark(ORE, I, "volatile memset.pattern left untouched");
+        }
+#endif
       }
 
     bool Changed = false;

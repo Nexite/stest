@@ -27,6 +27,14 @@ static void expect_rec(int i, int op, uint64_t addr, int w, uint64_t v, int chec
              (!check_v || recs[i].value == v), m);
 }
 
+#define expect_mem(c, m) expect((c), m)
+
+extern void ir_memset7(volatile void *);
+extern void ir_memset_var(volatile void *, uint8_t, uint64_t);
+extern void ir_memmove12(volatile void *, volatile void *);
+extern void ir_memcpy_var(volatile void *, volatile void *, uint64_t);
+extern void ir_memset_nonvolatile(void *);
+
 int main(void) {
   *GPIOA_BSRR = 0x20;
   *GPIOA_BSRR = 0x200000;
@@ -67,40 +75,59 @@ int main(void) {
   uint32_t b16 = *(volatile uint16_t *)0x40003004u;
   expect(b16 == 0x8000, "u16 load 0x8000 not sign-extended");
 
-  /* Volatile aggregate copies/zeroing become __stest_mmio_memcpy/memset calls
-   * (the runtime splits them into aligned <=4-byte accesses). */
+  /* Volatile aggregate copies become __stest_mmio_memcpy calls (the runtime
+   * splits them into aligned accesses). clang emits a volatile memcpy for volatile
+   * struct assignment at both -O0 and -O2; assert the exact arguments. */
   struct S { uint32_t a, b; };
   volatile struct S *P = (volatile struct S *)0x40000000u;
   nrecs = 0;
   *P = (struct S){1, 2};
-  expect(nrecs >= 1, "volatile struct store reached the runtime");
-  if (nrecs == 1) { /* memcpy form */
-    expect_rec(0, OP_MEMCPY, 0x40000000u, 8, 0, 0);
-  } else { /* the frontend scalarised it: two ordered stores */
-    expect(nrecs == 2, "struct store: two records");
-    expect_rec(0, OP_STORE, 0x40000000u, 32, 1, 1);
-    expect_rec(1, OP_STORE, 0x40000004u, 32, 2, 1);
+  expect_mem(nrecs == 1 && recs[0].op == OP_MEMCPY && recs[0].addr == 0x40000000u &&
+                 recs[0].width == 8, "struct store: one memcpy, dst 0x40000000, len 8");
+  if (nrecs == 1) {
+    static const uint32_t want[2] = {1, 2};
+    expect(memcmp((const void *)(uintptr_t)recs[0].src, want, 8) == 0, "struct store: src holds {1,2}");
   }
 
   struct Z { uint8_t b[6]; };
   volatile struct Z *Q = (volatile struct Z *)0x40000010u;
-  nrecs = 0;
-  *Q = (struct Z){{0}};
-  expect(nrecs == 1, "volatile zeroing: one runtime call");
-  /* clang may emit a volatile memset or a memcpy from a zero constant */
-  expect(nrecs == 1 && recs[0].addr == 0x40000010u && recs[0].width == 6 &&
-             (recs[0].op == OP_MEMSET || recs[0].op == OP_MEMCPY), "zeroing: 6 bytes at 0x40000010");
-
   volatile struct Z *R = (volatile struct Z *)0x40000020u;
+  nrecs = 0;
+  *Q = *R; /* volatile -> volatile */
+  expect(nrecs == 1 && recs[0].op == OP_MEMCPY && recs[0].addr == 0x40000010u &&
+             recs[0].src == 0x40000020u && recs[0].width == 6, "vol->vol copy: exact dst/src/len");
+
   struct Z host = {{1, 2, 3, 4, 5, 6}};
   nrecs = 0;
   *R = host; /* volatile dst, plain src */
-  expect(nrecs == 1, "volatile copy out: one runtime call");
-  expect_rec(0, OP_MEMCPY, 0x40000020u, 6, 0, 1);
+  expect(nrecs == 1 && recs[0].op == OP_MEMCPY && recs[0].addr == 0x40000020u &&
+             recs[0].src == (uint64_t)(uintptr_t)&host && recs[0].width == 6,
+         "copy out: exact dst/src/len");
   nrecs = 0;
   host = *R; /* plain dst, volatile src */
-  expect(nrecs == 1, "volatile copy in: one runtime call");
-  expect_rec(0, OP_MEMCPY, (uint64_t)(uintptr_t)&host, 6, 0, 1);
+  expect(nrecs == 1 && recs[0].op == OP_MEMCPY && recs[0].addr == (uint64_t)(uintptr_t)&host &&
+             recs[0].src == 0x40000020u && recs[0].width == 6, "copy in: exact dst/src/len");
+
+  /* IR-level cases (mmio_mem_ir.ll): real volatile memset/memmove, runtime lengths. */
+  nrecs = 0;
+  ir_memset7((void *)0x40000030u);
+  expect(nrecs == 1 && recs[0].op == OP_MEMSET && recs[0].addr == 0x40000030u &&
+             recs[0].width == 7 && recs[0].value == 90, "memset const: exact dst/byte/len");
+  nrecs = 0;
+  ir_memset_var((void *)0x40000038u, 0xC3, 11);
+  expect(nrecs == 1 && recs[0].op == OP_MEMSET && recs[0].addr == 0x40000038u &&
+             recs[0].width == 11 && recs[0].value == 0xC3, "memset var: exact dst/byte/len");
+  nrecs = 0;
+  ir_memmove12((void *)0x40000040u, (void *)0x40000044u); /* overlapping */
+  expect(nrecs == 1 && recs[0].op == OP_MEMCPY && recs[0].addr == 0x40000040u &&
+             recs[0].src == 0x40000044u && recs[0].width == 12, "memmove: exact dst/src/len");
+  nrecs = 0;
+  ir_memcpy_var((void *)0x40000050u, (void *)0x40000060u, 13);
+  expect(nrecs == 1 && recs[0].op == OP_MEMCPY && recs[0].addr == 0x40000050u &&
+             recs[0].src == 0x40000060u && recs[0].width == 13, "memcpy var: exact dst/src/len");
+  nrecs = 0;
+  ir_memset_nonvolatile(&host);
+  expect(nrecs == 0 && host.b[0] == 1, "non-volatile memset untouched");
 
   if (failures) return 1;
   puts("mmio_order OK");

@@ -9,7 +9,7 @@ int nrecs;
 uint64_t scripted = 0xA5;
 
 static void rec(int op, const volatile void *a, int w, uint64_t v) {
-  if (nrecs < 64) recs[nrecs++] = (rec_t){op, (uint64_t)(uintptr_t)a, w, v};
+  if (nrecs < 64) recs[nrecs++] = (rec_t){op, (uint64_t)(uintptr_t)a, w, v, 0};
 }
 
 uint8_t  __stest_mmio_load8 (const volatile void *a) { rec(OP_LOAD, a, 8,  0); return (uint8_t)scripted; }
@@ -21,5 +21,5 @@ void __stest_mmio_store16(volatile void *a, uint16_t v) { rec(OP_STORE, a, 16, v
 void __stest_mmio_store32(volatile void *a, uint32_t v) { rec(OP_STORE, a, 32, v); }
 void __stest_mmio_store64(volatile void *a, uint64_t v) { rec(OP_STORE, a, 64, v); }
 
-void __stest_mmio_memcpy(volatile void *d, const volatile void *s, size_t n) { (void)s; rec(OP_MEMCPY, d, (int)n, 0); }
+void __stest_mmio_memcpy(volatile void *d, const volatile void *s, size_t n) { rec(OP_MEMCPY, d, (int)n, 0); recs[nrecs - 1].src = (uint64_t)(uintptr_t)s; }
 void __stest_mmio_memset(volatile void *d, int c, size_t n) { rec(OP_MEMSET, d, (int)n, (uint64_t)(uint8_t)c); }
