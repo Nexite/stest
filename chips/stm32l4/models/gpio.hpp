@@ -18,7 +18,7 @@
 // deliver() (timestamped, from the control protocol inbox / Python Node.post, Pin.drive_at):
 // "drive_pin" {pin, level: 0 | 1 | null} at t schedules a Clock event at t that drives the
 // pin (null releases it, like release_pin); the resulting gpio event and PinEdge carry t
-// itself (exact, whatever the quantum), not the time the firmware's next access fired it.
+// itself (exact, whatever the quantum).
 //
 // Analog voltage (ADC inputs, DAC outputs), per pin, independent of the digital level
 // above (it never changes IDR): an external voltage set from outside (call "set_voltage"

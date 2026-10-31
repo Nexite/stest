@@ -17,18 +17,17 @@ void Clock::cancel(EventId id) {
   time_of_.erase(it);
 }
 
-uint64_t Clock::next_event_ns() const {
-  return events_.empty() ? std::numeric_limits<uint64_t>::max() : events_.begin()->first.first;
-}
-
-void Clock::run_due() {
-  while (!events_.empty() && events_.begin()->first.first <= now_) {
+void Clock::fire_until(uint64_t target) {
+  while (!events_.empty() && events_.begin()->first.first <= target) {
     auto it = events_.begin();
+    const uint64_t t = it->first.first;
     auto fn = std::move(it->second);
     time_of_.erase(it->first.second);
     events_.erase(it);
+    if (t > now_) now_ = t;
     fn();
   }
+  if (target > now_) now_ = target;
 }
 
 }  // namespace stest

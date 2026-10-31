@@ -153,14 +153,14 @@ int fw_poll_flag() {
 }
 
 // Access times of fw_record_access_times relative to its start, stopping at each `ends`
-// offset; checks that the node never stops past the quantum end.
+// offset; checks that the node stops at exactly the quantum end.
 std::vector<uint64_t> record_with_ends(std::initializer_list<uint64_t> ends) {
   Node node(kChip);
   const uint64_t t0 = node.now_ns();
   node.start(&fw_record_access_times);
   for (uint64_t e : ends) {
     CHECK(node.run_until(t0 + e) == Node::Stop::Quantum);
-    CHECK(node.now_ns() <= t0 + e);
+    CHECK(node.now_ns() == t0 + e);
   }
   REQUIRE(g_nrec == kRec);
   std::vector<uint64_t> out;
@@ -185,13 +185,13 @@ uint64_t seen_offset(bool schedule_while_parked) {
 }
 }  // namespace
 
-TEST_CASE("node: a charge never moves the clock past the quantum end; timing is boundary-independent") {
+TEST_CASE("node: a node stops exactly at the quantum end; timing is boundary-independent") {
   set_access_cost_ns(25);
   set_poll_skip_threshold(0);  // constant loads: no fast-forward (its jumps depend on the quantum)
   const auto straight = record_with_ends({10'000});
   CHECK(straight[0] == 25);
   CHECK(straight[kRec - 1] == 25u * kRec);
-  // Quantum ends on and off the 25 ns access grid, including ones that allow no progress.
+  // Quantum ends on and off the 25 ns access grid (an access crossing one completes on resume).
   CHECK(record_with_ends({7, 1010, 1011, 1012, 1333, 2000, 2001, 2024, 2025, 4999, 10'000}) == straight);
   set_poll_skip_threshold(64);
 }

@@ -98,8 +98,8 @@ def test_post_at_node_now_is_allowed(blinky_exe):
         n = s.node("b", blinky_exe)
         s.start()
         s.advance(ms=1)
-        t = n.now_ns  # never past the quantum end (<= 1 ms)
-        assert t <= s.now_ns
+        t = n.now_ns  # exactly the quantum end
+        assert t == s.now_ns
         n.post("GPIOA", "drive_pin", {"pin": 0, "level": 1}, t)
         s.advance(ms=1)
         assert n.pin("PA0").history == [(t, 1)]
@@ -270,7 +270,7 @@ def _pollpin_run(exe, quantum_us, post_at, poll_skip):
         else:
             for t, lv in drives:
                 s.advance(ns=(t // s.quantum_ns) * s.quantum_ns - s.now_ns)
-                assert n.now_ns <= s.now_ns <= t
+                assert n.now_ns == s.now_ns <= t
                 n.pin("PA0").drive_at(lv, t)
         s.advance(ms=5)
         assert n.var("rounds") == 4
@@ -294,14 +294,50 @@ def test_inbox_delivery_is_quantum_independent(pollpin_exe, poll_skip):
 
 
 @pytest.mark.parametrize("quantum_us", [1000, 100, 7])
-def test_node_never_stops_past_the_quantum_end(blinky_exe, tim_exe, quantum_us):
+def test_node_stops_exactly_at_the_quantum_end(blinky_exe, tim_exe, quantum_us):
     with Sim(quantum_us=quantum_us) as s:
         nodes = [s.node("b", blinky_exe), s.node("t", tim_exe)]
         s.start()
         for _ in range(40):
             s.advance(ns=33_337)  # ends off the quantum grid too
             for n in nodes:
-                assert n.now_ns <= s.now_ns, (n.name, n.now_ns, s.now_ns)
+                assert n.now_ns == s.now_ns, (n.name, n.now_ns, s.now_ns)
         s.advance(ms=600)
-        assert all(n.now_ns <= s.now_ns for n in nodes)
+        assert all(n.now_ns == s.now_ns for n in nodes)
         assert [t for t, _ in nodes[0].pin("PA5").history] == [500_001_825]
+
+
+@pytest.mark.parametrize("off", [3, 13, 24])
+def test_events_up_to_an_off_grid_quantum_end_are_visible(pollpin_exe, off):
+    """A quantum end off the 25 ns access grid: the node still stops at exactly T and every
+    event up to T (here the drive at T itself) has fired and been reported."""
+    t = 2_000_000 + off
+    with Sim(poll_skip=0) as s:
+        n = s.node("p", pollpin_exe)
+        s.start()
+        n.pin("PA0").drive_at(1, t)
+        s.advance(ns=t)
+        assert n.now_ns == t == s.now_ns
+        assert n.pin("PA0").history == [(t, 1)]
+
+
+def _two_node_log(exe, quantum_us):
+    with Sim(quantum_us=quantum_us, poll_skip=0) as s:
+        a, b = s.node("a", exe), s.node("b", exe)
+        s.start()
+        # Off-grid times, interleaved across the nodes (and one shared instant).
+        for node, plan in ((a, [(1_000_013, 1), (1_700_007, 0), (2_300_011, 1), (2_900_000, 0)]),
+                           (b, [(1_000_013, 1), (1_699_999, 0), (2_300_012, 1), (2_899_993, 0)])):
+            for t, lv in plan:
+                node.pin("PA0").drive_at(lv, t)
+        s.advance(ms=4)
+        assert a.var("rounds") == b.var("rounds") == 4
+        return list(s.event_log)
+
+
+def test_two_node_event_log_is_quantum_independent(pollpin_exe):
+    ref = _two_node_log(pollpin_exe, 1000)
+    assert {node for _, node, _ in ref} == {"a", "b"}
+    assert ref == sorted(ref, key=lambda e: (e[0], e[1]))  # merged by time, then node order
+    assert _two_node_log(pollpin_exe, 100) == ref
+    assert _two_node_log(pollpin_exe, 7) == ref

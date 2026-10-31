@@ -188,12 +188,11 @@ TEST_CASE("gpio: deliver drive_pin schedules the drive at t, event stamped t") {
   gpio.deliver("drive_pin", {{"pin", 0}, {"level", nullptr}}, 2000);  // release
   CHECK(gpio.pin_level(0) == 0);  // nothing changes before t
   CHECK(take_events().empty());
-  clock.advance(1010);  // the access whose charge crosses t ends 10 ns after it
-  clock.run_due();
+  clock.advance(1010);  // fires the drive at t (the callback runs at now == t), then on to 1010
   CHECK(gpio.pin_level(0) == 1);
   auto ev = take_events();
   REQUIRE(ev.size() == 1);
-  CHECK(ev[0].t_ns == 1000);  // stamped t, not the time it fired
+  CHECK(ev[0].t_ns == 1000);  // stamped t
   clock.advance(1000);
   clock.run_due();
   CHECK(gpio.pin_level(0) == 0);

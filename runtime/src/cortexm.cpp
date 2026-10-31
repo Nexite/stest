@@ -519,9 +519,7 @@ void Cortexm::wfi() {
   if (target == UINT64_MAX)
     throw std::runtime_error("wfi: nothing can wake the core (no pending exception, "
                              "no clock event, no quantum end)");
-  uint64_t now = c.clock.now_ns();
-  if (target > now) c.clock.advance(target - now);
-  c.clock.run_due();
+  c.clock.advance_to(target);  // fires every event up to target at its own time
   c.deliver();
   if (c.quantum_hook && c.clock.now_ns() >= c.quantum_end) {
     c.quantum_hook();
