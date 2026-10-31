@@ -26,4 +26,21 @@ using QuantumHook = void (*)();
 void set_quantum_end(uint64_t t_ns);  // default UINT64_MAX (never)
 uint64_t quantum_end();
 void set_quantum_hook(QuantumHook h);  // null by default
+
+// Poll fast-forward. A "poll streak" is a run of consecutive loads (in or out of the
+// peripheral windows) with no store and no exception taken, in which every load's
+// (addr, width, value) is one of at most 8 distinct tuples (re-reading an address with
+// a different value, or a 9th tuple, starts a new streak seeded by that load). Once a
+// streak reaches the threshold, the clock jumps to min(next clock event, quantum end)
+// and then behaves as a charge reaching that time would (due events fire, quantum hook
+// at the quantum end, delivery point); the streak restarts. Spinning would only have
+// re-read the same values until then, so the observable state is the same, with times
+// shifted by less than one access cost. Firmware that counts iterations of a loop
+// whose loads all return constant values (no store) is compressed too.
+// Model contract: see Peripheral (peripheral.hpp).
+void set_poll_skip_threshold(uint32_t loads);  // default 64; 0 disables
+uint32_t poll_skip_threshold();
+// Ends the current poll streak. Called by the core when it takes an exception and by
+// the node after a quantum handoff (the loop thread may have changed state).
+void poll_streak_break();
 }  // namespace stest

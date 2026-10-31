@@ -289,6 +289,7 @@ struct Cortexm::Impl {
     set_pend(exc, false);
     act[exc] = 1;
     stack.push_back(exc);
+    poll_streak_break();  // taking an exception ends any poll streak
     h();
     stack.pop_back();
     act[exc] = 0;

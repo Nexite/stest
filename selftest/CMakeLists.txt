@@ -8,3 +8,13 @@ stest_add_firmware(blinky
 add_test(NAME selftest_blinky_standalone
   COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:blinky>
           -P ${CMAKE_CURRENT_SOURCE_DIR}/check_blinky.cmake)
+
+# Same event log for different quantum sizes (poll fast-forward included).
+add_test(NAME selftest_blinky_quantum_determinism
+  COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:blinky>
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/check_blinky_determinism.cmake)
+
+# Speed budget: <= 0.4 s wall per virtual second (5 s virtual in <= 2.0 s).
+add_test(NAME selftest_blinky_speed
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/check_speed.py
+          $<TARGET_FILE:blinky> 5000 2.0)

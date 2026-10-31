@@ -19,6 +19,11 @@ struct UnknownOp : std::runtime_error {
       : std::runtime_error("unknown op: " + std::string(op)) {}
 };
 
+// Model contract (poll fast-forward, see runtime.hpp): a register value may change
+// over time only through a scheduled Clock event or by reading differently on each
+// access (like SysTick VAL). Lazily-computed "becomes ready at time T" state with no
+// Clock event at T would be skipped over: a firmware loop polling it would jump past T
+// to the next event or quantum end. Schedule an event at T instead.
 struct Peripheral {  // one instance per mapped block
   virtual ~Peripheral() = default;
   virtual std::string_view name() const = 0;

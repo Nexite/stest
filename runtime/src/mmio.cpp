@@ -1,6 +1,7 @@
 // Runtime implementation of the __stest_mmio_* ABI. This TU is NOT compiled
 // with the MMIO pass (its own volatile accesses must not recurse).
 #include "stest/mmio.h"
+#include <algorithm>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -17,6 +18,15 @@ uint64_t g_cost_ns = 25;
 stest::DeliveryHook g_hook = nullptr;
 uint64_t g_quantum_end = UINT64_MAX;
 stest::QuantumHook g_qhook = nullptr;
+
+// ---- poll streak (see runtime.hpp) ----
+constexpr unsigned kMaxTuples = 8;
+struct Tuple { uint64_t addr; uint64_t value; unsigned width; };
+uint32_t g_skip_threshold = 64;
+uint32_t g_streak = 0;         // loads in the current streak
+unsigned g_ntuples = 0;
+Tuple g_tuples[kMaxTuples];
+uint64_t g_break_epoch = 0;    // bumped by poll_streak_break()
 bool g_inited = false;
 
 constexpr uint64_t kPeriphBase = 0x40000000u, kPeriphSize = 0x20000000u;
@@ -33,17 +43,57 @@ void run_due_events() {
   catch (const std::exception& e) { stest_rt_abort("exception in clock event: %s", e.what()); }
   catch (...) { stest_rt_abort("unknown exception in clock event"); }
 }
-inline void charge() {
-  g_clock.advance(g_cost_ns);
+// After the clock moved: fire due events, then yield at the quantum end.
+inline void settle() {
   if (__builtin_expect(g_clock.next_event_ns() <= g_clock.now_ns(), 0)) run_due_events();
   // Quantum end: events due at <= now have fired; hand control back (blocks).
   if (__builtin_expect(g_clock.now_ns() >= g_quantum_end, 0) && g_qhook) g_qhook();
 }
-inline void deliver() {
+inline void charge() {
+  g_clock.advance(g_cost_ns);
+  settle();
+}
+void deliver() {
   if (!g_hook) return;
   try { g_hook(); }
   catch (const std::exception& e) { stest_rt_abort("exception in delivery hook: %s", e.what()); }
   catch (...) { stest_rt_abort("unknown exception in delivery hook"); }
+}
+
+inline void streak_reset() {
+  g_streak = 0;
+  g_ntuples = 0;
+}
+
+// Record a load; returns true when the streak reached the skip threshold.
+inline bool streak_load(uint64_t a, unsigned width, uint64_t v) {
+  for (unsigned i = 0; i < g_ntuples; ++i) {
+    Tuple& t = g_tuples[i];
+    if (t.addr == a && t.width == width) {
+      if (t.value != v) break;  // value changed: new streak seeded below
+      return ++g_streak >= g_skip_threshold;
+    }
+    if (i + 1 == g_ntuples && g_ntuples < kMaxTuples) {  // new tuple, room left
+      g_tuples[g_ntuples++] = {a, v, width};
+      return ++g_streak >= g_skip_threshold;
+    }
+  }
+  g_tuples[0] = {a, v, width};  // first load of a new streak
+  g_ntuples = 1;
+  g_streak = 1;
+  return g_streak >= g_skip_threshold;
+}
+
+void deliver();
+// Jump to where spinning would next see a change, as a charge reaching it would.
+void fast_forward() {
+  streak_reset();
+  uint64_t target = std::min(g_clock.next_event_ns(), g_quantum_end);
+  uint64_t now = g_clock.now_ns();
+  if (target == UINT64_MAX || target <= now) return;
+  g_clock.advance(target - now);
+  settle();
+  deliver();
 }
 
 [[noreturn]] void abort_access(const stest::UnmodelledAccess& e) {
@@ -85,12 +135,18 @@ inline uint64_t do_load(const volatile void* p, unsigned bytes) {
   } else {
     r = bus_read(a, bytes);
   }
+  uint64_t epoch = g_break_epoch;
   deliver();
+  if (__builtin_expect(g_skip_threshold != 0, 1)) {
+    if (epoch != g_break_epoch) streak_reset();  // exception taken: this load doesn't count
+    else if (__builtin_expect(streak_load(a, bytes, r), 0)) fast_forward();
+  }
   return r;
 }
 
 inline void do_store(volatile void* p, unsigned bytes, uint64_t v) {
   uint64_t a = (uint64_t)(uintptr_t)p;
+  streak_reset();
   charge();
   if (__builtin_expect(!in_window(a), 1)) {
     switch (bytes) {
@@ -118,6 +174,15 @@ void set_delivery_hook(DeliveryHook h) { g_hook = h; }
 void set_quantum_end(uint64_t t_ns) { g_quantum_end = t_ns; }
 uint64_t quantum_end() { return g_quantum_end; }
 void set_quantum_hook(QuantumHook h) { g_qhook = h; }
+void set_poll_skip_threshold(uint32_t loads) {
+  g_skip_threshold = loads;
+  streak_reset();
+}
+uint32_t poll_skip_threshold() { return g_skip_threshold; }
+void poll_streak_break() {
+  ++g_break_epoch;
+  streak_reset();
+}
 }  // namespace stest
 
 extern "C" {

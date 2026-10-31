@@ -43,7 +43,10 @@ struct Baton {
 };
 
 Baton* g_baton = nullptr;  // of the live Node; read only on the firmware thread
-void quantum_yield() { g_baton->fw_yield(); }
+void quantum_yield() {
+  g_baton->fw_yield();
+  poll_streak_break();  // the loop thread may have changed model/memory state
+}
 
 struct ThreadArg {
   std::shared_ptr<Baton> baton;

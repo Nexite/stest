@@ -14,6 +14,8 @@ add_library(stest_runtime STATIC src/mmio.cpp src/bus.cpp src/clock.cpp src/peri
                                  src/node.cpp)
 target_include_directories(stest_runtime PUBLIC include)
 target_link_libraries(stest_runtime PUBLIC nlohmann_json::nlohmann_json Threads::Threads)
+# Hot path of every firmware access: always optimised, even in Debug/unset configs.
+target_compile_options(stest_runtime PRIVATE -O2)
 
 add_executable(runtime_tests tests/main.cpp tests/test_bus.cpp tests/test_clock.cpp tests/test_mmio.cpp)
 target_link_libraries(runtime_tests PRIVATE stest_runtime doctest::doctest)
@@ -79,3 +81,8 @@ endforeach()
 add_executable(runtime_node_tests tests/main.cpp tests/test_node.cpp)
 target_link_libraries(runtime_node_tests PRIVATE stest_runtime doctest::doctest)
 add_test(NAME runtime_node COMMAND runtime_node_tests)
+
+# ---- Task 5 fix: poll fast-forward ----
+add_executable(runtime_poll_skip_tests tests/main.cpp tests/test_poll_skip.cpp)
+target_link_libraries(runtime_poll_skip_tests PRIVATE stest_runtime doctest::doctest)
+add_test(NAME runtime_poll_skip COMMAND runtime_poll_skip_tests)
