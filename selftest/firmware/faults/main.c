@@ -3,6 +3,10 @@
  *   CRASH       null-pointer store at 10 ms (host SIGSEGV/SIGBUS)
  *   UNMODELLED  write to USART1 (0x40013800, not modelled) at 10 ms (strict abort)
  *   RO_WRITE    write to GPIOA->IDR (read-only register) at 10 ms (strict abort)
+ *   CLKOFF      write to GPIOB->ODR without enabling the GPIOB clock at 10 ms (strict abort)
+ *
+ * Every variant except CLKOFF enables the GPIOA clock first (GPIO access with its RCC
+ * enable bit clear is itself a strict abort).
  *
  * Time base: SysTick at 1 kHz from the reset clock (MSI 4 MHz); the firmware sleeps
  * in WFI until the 10th tick (virtual t = 10 ms + startup offset). Before that, if the
@@ -17,8 +21,9 @@
 #define CRASH 2
 #define UNMODELLED 3
 #define RO_WRITE 4
+#define CLKOFF 5
 #ifndef FAULT
-#error "define FAULT=SPIN|CRASH|UNMODELLED|RO_WRITE"
+#error "define FAULT=SPIN|CRASH|UNMODELLED|RO_WRITE|CLKOFF"
 #endif
 
 static volatile uint32_t ticks;
@@ -34,6 +39,9 @@ int main(void)
       fprintf(stderr, "chatter %ld ......................................................................\n", i);
   }
 
+#if FAULT != CLKOFF
+  RCC->AHB2ENR |= RCC_AHB2ENR_GPIOAEN;
+#endif
   SysTick_Config(SystemCoreClock / 1000u);
   while (ticks < 10u)
     __WFI();
@@ -48,6 +56,8 @@ int main(void)
   *(volatile uint32_t *)0x40013800u = 1u; /* USART1->CR1: no USART model */
 #elif FAULT == RO_WRITE
   GPIOA->IDR = 1u; /* read-only register: strict abort, not a silent no-op */
+#elif FAULT == CLKOFF
+  GPIOB->ODR = 1u; /* GPIOB clock (RCC AHB2ENR bit 1) never enabled: strict abort */
 #else
 #error "unknown FAULT"
 #endif

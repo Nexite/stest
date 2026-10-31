@@ -21,10 +21,10 @@ add_test(NAME selftest_blinky_speed
           $<TARGET_FILE:blinky> 5000 2.0)
 
 # Fault-injection firmware: one executable per variant (faults_spin, faults_crash,
-# faults_unmodelled, faults_ro_write). Uses no HAL, so the HAL archive is a single file; the HAL config
+# faults_unmodelled, faults_ro_write, faults_clkoff). Uses no HAL, so the HAL archive is a single file; the HAL config
 # header is borrowed from blinky.
 stest_st_family_dirs(stm32l4 _st_hal _st_dev)
-foreach(variant SPIN CRASH UNMODELLED RO_WRITE)
+foreach(variant SPIN CRASH UNMODELLED RO_WRITE CLKOFF)
   string(TOLOWER ${variant} v)
   stest_add_firmware(faults_${v}
     CHIP STM32L496RG

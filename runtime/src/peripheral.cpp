@@ -54,5 +54,6 @@ void RegisterFile::write(uint32_t off, unsigned width, uint32_t v) {
 void RegisterFile::reset() { for (auto& r : regs_) r.value = r.reset; }
 uint32_t RegisterFile::get(uint32_t off) const { return find(off, 4, false).value; }
 void RegisterFile::set(uint32_t off, uint32_t v) { find(off, 4, true).value = v; }
+const uint32_t* RegisterFile::value_ptr(uint32_t off) const { return &find(off, 4, false).value; }
 
 }  // namespace stest

@@ -5,7 +5,7 @@ namespace {
 enum : uint32_t { CR1 = 0x00, CR2 = 0x04, CR3 = 0x08, CR4 = 0x0C, SR1 = 0x10, SR2 = 0x14, SCR = 0x18 };
 }
 
-Pwr::Pwr(std::string name, const nlohmann::json&, Clock&) : name_(std::move(name)) {
+Pwr::Pwr(std::string name, const nlohmann::json&, ModelContext&) : name_(std::move(name)) {
   regs_.declare(CR1, 0x00000200, 0x00004707);  // VOS=01 (range 1); LPR, DBP, LPMS
   regs_.declare(CR2, 0x00000000, 0x000006FF);
   regs_.declare(CR3, 0x00008000, 0x0000851F);  // EIWUL

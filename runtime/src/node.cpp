@@ -95,6 +95,7 @@ Peripheral* find_model(std::string_view name) {
 struct Node::Impl {
   ChipDesc chip;
   std::unique_ptr<Cortexm> core;
+  std::unique_ptr<ModelContext> ctx;
   std::shared_ptr<Baton> baton = std::make_shared<Baton>();
   pthread_t thread{};
   bool started = false;
@@ -113,7 +114,8 @@ Node::Node(const ChipDesc& chip) {
   set_quantum_hook(&quantum_yield);
   impl_->core->set_quantum_hook(&quantum_yield);
   set_quantum_end(UINT64_MAX);
-  if (chip.init) chip.init(runtime_bus(), runtime_clock(), *impl_->core);
+  impl_->ctx = std::make_unique<ModelContext>(runtime_clock(), *impl_->core, runtime_bus());
+  if (chip.init) chip.init(*impl_->ctx);
 }
 
 Node::~Node() {
@@ -132,6 +134,7 @@ Node::~Node() {
   g_models.clear();
   g_events.clear();
   g_baton = nullptr;
+  impl_->ctx.reset();
   impl_->core.reset();  // unmaps core blocks, uninstalls the core + delivery hook
   g_node_alive = false;
 }
@@ -166,6 +169,7 @@ bool Node::exited() const { return impl_->baton->exited; }
 int Node::exit_code() const { return impl_->baton->rc; }
 uint64_t Node::now_ns() const { return runtime_clock().now_ns(); }
 Cortexm& Node::core() { return *impl_->core; }
+ModelContext& Node::models() { return *impl_->ctx; }
 const ChipDesc& Node::chip() const { return impl_->chip; }
 
 }  // namespace stest

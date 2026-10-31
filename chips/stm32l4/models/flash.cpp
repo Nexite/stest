@@ -12,7 +12,7 @@ constexpr uint32_t kLock = 1u << 31, kOptLock = 1u << 30;
 constexpr uint32_t kStrt = 1u << 16, kOptStrt = 1u << 17;
 }  // namespace
 
-Flash::Flash(std::string name, const nlohmann::json&, Clock&) : name_(std::move(name)) {
+Flash::Flash(std::string name, const nlohmann::json&, ModelContext&) : name_(std::move(name)) {
   regs_.declare(ACR, 0x00000600, 0x00007F07);  // ICEN|DCEN; LATENCY, PRFTEN, ICRST, DCRST, RUN_PD, SLEEP_PD
   regs_.declare_write_only(PDKEYR);
   regs_.declare_write_only(KEYR);

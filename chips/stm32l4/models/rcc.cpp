@@ -26,7 +26,8 @@ constexpr uint32_t kResetFlags = 0xFF000000u;  // CSR FWRSTF..LPWRRSTF
 constexpr uint32_t kRmvf = bit(23);
 }  // namespace
 
-Rcc::Rcc(std::string name, const nlohmann::json&, Clock&) : name_(std::move(name)) {
+Rcc::Rcc(std::string name, const nlohmann::json& params, ModelContext&)
+    : name_(std::move(name)), hse_hz_(params.value("hse_hz", uint64_t{8000000})) {
   // off, reset, rw mask (RM0351, STM32L496)
   regs_.declare(CR, 0x00000063, kCrRw);                       // MSION|MSIRDY|MSIRANGE=6 (4 MHz)
   regs_.declare(ICSCR, 0x40000000, 0x7F00FF00);               // HSITRIM=64; *CAL factory -> 0
@@ -93,5 +94,78 @@ void Rcc::follow() {
   follow0(BDCR);   // LSEON -> LSERDY
   follow0(CRRCR);  // HSI48ON -> HSI48RDY
 }
+
+// ---- clock tree (RM0351 6.2, 6.4) ----
+namespace {
+constexpr uint64_t kHsi16 = 16000000;
+constexpr uint64_t kMsiHz[12] = {100000,  200000,  400000,   800000,   1000000,  2000000,
+                                 4000000, 8000000, 16000000, 24000000, 32000000, 48000000};
+constexpr uint32_t field(uint32_t v, unsigned lsb, unsigned width) {
+  return (v >> lsb) & ((1u << width) - 1u);
+}
+}  // namespace
+
+uint64_t Rcc::msi_hz() const {
+  uint32_t cr = regs_.get(CR);
+  uint32_t range = (cr & bit(3)) ? field(cr, 4, 4) : field(regs_.get(CSR), 8, 4);
+  return range < 12 ? kMsiHz[range] : 0;  // ranges 12..15 are reserved
+}
+
+uint64_t Rcc::pll_input_hz() const {
+  uint32_t pllcfgr = regs_.get(PLLCFGR);
+  uint64_t src;
+  switch (field(pllcfgr, 0, 2)) {
+    case 1: src = msi_hz(); break;
+    case 2: src = kHsi16; break;
+    case 3: src = hse_hz_; break;
+    default: return 0;  // no clock
+  }
+  return src / (field(pllcfgr, 4, 3) + 1);  // PLLM = field + 1
+}
+
+uint64_t Rcc::sysclk_hz() const {
+  switch (field(regs_.get(CFGR), 0, 2)) {
+    case 0: return msi_hz();
+    case 1: return kHsi16;
+    case 2: return hse_hz_;
+    default: {
+      uint32_t pllcfgr = regs_.get(PLLCFGR);
+      uint64_t r = (field(pllcfgr, 25, 2) + 1) * 2;  // PLLR: 00 -> /2 .. 11 -> /8
+      return pll_input_hz() * field(pllcfgr, 8, 7) / r;
+    }
+  }
+}
+
+uint64_t Rcc::hclk_hz() const {
+  uint32_t hpre = field(regs_.get(CFGR), 4, 4);
+  static constexpr unsigned kShift[8] = {1, 2, 3, 4, 6, 7, 8, 9};  // 1000 -> /2 .. 1111 -> /512
+  return (hpre & 8u) ? sysclk_hz() >> kShift[hpre & 7u] : sysclk_hz();
+}
+
+uint64_t Rcc::pclk1_hz() const {
+  uint32_t ppre = field(regs_.get(CFGR), 8, 3);
+  return (ppre & 4u) ? hclk_hz() >> ((ppre & 3u) + 1) : hclk_hz();  // 100 -> /2 .. 111 -> /16
+}
+
+uint64_t Rcc::pclk2_hz() const {
+  uint32_t ppre = field(regs_.get(CFGR), 11, 3);
+  return (ppre & 4u) ? hclk_hz() >> ((ppre & 3u) + 1) : hclk_hz();
+}
+
+uint64_t Rcc::pllsai1r_hz() const {
+  uint32_t cfg = regs_.get(PLLSAI1CFGR);
+  if (!(regs_.get(CR) & bit(26)) || !(cfg & bit(24))) return 0;  // PLLSAI1ON, PLLSAI1REN
+  return pll_input_hz() * field(cfg, 8, 7) / ((field(cfg, 25, 2) + 1) * 2);
+}
+
+uint64_t Rcc::pllsai2r_hz() const {
+  uint32_t cfg = regs_.get(PLLSAI2CFGR);
+  if (!(regs_.get(CR) & bit(28)) || !(cfg & bit(24))) return 0;  // PLLSAI2ON, PLLSAI2REN
+  return pll_input_hz() * field(cfg, 8, 7) / ((field(cfg, 25, 2) + 1) * 2);
+}
+
+uint32_t Rcc::adcsel() const { return field(regs_.get(CCIPR), 28, 2); }
+
+bool Rcc::enabled(uint32_t reg_off, unsigned b) const { return b < 32 && ((regs_.get(reg_off) >> b) & 1u); }
 
 }  // namespace stest::stm32l4

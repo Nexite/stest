@@ -10,13 +10,20 @@ The generated file defines, for the part:
     It must be linked as an object (never from an archive) so that the firmware's
     strong definitions win on both ELF and Mach-O.
   * the IRQ table (index = IRQn + 16) referring to those symbols,
-  * stest_chip_init(Bus&, Clock&, Cortexm&): model instances, Bus::map +
-    register_model for each [[peripheral]], core clock getter (CMSIS SystemCoreClock)
-    and the SysTick external-reference divider,
+  * stest_chip_init(ModelContext&): model instances (constructed and reset), ctx.add,
+    set_clock_tree([clock_tree] peripheral), connect() on each, then Bus::map + set_gate
+    (peripherals with rcc_enable) + register_model, core clock getter (CMSIS
+    SystemCoreClock) and the SysTick external-reference divider,
   * `extern const stest::ChipDesc stest_chip` consumed by node_main.cpp.
 
 Model "<family>.<kind>" maps to class stest::<family>::<Kind> declared in
-chips/<family>/models/<kind>.hpp, constructed as (name, params-json, Clock&).
+chips/<family>/models/<kind>.hpp, constructed as (name, params-json, ModelContext&).
+
+Clock gating: [clock_tree] names the clock-tree model (`peripheral`, implements
+stest::ClockTree) and the RCC enable registers by name (`enable_regs = { AHB2ENR = 0x4C,
+... }`, offsets in the RCC block). A [[peripheral]] with
+`rcc_enable = { reg = "AHB2ENR", bit = 0 }` is gated on that bit: any access while it is
+clear aborts "access to <NAME> while its clock is disabled (RCC AHB2ENR bit 0)".
 
 Python >= 3.11, standard library only (tomllib).
 """
@@ -73,6 +80,35 @@ def load(path: Path) -> dict:
         fam, _, kind = p["model"].partition(".")
         if not IDENT.match(fam) or not IDENT.match(kind):
             raise ChipError(f"{path}: bad model '{p['model']}' (want <family>.<kind>)")
+    tree = data.get("clock_tree")
+    regs = {}
+    if tree is not None:
+        if not isinstance(tree, dict) or tree.get("peripheral") not in names:
+            raise ChipError(f"{path}: [clock_tree] peripheral must name a [[peripheral]]")
+        regs = tree.get("enable_regs", {})
+        if not isinstance(regs, dict) or not all(
+            IDENT.match(k) and isinstance(v, int) and 0 <= v < 0x400 and v % 4 == 0 for k, v in regs.items()
+        ):
+            raise ChipError(f"{path}: [clock_tree] enable_regs must map NAME = word offset")
+    for p in periphs:
+        gate = p.get("rcc_enable")
+        if gate is None:
+            continue
+        if tree is None:
+            raise ChipError(f"{path}: {p['name']}: rcc_enable needs a [clock_tree] table")
+        if p["name"] == tree["peripheral"]:
+            raise ChipError(f"{path}: {p['name']}: the clock-tree peripheral cannot be gated")
+        if (
+            not isinstance(gate, dict)
+            or set(gate) != {"reg", "bit"}
+            or gate["reg"] not in regs
+            or not isinstance(gate["bit"], int)
+            or not 0 <= gate["bit"] < 32
+        ):
+            raise ChipError(
+                f"{path}: {p['name']}: bad rcc_enable {gate!r} "
+                f"(want {{ reg = <one of {sorted(regs)}>, bit = 0..31 }})"
+            )
     irqs = data.get("irq", {})
     seen = {}
     for name, num in irqs.items():
@@ -107,6 +143,7 @@ def generate(data: dict, source_name: str) -> str:
     w("#include <cstdint>")
     w("#include <nlohmann/json.hpp>")
     w('#include "stest/cortexm.hpp"')
+    w('#include "stest/model_context.hpp"')
     w('#include "stest/mmio.h"')
     w('#include "stest/node.hpp"')
     for header in sorted({model_class(p["model"])[0] for p in periphs}):
@@ -140,14 +177,32 @@ def generate(data: dict, source_name: str) -> str:
         w(f"void chip_startup() {{ {system_init}(); }}")
     w("}  // namespace")
     w("")
-    w("void stest_chip_init(stest::Bus& bus, stest::Clock& clock, stest::Cortexm& core) {")
+    tree = data.get("clock_tree")
+    w("void stest_chip_init(stest::ModelContext& ctx) {")
+    w("  stest::Bus& bus = ctx.bus();")
+    w("  stest::Cortexm& core = ctx.core();")
     for p in periphs:
         _, cls = model_class(p["model"])
         params = json.dumps(p.get("params", {}), sort_keys=True, separators=(",", ":"))
         var = f"m_{p['name']}"
-        w(f'  static {cls} {var}("{p["name"]}", nlohmann::json::parse(R"json({params})json"), clock);')
+        w(f'  static {cls} {var}("{p["name"]}", nlohmann::json::parse(R"json({params})json"), ctx);')
         w(f"  {var}.reset();")
+    for p in periphs:
+        w(f"  ctx.add(&m_{p['name']});")
+    if tree:
+        w(f"  ctx.set_clock_tree(&m_{tree['peripheral']});")
+    for p in periphs:
+        w(f"  m_{p['name']}.connect(ctx);")
+    for p in periphs:
+        var = f"m_{p['name']}"
         w(f"  bus.map(0x{p['base']:08X}u, 0x{p['size']:X}u, &{var});")
+        gate = p.get("rcc_enable")
+        if gate:
+            off = tree["enable_regs"][gate["reg"]]
+            w(
+                f"  bus.set_gate(&{var}, ctx.clocks().enable_word(0x{off:02X}u), 1u << {gate['bit']}, "
+                f'"{tree["peripheral"]} {gate["reg"]} bit {gate["bit"]}");'
+            )
         w(f"  stest::register_model(&{var});")
     w("  core.set_core_clock_getter(&core_clock);")
     if divider:

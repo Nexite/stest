@@ -14,6 +14,12 @@ system_init = "SystemInit"
 # SysTick CLKSOURCE=0 is HCLK/8 on STM32L4.
 systick_external_divider = 8
 
+# Clock-tree model and the RCC enable registers that rcc_enable may name (RM0351 6.4).
+# A peripheral with rcc_enable aborts on any access while that bit is clear.
+[clock_tree]
+peripheral = "RCC"
+enable_regs = { AHB1ENR = 0x48, AHB2ENR = 0x4C, AHB3ENR = 0x50, APB1ENR1 = 0x58, APB1ENR2 = 0x5C, APB2ENR = 0x60 }
+
 [[peripheral]]
 name = "RCC"
 model = "stm32l4.rcc"
@@ -25,6 +31,7 @@ name = "PWR"
 model = "stm32l4.pwr"
 base = 0x40007000
 size = 0x400
+rcc_enable = { reg = "APB1ENR1", bit = 28 }
 
 [[peripheral]]
 name = "FLASH"
@@ -38,6 +45,7 @@ name = "GPIOA"
 model = "stm32l4.gpio"
 base = 0x48000000
 size = 0x400
+rcc_enable = { reg = "AHB2ENR", bit = 0 }
 params = { port = "A", moder_reset = 0xABFFFFFF, ospeedr_reset = 0x0C000000, pupdr_reset = 0x64000000 }
 
 [[peripheral]]
@@ -45,6 +53,7 @@ name = "GPIOB"
 model = "stm32l4.gpio"
 base = 0x48000400
 size = 0x400
+rcc_enable = { reg = "AHB2ENR", bit = 1 }
 params = { port = "B", moder_reset = 0xFFFFFEBF, ospeedr_reset = 0x000000C0, pupdr_reset = 0x00000100 }
 
 [[peripheral]]
@@ -52,6 +61,7 @@ name = "GPIOC"
 model = "stm32l4.gpio"
 base = 0x48000800
 size = 0x400
+rcc_enable = { reg = "AHB2ENR", bit = 2 }
 params = { port = "C" }
 
 [[peripheral]]
@@ -59,6 +69,7 @@ name = "GPIOD"
 model = "stm32l4.gpio"
 base = 0x48000C00
 size = 0x400
+rcc_enable = { reg = "AHB2ENR", bit = 3 }
 params = { port = "D" }
 
 [[peripheral]]
@@ -66,6 +77,7 @@ name = "GPIOE"
 model = "stm32l4.gpio"
 base = 0x48001000
 size = 0x400
+rcc_enable = { reg = "AHB2ENR", bit = 4 }
 params = { port = "E" }
 
 [[peripheral]]
@@ -73,6 +85,7 @@ name = "GPIOF"
 model = "stm32l4.gpio"
 base = 0x48001400
 size = 0x400
+rcc_enable = { reg = "AHB2ENR", bit = 5 }
 params = { port = "F" }
 
 [[peripheral]]
@@ -80,6 +93,7 @@ name = "GPIOG"
 model = "stm32l4.gpio"
 base = 0x48001800
 size = 0x400
+rcc_enable = { reg = "AHB2ENR", bit = 6 }
 params = { port = "G" }
 
 [[peripheral]]
@@ -87,6 +101,7 @@ name = "GPIOH"
 model = "stm32l4.gpio"
 base = 0x48001C00
 size = 0x400
+rcc_enable = { reg = "AHB2ENR", bit = 7 }
 params = { port = "H" }
 
 [[peripheral]]
@@ -94,6 +109,7 @@ name = "GPIOI"
 model = "stm32l4.gpio"
 base = 0x48002000
 size = 0x400
+rcc_enable = { reg = "AHB2ENR", bit = 8 }
 params = { port = "I" }
 
 # External interrupts: IRQn from stm32l496xx.h (79 is reserved).

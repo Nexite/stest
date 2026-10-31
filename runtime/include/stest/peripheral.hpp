@@ -8,6 +8,8 @@
 
 namespace stest {
 
+class ModelContext;  // model_context.hpp
+
 struct UnmodelledRegister : std::runtime_error {
   uint32_t off; unsigned width; bool is_write;
   UnmodelledRegister(uint32_t o, unsigned w, bool wr)
@@ -38,6 +40,9 @@ struct Peripheral {  // one instance per mapped block
   virtual uint32_t read(uint32_t off, unsigned width) = 0;  // width in bytes: 1,2,4
   virtual void write(uint32_t off, unsigned width, uint32_t v) = 0;
   virtual void reset() {}
+  // Called once after every model of the chip exists and the clock tree is registered
+  // (generated init, see model_context.hpp): look up peers, subscribe to their Signals.
+  virtual void connect(ModelContext&) {}
   virtual nlohmann::json call(std::string_view op, const nlohmann::json& args);  // throws UnknownOp
 };
 
@@ -76,6 +81,9 @@ class RegisterFile {
   // Model-side access (bypasses masks). Throws UnmodelledRegister if undeclared.
   uint32_t get(uint32_t off) const;
   void set(uint32_t off, uint32_t v);
+  // Stable address of a declared register's current value (valid for the RegisterFile's
+  // lifetime), for cheap live reads such as Bus clock gates. Throws UnmodelledRegister.
+  const uint32_t* value_ptr(uint32_t off) const;
 
  private:
   struct Reg { uint32_t value = 0, reset = 0, rw = 0, w1c = 0; bool declared = false, write_only = false; };

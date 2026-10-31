@@ -25,8 +25,8 @@ unsigned pin_arg(const nlohmann::json& args) {
 }
 }  // namespace
 
-Gpio::Gpio(std::string name, const nlohmann::json& params, Clock& clock)
-    : name_(std::move(name)), port_(params.value("port", std::string{})), clock_(clock) {
+Gpio::Gpio(std::string name, const nlohmann::json& params, ModelContext& ctx)
+    : name_(std::move(name)), port_(params.value("port", std::string{})), clock_(ctx.clock()) {
   if (port_.size() != 1) throw std::invalid_argument("gpio params need port=\"A\"..\"I\"");
   regs_.declare(MODER, params.value("moder_reset", 0xFFFFFFFFu), 0xFFFFFFFF);
   regs_.declare(OTYPER, 0, 0x0000FFFF);

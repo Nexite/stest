@@ -27,7 +27,7 @@ stest is an open-source (Apache-2.0) STM32 software-in-the-loop simulator. Real 
 
 Build time:
 - `stest_add_firmware(name CHIP <part> SOURCES ... [INCLUDE_DIRS] [DEFINES] [HAL_SOURCES])` builds firmware + HAL with `STEST_CLANG` + the pass, `-g -O0`. Firmware sources (only) get `-Dmain=stest_firmware_main`; the runtime's `node_main.cpp` provides the real `main`.
-- `tools/gen_chip.py` generates per-part glue from the TOML. Model `<family>.<kind>` maps to class `stest::<family>::<Kind>` in `chips/<family>/models/<kind>.hpp`, constructed `(name, params-json, Clock&)`.
+- `tools/gen_chip.py` generates per-part glue from the TOML. Model `<family>.<kind>` maps to class `stest::<family>::<Kind>` in `chips/<family>/models/<kind>.hpp`, constructed `(name, params-json, ModelContext&)`; the generated init then calls `ctx.add`, `set_clock_tree`, `connect()` on each, `Bus::map` and `Bus::set_gate` (see `runtime/include/stest/model_context.hpp`).
 - ST sources (L4 HAL, CMSIS device, CMSIS-Core) are fetched at pinned commits with SHA-256 (`cmake/StestFetchST.cmake`). Override with `-DSTEST_STM32L4_HAL_DIR=`, `-DSTEST_STM32L4_CMSIS_DEVICE_DIR=`, `-DSTEST_CMSIS_CORE_DIR=`. CMSIS-Core is staged without its toolchain headers so the host shim wins.
 
 Run time:
@@ -90,12 +90,13 @@ Note the Docker build writes into the host `build/`; if you share the tree with 
 
 ## Adding a peripheral model (current state)
 
-Plan 2 is adding `ModelContext` (model-to-model lookup, clock tree, RCC enable gating) and a `connect()` phase; `docs/adding-a-peripheral.md` will hold the full guide. Today, follow the existing L4 models (`chips/stm32l4/models/{rcc,pwr,flash,gpio}.{hpp,cpp}`):
-1. Create `chips/<family>/models/<kind>.{hpp,cpp}`: class `stest::<family>::<Kind>` deriving `stest::Peripheral`, ctor `(name, params-json, Clock&)`; implement `name/read/write/reset`, and `call()` for Python-facing ops (throw `UnknownOp` otherwise).
-2. Use `RegisterFile`: `declare(off, reset, rw_mask, w1c_mask)`; `declare_write_only` for BSRR/KEYR-style registers; rw=w1c=0 makes a register read-only (writes abort). Layouts and reset values follow RM0351 and ST's `stm32l496xx.h`.
-3. Time-driven behaviour: schedule `Clock` events (model contract above). Emit observable changes with `emit_event`. Raise IRQs through the Cortexm/NVIC API, not directly.
-4. Add the `.cpp` to `chips/stm32l4/CMakeLists.txt`, doctest cases to `chips/stm32l4/tests/test_models.cpp`, a `[[peripheral]]` entry (`name`, `model = "stm32l4.<kind>"`, `base`, `size`, optional `params`) in the part TOML.
-5. Add a Python/e2e test and, if firmware behaviour matters, a self-test firmware.
+`docs/adding-a-peripheral.md` will hold the full guide (Plan 2). Follow the existing L4 models (`chips/stm32l4/models/{rcc,pwr,flash,gpio}.{hpp,cpp}`):
+1. Create `chips/<family>/models/<kind>.{hpp,cpp}`: class `stest::<family>::<Kind>` deriving `stest::Peripheral`, ctor `(name, params-json, ModelContext& ctx)` (use `ctx.clock()`, `ctx.core()`; do not look up other models here); implement `name/read/write/reset`, and `call()` for Python-facing ops (throw `UnknownOp` otherwise).
+2. Cross-model wiring goes in `connect(ModelContext&)`, called once every model exists: `ctx.get<OtherModel>("NAME")` (wrong type/missing -> `std::logic_error`), `ctx.clocks()` (the RCC's `ClockTree`: SYSCLK/HCLK/PCLKx/PLLSAIxR/ADCSEL, computed live from RCC registers; never cache a frequency), and `Signal<T>::subscribe` for synchronous notifications.
+3. Use `RegisterFile`: `declare(off, reset, rw_mask, w1c_mask)`; `declare_write_only` for BSRR/KEYR-style registers; rw=w1c=0 makes a register read-only (writes abort). Layouts and reset values follow RM0351 and ST's `stm32l496xx.h`.
+4. Time-driven behaviour: schedule `Clock` events (model contract above). Emit observable changes with `emit_event`. Raise IRQs through the Cortexm/NVIC API, not directly.
+5. Add the `.cpp` to `chips/stm32l4/CMakeLists.txt`, doctest cases to `chips/stm32l4/tests/`, a `[[peripheral]]` entry (`name`, `model = "stm32l4.<kind>"`, `base`, `size`, optional `params`, and `rcc_enable = { reg = "APB2ENR", bit = n }` if RCC gates its clock; `reg` must be listed in `[clock_tree] enable_regs`). Gated peripherals abort on any access while the bit is clear: `access to <NAME> while its clock is disabled (RCC <REG> bit <n>)`.
+6. Add a Python/e2e test and, if firmware behaviour matters, a self-test firmware (enable the peripheral's RCC clock first).
 
 ## Adding a chip / part
 
@@ -106,7 +107,7 @@ Plan 2 is adding `ModelContext` (model-to-model lookup, clock tree, RCC enable g
 ## Testing conventions
 
 - TDD: write the failing test first. C++ uses doctest; CTest names are prefixed `runtime_`, `chip_`, `selftest_` (and `python_tests`). Python and e2e use pytest (`python/tests/`, `pytester` for plugin tests).
-- Self-test firmwares live in `selftest/firmware/*`; fault injection is one exe per variant (`faults_spin|crash|unmodelled|ro_write`).
+- Self-test firmwares live in `selftest/firmware/*`; fault injection is one exe per variant (`faults_spin|crash|unmodelled|ro_write|clkoff`).
 - Every CTest has a `TIMEOUT` (30 s for runtime/selftests, 300 for `python_tests`); set one on new tests.
 - Before claiming done, run the full suite natively AND in Docker (Linux-only paths like `PR_SET_PDEATHSIG` and `/proc` differ from macOS).
 - Do not match on raw JSON key order in event logs (keys are sorted).

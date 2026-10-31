@@ -3,6 +3,8 @@
 #include <nlohmann/json.hpp>
 #include "stest/bus.hpp"
 #include "stest/clock.hpp"
+#include "stest/cortexm.hpp"
+#include "stest/model_context.hpp"
 #include "stest/node.hpp"
 #include "stm32l4/models/flash.hpp"
 #include "stm32l4/models/gpio.hpp"
@@ -12,13 +14,16 @@ using namespace stest;
 using nlohmann::json;
 
 namespace {
+const IrqHandler kTable[16] = {};
 constexpr uint64_t RCC = 0x40021000, PWR = 0x40007000, FLASH = 0x40022000, GPIOA = 0x48000000;
 }
 
 TEST_CASE("rcc: reset values, ready bits follow enables, SWS mirrors SW") {
   Bus bus;
   Clock clock;
-  stm32l4::Rcc rcc("RCC", json::object(), clock);
+  Cortexm core(bus, clock, 4, kTable, 16);
+  ModelContext ctx(clock, core, bus);
+  stm32l4::Rcc rcc("RCC", json::object(), ctx);
   bus.map(RCC, 0x400, &rcc);
   CHECK(bus.read(RCC + 0x00, 4) == 0x00000063);  // MSION | MSIRDY | MSIRANGE=6
   CHECK(bus.read(RCC + 0x04, 4) == 0x40000000);  // ICSCR: HSITRIM=64 (L496)
@@ -63,7 +68,9 @@ TEST_CASE("rcc: reset values, ready bits follow enables, SWS mirrors SW") {
 TEST_CASE("pwr: VOS read-back, VOSF reads 0") {
   Bus bus;
   Clock clock;
-  stm32l4::Pwr pwr("PWR", json::object(), clock);
+  Cortexm core(bus, clock, 4, kTable, 16);
+  ModelContext ctx(clock, core, bus);
+  stm32l4::Pwr pwr("PWR", json::object(), ctx);
   bus.map(PWR, 0x400, &pwr);
   CHECK(bus.read(PWR + 0x00, 4) == 0x00000200);
   CHECK(bus.read(PWR + 0x08, 4) == 0x00008000);
@@ -80,7 +87,9 @@ TEST_CASE("pwr: VOS read-back, VOSF reads 0") {
 TEST_CASE("flash: ACR latency read-back, CR lock/unlock") {
   Bus bus;
   Clock clock;
-  stm32l4::Flash flash("FLASH", json::object(), clock);
+  Cortexm core(bus, clock, 4, kTable, 16);
+  ModelContext ctx(clock, core, bus);
+  stm32l4::Flash flash("FLASH", json::object(), ctx);
   bus.map(FLASH, 0x400, &flash);
   CHECK(bus.read(FLASH + 0x00, 4) == 0x00000600);
   bus.write(FLASH + 0x00, 4, 0x604);
@@ -102,9 +111,11 @@ TEST_CASE("flash: ACR latency read-back, CR lock/unlock") {
 TEST_CASE("gpio: output pin via BSRR/ODR/BRR, IDR, events, calls") {
   Bus bus;
   Clock clock;
+  Cortexm core(bus, clock, 4, kTable, 16);
+  ModelContext ctx(clock, core, bus);
   stm32l4::Gpio gpio("GPIOA", json{{"port", "A"}, {"moder_reset", 0xABFFFFFFu},
                                    {"ospeedr_reset", 0x0C000000u}, {"pupdr_reset", 0x64000000u}},
-                     clock);
+                     ctx);
   bus.map(GPIOA, 0x400, &gpio);
   (void)take_events();
   CHECK(bus.read(GPIOA + 0x00, 4) == 0xABFFFFFF);
@@ -167,7 +178,9 @@ TEST_CASE("gpio: output pin via BSRR/ODR/BRR, IDR, events, calls") {
 TEST_CASE("gpio: open-drain output follows pull when ODR=1") {
   Bus bus;
   Clock clock;
-  stm32l4::Gpio gpio("GPIOC", json{{"port", "C"}}, clock);
+  Cortexm core(bus, clock, 4, kTable, 16);
+  ModelContext ctx(clock, core, bus);
+  stm32l4::Gpio gpio("GPIOC", json{{"port", "C"}}, ctx);
   bus.map(0x48000800, 0x400, &gpio);
   CHECK(bus.read(0x48000800, 4) == 0xFFFFFFFF);  // default reset: analog
   bus.write(0x48000800, 4, 0xFFFFFFFC | 1u);     // PC0 output
@@ -181,7 +194,9 @@ TEST_CASE("gpio: open-drain output follows pull when ODR=1") {
 TEST_CASE("gpio: LCKR sequence locks configuration") {
   Bus bus;
   Clock clock;
-  stm32l4::Gpio gpio("GPIOB", json{{"port", "B"}}, clock);
+  Cortexm core(bus, clock, 4, kTable, 16);
+  ModelContext ctx(clock, core, bus);
+  stm32l4::Gpio gpio("GPIOB", json{{"port", "B"}}, ctx);
   bus.map(0x48000400, 0x400, &gpio);
   const uint64_t L = 0x48000400 + 0x1C;
   bus.write(L, 4, (1u << 16) | 1u);
@@ -201,7 +216,9 @@ TEST_CASE("gpio: LCKR sequence locks configuration") {
 TEST_CASE("bench: Gpio::write ns/op" * doctest::skip()) {
   Bus bus;
   Clock clock;
-  stm32l4::Gpio gpio("GPIOA", json{{"port", "A"}}, clock);
+  Cortexm core(bus, clock, 4, kTable, 16);
+  ModelContext ctx(clock, core, bus);
+  stm32l4::Gpio gpio("GPIOA", json{{"port", "A"}}, ctx);
   bus.map(GPIOA, 0x400, &gpio);
   bus.write(GPIOA + 0x00, 4, 0x55555555);  // MODER: all outputs
   constexpr int N = 2000000;
@@ -210,4 +227,27 @@ TEST_CASE("bench: Gpio::write ns/op" * doctest::skip()) {
   auto t1 = std::chrono::steady_clock::now();
   std::printf("Gpio::write (OSPEEDR): %.1f ns/op\n",
               std::chrono::duration<double, std::nano>(t1 - t0).count() / N);
+}
+
+TEST_CASE("bench: Gpio::write ungated vs RCC-gated ns/op" * doctest::skip()) {
+  Bus bus;
+  Clock clock;
+  Cortexm core(bus, clock, 4, kTable, 16);
+  ModelContext ctx(clock, core, bus);
+  stm32l4::Rcc rcc("RCC", json::object(), ctx);
+  stm32l4::Gpio a("GPIOA", json{{"port", "A"}}, ctx), b("GPIOB", json{{"port", "B"}}, ctx);
+  bus.map(RCC, 0x400, &rcc);
+  bus.map(GPIOA, 0x400, &a);
+  bus.map(GPIOA + 0x400, 0x400, &b);
+  ClockTree& t = rcc;
+  bus.set_gate(&b, t.enable_word(0x4C), 1u << 1, "RCC AHB2ENR bit 1");  // as generated
+  bus.write(RCC + 0x4C, 4, 3);  // GPIOAEN | GPIOBEN
+  constexpr int N = 2000000;
+  for (uint64_t base : {GPIOA, GPIOA + 0x400}) {
+    auto t0 = std::chrono::steady_clock::now();
+    for (int i = 0; i < N; ++i) bus.write(base + 0x08, 4, uint32_t(i));
+    auto t1 = std::chrono::steady_clock::now();
+    std::printf("Gpio::write (OSPEEDR) %s: %.1f ns/op\n", base == GPIOA ? "ungated" : "gated",
+                std::chrono::duration<double, std::nano>(t1 - t0).count() / N);
+  }
 }

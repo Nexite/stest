@@ -41,7 +41,7 @@ def blinky_exe() -> Path:
 
 @pytest.fixture
 def faults_exe():
-    """Factory: faults_exe("spin" | "crash" | "unmodelled" | "ro_write") -> path of that variant."""
+    """Factory: faults_exe("spin" | "crash" | "unmodelled" | "ro_write" | "clkoff") -> path of that variant."""
 
     def get(variant: str) -> Path:
         return _exe(f"faults_{variant.lower()}")

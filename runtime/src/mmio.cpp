@@ -112,12 +112,14 @@ void fast_forward() {
 uint32_t bus_read(uint64_t a, unsigned bytes) {
   try { return g_bus.read(a, bytes); }
   catch (const stest::UnmodelledAccess& e) { abort_access(e); }
+  catch (const stest::ClockDisabled& e) { stest_rt_abort("%s", e.what()); }
   catch (const std::exception& e) { stest_rt_abort("exception in model at 0x%08x: %s", (unsigned)a, e.what()); }
   catch (...) { stest_rt_abort("unknown exception in model at 0x%08x", (unsigned)a); }
 }
 void bus_write(uint64_t a, unsigned bytes, uint32_t v) {
   try { g_bus.write(a, bytes, v); }
   catch (const stest::UnmodelledAccess& e) { abort_access(e); }
+  catch (const stest::ClockDisabled& e) { stest_rt_abort("%s", e.what()); }
   catch (const std::exception& e) { stest_rt_abort("exception in model at 0x%08x: %s", (unsigned)a, e.what()); }
   catch (...) { stest_rt_abort("unknown exception in model at 0x%08x", (unsigned)a); }
 }

@@ -19,13 +19,14 @@
 #include <string>
 #include <nlohmann/json.hpp>
 #include "stest/clock.hpp"
+#include "stest/model_context.hpp"
 #include "stest/peripheral.hpp"
 
 namespace stest::stm32l4 {
 
 class Gpio : public Peripheral {
  public:
-  Gpio(std::string name, const nlohmann::json& params, Clock& clock);
+  Gpio(std::string name, const nlohmann::json& params, ModelContext& ctx);
   std::string_view name() const override { return name_; }
   uint32_t read(uint32_t off, unsigned width) override;
   void write(uint32_t off, unsigned width, uint32_t v) override;

@@ -11,7 +11,7 @@ FetchContent_MakeAvailable(doctest nlohmann_json)
 # Never instrumented by the MMIO pass: runtime volatile accesses must not recurse.
 find_package(Threads REQUIRED)
 add_library(stest_runtime STATIC src/mmio.cpp src/bus.cpp src/clock.cpp src/peripheral.cpp src/cortexm.cpp
-                                 src/node.cpp src/control_channel.cpp)
+                                 src/node.cpp src/control_channel.cpp src/model_context.cpp)
 target_include_directories(stest_runtime PUBLIC include)
 target_link_libraries(stest_runtime PUBLIC nlohmann_json::nlohmann_json Threads::Threads)
 # Hot path of every firmware access: always optimised, even in Debug/unset configs.
@@ -86,6 +86,11 @@ add_test(NAME runtime_node COMMAND runtime_node_tests)
 add_executable(runtime_poll_skip_tests tests/main.cpp tests/test_poll_skip.cpp)
 target_link_libraries(runtime_poll_skip_tests PRIVATE stest_runtime doctest::doctest)
 add_test(NAME runtime_poll_skip COMMAND runtime_poll_skip_tests)
+
+# ---- Plan 2 Task 2: model context, signals, clock-enable gating ----
+add_executable(runtime_model_context_tests tests/main.cpp tests/test_model_context.cpp)
+target_link_libraries(runtime_model_context_tests PRIVATE stest_runtime doctest::doctest)
+add_test(NAME runtime_model_context COMMAND runtime_model_context_tests)
 
 # Every CTest that runs a firmware/node executable gets a 30 s timeout.
 get_property(_stest_rt_tests DIRECTORY PROPERTY TESTS)
