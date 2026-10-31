@@ -8,7 +8,6 @@ import os
 import signal
 import socket
 import subprocess
-import sys
 import threading
 import time
 from pathlib import Path
@@ -23,41 +22,6 @@ if TYPE_CHECKING:
 
 STDERR_TAIL_LINES = 20  # shown in NodeCrashed messages / Node.stderr_tail
 STDERR_KEEP_LINES = 200  # retained per node (the pytest plugin's failure report)
-
-
-def _make_pdeathsig():
-    """Linux: have the kernel SIGKILL the node if its parent dies, so a crashed or killed
-    test run never leaves firmware spinning. Returns a factory ``f(parent_pid) -> preexec_fn``
-    (None elsewhere: macOS has no equivalent; there the Sim registry's atexit handler is
-    the safety net).
-
-    Caveats: PR_SET_PDEATHSIG fires when the *thread* that forked the child exits, not
-    the process, so sim.start() must run from a long-lived thread (the main thread, as
-    under pytest). And the parent may already be gone before prctl runs, in which case no
-    signal would ever come: the child compares getppid() with the pid captured before the
-    fork and exits at once if it changed."""
-    if not sys.platform.startswith("linux"):
-        return None
-    import ctypes
-
-    libc = ctypes.CDLL(None, use_errno=True)
-    PR_SET_PDEATHSIG = 1
-    prctl = libc.prctl
-    sigkill = int(signal.SIGKILL)
-    getppid, _exit = os.getppid, os._exit
-
-    def factory(parent_pid: int):
-        def preexec() -> None:
-            prctl(PR_SET_PDEATHSIG, sigkill, 0, 0, 0)
-            if getppid() != parent_pid:
-                _exit(1)
-
-        return preexec
-
-    return factory
-
-
-_PDEATHSIG = _make_pdeathsig()
 
 
 class Node:
@@ -145,7 +109,17 @@ class Node:
         if not self.exe.is_file():
             raise StestError(f"node {self.name!r}: executable {self.exe} not found")
         parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
-        env = {**os.environ, **self.env, **extra_env, "STEST_CTRL": str(child.fileno())}
+        # STEST_PARENT_PID: the runtime exits as soon as this process dies, so a crashed or
+        # SIGKILLed test run never leaves firmware spinning (Linux: PR_SET_PDEATHSIG; all
+        # platforms: a 200 ms getppid() watchdog thread). On Linux PDEATHSIG follows the
+        # forking *thread*, so call sim.start() from a long-lived thread (as pytest does).
+        env = {
+            **os.environ,
+            **self.env,
+            **extra_env,
+            "STEST_CTRL": str(child.fileno()),
+            "STEST_PARENT_PID": str(os.getpid()),
+        }
         try:
             self._proc = subprocess.Popen(
                 [str(self.exe)],
@@ -153,7 +127,6 @@ class Node:
                 stdin=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 pass_fds=(child.fileno(),),
-                preexec_fn=_PDEATHSIG(os.getpid()) if _PDEATHSIG else None,
             )
         finally:
             child.close()

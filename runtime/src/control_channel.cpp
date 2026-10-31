@@ -10,13 +10,19 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <sys/prctl.h>
+#include <csignal>
+#endif
 #include <cerrno>
 #include <cinttypes>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <chrono>
 #include <string>
+#include <thread>
 #include <vector>
 #include <nlohmann/json.hpp>
 #include "stest/mmio.h"
@@ -201,6 +207,34 @@ void handle_model_call(In& in) {
   send_or_exit(STEST_MSG_MODEL_RESULT, result.dump());
 }
 
+// ---- parent-death watch ----
+// The node must never outlive the Python process driving it (a killed test run would
+// leave firmware spinning). STEST_PARENT_PID is that process's pid. Linux: the kernel
+// SIGKILLs us when the parent (strictly: the thread that forked us) dies; the getppid()
+// check covers a parent that died before prctl ran. All platforms (macOS has no
+// PDEATHSIG): a detached watchdog thread polls getppid() every 200 ms of wall-clock time
+// and exits when we have been reparented. It touches no simulator state and never takes
+// the baton, so it cannot affect determinism, and it runs while the firmware spins.
+void watch_parent() {
+  pid_t parent = ::getppid();
+  if (const char* s = std::getenv("STEST_PARENT_PID")) {
+    char* end = nullptr;
+    long long v = std::strtoll(s, &end, 10);
+    if (!*s || *end || v <= 0) stest_rt_abort("bad STEST_PARENT_PID '%s'", s);
+    parent = static_cast<pid_t>(v);
+  }
+#if defined(__linux__)
+  (void)::prctl(PR_SET_PDEATHSIG, SIGKILL, 0, 0, 0);
+#endif
+  if (::getppid() != parent) _exit(1);
+  std::thread([parent] {
+    for (;;) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(200));
+      if (::getppid() != parent) _exit(1);
+    }
+  }).detach();
+}
+
 }  // namespace
 
 void run_control_channel(int fd, const ChipDesc& chip, FirmwareMain fw, const void* anchor) {
@@ -210,6 +244,7 @@ void run_control_channel(int fd, const ChipDesc& chip, FirmwareMain fw, const vo
   (void)::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
 #endif
   set_abort_hook(&abort_hook);
+  watch_parent();
   if (const char* c = std::getenv("STEST_ACCESS_COST_NS")) {
     char* end = nullptr;
     unsigned long long v = std::strtoull(c, &end, 10);

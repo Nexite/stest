@@ -196,8 +196,21 @@ def test_node_killed_when_sim_garbage_collected_without_close(faults_exe):
     assert _wait_gone(pid), f"node {pid} orphaned after the Sim was garbage-collected"
 
 
-@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="PR_SET_PDEATHSIG is Linux-only")
 def test_node_killed_when_python_is_sigkilled(faults_exe):
     pid, p = _run_orphan_script(faults_exe("spin"), "sigkill")
     assert p.returncode == -signal.SIGKILL
     assert _wait_gone(pid), f"node {pid} orphaned after the parent was SIGKILLed"
+
+
+def test_node_exits_when_parent_pid_does_not_match(faults_exe):
+    # The parent died before the node started watching (getppid() != STEST_PARENT_PID).
+    import socket
+
+    a, b = socket.socketpair()
+    try:
+        env = {**os.environ, "STEST_CTRL": str(b.fileno()), "STEST_PARENT_PID": "2147483647"}
+        p = subprocess.run([str(faults_exe("spin"))], env=env, pass_fds=(b.fileno(),), timeout=10)
+    finally:
+        a.close()
+        b.close()
+    assert p.returncode == 1
