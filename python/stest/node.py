@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import protocol as proto
 from .errors import StestError
-from .peripherals import Adc, Dac, Timer
+from .peripherals import Adc, Dac, SpiBurst, SpiBus, Timer
 from .pin import Pin
 
 if TYPE_CHECKING:
@@ -45,6 +45,7 @@ class Node:
         self._stderr_thread: threading.Thread | None = None
         self._seq = 0
         self._pin_history: dict[tuple[str, int], list[tuple[int, int]]] = {}
+        self._spi_bursts: dict[str, list[SpiBurst]] = {}
 
     # ---- public API ----
     @property
@@ -71,6 +72,10 @@ class Node:
     def dac(self, n: int) -> Dac:
         """DAC ``n`` (model "DAC<n>"): ``.channel(c).volts``, ``.state()``."""
         return Dac(self, f"DAC{int(n)}")
+
+    def spi(self, name: str) -> SpiBus:
+        """SPI model ``name`` (e.g. "SPI1"): ``.bursts``, ``.queue_miso(data)``, ``.wait_for_bytes(n, timeout_ms)``."""
+        return SpiBus(self, name)
 
     def call(self, model: str, op: str, **args: Any) -> Any:
         """Call ``op`` on peripheral model ``model`` (e.g. "GPIOA"); returns its JSON result."""
@@ -247,6 +252,10 @@ class Node:
             data = json.loads(js)
             if data.get("kind") == "gpio":
                 self._pin_history.setdefault((data["port"], int(data["pin"])), []).append((t, int(data["level"])))
+            elif data.get("kind") == "spi":
+                self._spi_bursts.setdefault(data["bus"], []).append(
+                    SpiBurst(int(data["t_start"]), bytes.fromhex(data["mosi"]), bytes.fromhex(data["miso"]), t)
+                )
             out.append((t, self.index, self._seq, self.name, js))
             self._seq += 1
         return out

@@ -240,6 +240,31 @@ size = 0x400
 rcc_enable = { reg = "APB1ENR1", bit = 29 }
 params = { vref = 3.3, irq = 54, pins = ["PA4", "PA5"] }
 
+# SPI1-3 (RM0351 40), master mode: SPI1 on APB2, SPI2/SPI3 on APB1 (frame timing uses that PCLK).
+[[peripheral]]
+name = "SPI1"
+model = "stm32l4.spi"
+base = 0x40013000
+size = 0x400
+rcc_enable = { reg = "APB2ENR", bit = 12 }
+params = { bus = "apb2", irq = 35 }
+
+[[peripheral]]
+name = "SPI2"
+model = "stm32l4.spi"
+base = 0x40003800
+size = 0x400
+rcc_enable = { reg = "APB1ENR1", bit = 14 }
+params = { bus = "apb1", irq = 36 }
+
+[[peripheral]]
+name = "SPI3"
+model = "stm32l4.spi"
+base = 0x40003C00
+size = 0x400
+rcc_enable = { reg = "APB1ENR1", bit = 15 }
+params = { bus = "apb1", irq = 51 }
+
 # Analog pins of the LQFP64 package: pin -> the ADCs that convert it and its channel number.
 # Source: DS11585 Rev 20 (STM32L496xx datasheet), table "STM32L496xx pin definitions",
 # LQFP64 column (ADC123_INPx = ADC1/2/3 channel x, ADC12_INPx = ADC1/2 channel x),

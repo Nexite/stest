@@ -1,7 +1,9 @@
-"""Typed helpers over peripheral models' MODEL_CALL ops (``node.timer(...)``, ...)."""
+"""Typed helpers over peripheral models' MODEL_CALL ops and events (``node.timer(...)``,
+``node.spi(...)``, ...)."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from .errors import StestError
@@ -169,3 +171,65 @@ class DacChannel:
 
     def __repr__(self) -> str:
         return f"<DacChannel {self.dac.node.name}.{self.dac.name} ch{self.n}>"
+
+
+@dataclass(frozen=True)
+class SpiBurst:
+    """One SPI burst: frames sent back to back while BSY stayed high.
+
+    ``t_start_ns`` is the start of the first frame, ``t_end_ns`` the instant BSY fell (the
+    event's time). ``mosi`` / ``miso`` are the frame values written to / read from DR, one
+    byte per frame for data sizes up to 8 bits, two bytes little-endian per frame above.
+    """
+
+    t_start_ns: int
+    mosi: bytes
+    miso: bytes
+    t_end_ns: int
+
+
+class SpiBus:
+    """An SPI model, e.g. ``node.spi("SPI1")``. See ``chips/stm32l4/models/spi.hpp``.
+
+    ``bursts`` lists what the master clocked out, one :class:`SpiBurst` per BSY period: a
+    burst ends when BSY falls (the TX FIFO ran dry), so a burst is not a transaction. ST's
+    ``HAL_SPI_Transmit`` keeps the FIFO fed (one burst per call), but
+    ``HAL_SPI_TransmitReceive`` alternates TX and RX, which drops BSY between frame pairs.
+    To group bursts into transactions, use the chip select's ``node.pin(...).history``:
+    every burst with ``cs_fall <= t_start_ns`` and ``t_end_ns <= cs_rise`` belongs to that
+    chip-select window.
+    """
+
+    def __init__(self, node: Node, name: str):
+        self.node = node
+        self.name = name
+
+    @property
+    def bursts(self) -> list[SpiBurst]:
+        """Every completed burst so far (as of the last completed quantum), oldest first."""
+        return list(self.node._spi_bursts.get(self.name, ()))
+
+    def queue_miso(self, data: bytes) -> None:
+        """Append ``data`` to the bytes the slave returns on MISO, consumed one byte per
+        frame (two, little-endian, for frames wider than 8 bits). When the queue is empty a
+        frame reads all ones (0xFF)."""
+        if not isinstance(data, (bytes, bytearray, memoryview)):
+            raise TypeError(f"queue_miso expects bytes, not {type(data).__name__}")
+        self.node.call(self.name, "queue_miso", data=bytes(data).hex())
+
+    def wait_for_bytes(self, n: int, timeout_ms: float) -> None:
+        """Advance the simulation until the completed bursts hold at least ``n`` MOSI bytes
+        in total (checked every quantum). WaitTimeout (a StestError) otherwise."""
+        self.node.sim.wait_for(
+            lambda: sum(len(b.mosi) for b in self.node._spi_bursts.get(self.name, ())) >= n,
+            timeout_ms,
+            what=f"{self.node.name}.{self.name} to send {n} bytes",
+        )
+
+    def state(self) -> dict[str, Any]:
+        """{"enabled", "master", "data_bits", "cpol", "cpha", "lsbfirst", "baud_hz",
+        "frame_ns", "busy", "tx_level", "rx_level", "ovr", "miso_queued"}"""
+        return self.node.call(self.name, "state")
+
+    def __repr__(self) -> str:
+        return f"<SpiBus {self.node.name}.{self.name}>"

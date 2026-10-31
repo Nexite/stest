@@ -75,6 +75,24 @@ stest_add_firmware(dac
           ${_bl}/Src/stm32l4xx_hal_msp.c
   INCLUDE_DIRS ${_adc}/Inc ${_bl}/Inc)
 
+# SPI: CubeMX-style SPI1 master (mode 0, 8-bit, /16, soft NSS, CS on PA4) transferring
+# {A5 01 02 03} every 10 ms. Variants: spi (HAL_SPI_TransmitReceive), spi_tx
+# (HAL_SPI_Transmit). SPI HAL module enabled in spi/Inc; MSP/handlers from blinky.
+set(_spi ${CMAKE_CURRENT_SOURCE_DIR}/firmware/spi)
+foreach(variant TXRX TX)
+  string(TOLOWER ${variant} v)
+  if(variant STREQUAL "TXRX")
+    set(_exe spi)
+  else()
+    set(_exe spi_${v})
+  endif()
+  stest_add_firmware(${_exe}
+    CHIP STM32L496RG
+    SOURCES ${_spi}/main.c ${_bl}/Src/stm32l4xx_it.c ${_bl}/Src/stm32l4xx_hal_msp.c
+    INCLUDE_DIRS ${_spi}/Inc ${_bl}/Inc
+    DEFINES SPI_VARIANT=SPI_${variant})
+endforeach()
+
 # Poll fast-forward regression firmware (counting loop over a constant volatile read).
 stest_add_firmware(pollcount
   CHIP STM32L496RG

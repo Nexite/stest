@@ -19,7 +19,7 @@ stest is an open-source (Apache-2.0) STM32 software-in-the-loop simulator. Real 
 | `cmake/` | `StestToolchain.cmake` (finds upstream LLVM), `StestFetchST.cmake` (pinned ST sources), `stest_add_firmware.cmake` |
 | `selftest/` | Self-test firmwares (`firmware/blinky`, `faults`, `pollcount`) and CTest checks |
 | `spike/` | Interception benchmarks and the speed gate (`run_gate.py`) |
-| `python/stest/`, `python/tests/` | `Sim`/`Node`, protocol mirror, DWARF/Mach-O symbol lookup, typed peripheral helpers (`peripherals.py`: `node.timer()`, `node.adc()`, `node.dac()`; `pin.py`: levels and analog voltages), pytest plugin; Python tests |
+| `python/stest/`, `python/tests/` | `Sim`/`Node`, protocol mirror, DWARF/Mach-O symbol lookup, typed peripheral helpers (`peripherals.py`: `node.timer()`, `node.adc()`, `node.dac()`, `node.spi()`; `pin.py`: levels and analog voltages), pytest plugin; Python tests |
 | `docs/superpowers/{specs,plans}/` | Design spec and per-plan implementation plans; `docs/spikes/` gate results |
 | `docker/Dockerfile`, `.devcontainer/` | Ubuntu 24.04 + LLVM 18 image (also the zero-setup environment) |
 

@@ -78,3 +78,13 @@ def adc_exe():
 @pytest.fixture
 def dac_exe() -> Path:
     return _exe("dac")
+
+
+@pytest.fixture
+def spi_exe():
+    """Factory: spi_exe("" | "tx") -> path of that spi firmware (TransmitReceive / Transmit)."""
+
+    def get(variant: str = "") -> Path:
+        return _exe(f"spi_{variant}" if variant else "spi")
+
+    return get
