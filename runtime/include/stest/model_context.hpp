@@ -93,6 +93,14 @@ class ModelContext {
   ClockTree& clocks() const;  // none registered -> std::logic_error
   void set_clock_tree(ClockTree* t) { tree_ = t; }
 
+  // Shared level-sensitive IRQ line: several flag sources (e.g. TIM1 update and TIM16 on
+  // TIM1_UP_TIM16, TIM6 and the DAC on TIM6_DAC) drive one NVIC input. `source` is any
+  // address unique to one flag source; the line's level (Cortexm::set_irq_level) is the OR
+  // of every source currently high, so it pends only when the first source rises and
+  // stays high until the last one drops. Models with a shared vector must use this rather
+  // than calling set_irq_level directly (which would let one source override the other).
+  void set_irq_source(int irqn, const void* source, bool high);
+
  private:
   Clock& clock_;
   Cortexm& core_;
@@ -100,6 +108,7 @@ class ModelContext {
   ClockTree* tree_ = nullptr;
   std::map<std::string, Peripheral*, std::less<>> by_name_;
   std::vector<Peripheral*> order_;
+  std::map<int, std::vector<const void*>> irq_high_;  // irqn -> sources currently high
 };
 
 }  // namespace stest

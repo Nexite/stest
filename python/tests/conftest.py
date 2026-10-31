@@ -58,3 +58,8 @@ def pollcount_exe() -> Path:
 @pytest.fixture
 def exti_exe() -> Path:
     return _exe("exti")
+
+
+@pytest.fixture
+def tim_exe() -> Path:
+    return _exe("tim")

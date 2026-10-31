@@ -15,7 +15,10 @@ foreach(needle
     [[  ctx.set_clock_tree(&m_RCC);]]
     [[  bus.set_gate(&m_GPIOB, ctx.clocks().enable_word(0x4Cu), 1u << 1, "RCC AHB2ENR bit 1");]]
     [[  bus.set_gate(&m_GPIOI, ctx.clocks().enable_word(0x4Cu), 1u << 8, "RCC AHB2ENR bit 8");]]
-    [[  bus.set_gate(&m_PWR, ctx.clocks().enable_word(0x58u), 1u << 28, "RCC APB1ENR1 bit 28");]])
+    [[  bus.set_gate(&m_PWR, ctx.clocks().enable_word(0x58u), 1u << 28, "RCC APB1ENR1 bit 28");]]
+    [[  bus.set_gate(&m_TIM7, ctx.clocks().enable_word(0x58u), 1u << 5, "RCC APB1ENR1 bit 5");]]
+    [[  bus.set_gate(&m_TIM1, ctx.clocks().enable_word(0x60u), 1u << 11, "RCC APB2ENR bit 11");]]
+    [[  bus.set_gate(&m_TIM17, ctx.clocks().enable_word(0x60u), 1u << 18, "RCC APB2ENR bit 18");]])
   string(FIND "${text}" "${needle}" pos)
   if(pos EQUAL -1)
     message(FATAL_ERROR "generated file lacks: ${needle}")

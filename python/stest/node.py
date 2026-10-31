@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import protocol as proto
 from .errors import StestError
+from .peripherals import Timer
 from .pin import Pin
 
 if TYPE_CHECKING:
@@ -58,6 +59,10 @@ class Node:
 
     def pin(self, name: str) -> Pin:
         return Pin(self, name)
+
+    def timer(self, name: str) -> Timer:
+        """Timer model ``name`` (e.g. "TIM7"): ``.state()``, ``.update_hz``, ``.channel(n).duty``."""
+        return Timer(self, name)
 
     def call(self, model: str, op: str, **args: Any) -> Any:
         """Call ``op`` on peripheral model ``model`` (e.g. "GPIOA"); returns its JSON result."""

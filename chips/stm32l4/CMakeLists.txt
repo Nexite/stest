@@ -1,7 +1,7 @@
 # STM32L4 peripheral models (uninstrumented C++, linked into every L4 firmware exe).
 add_library(stest_chip_stm32l4 STATIC
   models/rcc.cpp models/pwr.cpp models/flash.cpp models/gpio.cpp
-  models/syscfg.cpp models/exti.cpp)
+  models/syscfg.cpp models/exti.cpp models/tim.cpp)
 target_include_directories(stest_chip_stm32l4 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(stest_chip_stm32l4 PUBLIC stest_runtime)
 
@@ -17,6 +17,10 @@ add_executable(stm32l4_exti_tests ${PROJECT_SOURCE_DIR}/runtime/tests/main.cpp t
 target_link_libraries(stm32l4_exti_tests PRIVATE stest_chip_stm32l4 doctest::doctest)
 add_test(NAME chip_stm32l4_exti COMMAND stm32l4_exti_tests)
 
+add_executable(stm32l4_tim_tests ${PROJECT_SOURCE_DIR}/runtime/tests/main.cpp tests/test_tim.cpp)
+target_link_libraries(stm32l4_tim_tests PRIVATE stest_chip_stm32l4 doctest::doctest)
+add_test(NAME chip_stm32l4_tim COMMAND stm32l4_tim_tests)
+
 # Generator output for the L496 part: the weak-handler line format and table size.
 add_test(NAME chip_gen_stm32l496rg
   COMMAND ${CMAKE_COMMAND} -DPYTHON=${Python3_EXECUTABLE}
@@ -24,4 +28,4 @@ add_test(NAME chip_gen_stm32l496rg
           -DTOML=${CMAKE_CURRENT_SOURCE_DIR}/parts/stm32l496rg.toml
           -DOUT=${CMAKE_CURRENT_BINARY_DIR}/gen_check_stm32l496rg.cpp
           -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_gen.cmake)
-set_tests_properties(chip_stm32l4_models chip_stm32l4_rcc_clocks chip_stm32l4_exti chip_gen_stm32l496rg PROPERTIES TIMEOUT 30)
+set_tests_properties(chip_stm32l4_models chip_stm32l4_rcc_clocks chip_stm32l4_exti chip_stm32l4_tim chip_gen_stm32l496rg PROPERTIES TIMEOUT 30)

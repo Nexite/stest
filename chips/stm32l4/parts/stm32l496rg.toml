@@ -128,6 +128,98 @@ size = 0x400
 rcc_enable = { reg = "AHB2ENR", bit = 8 }
 params = { port = "I" }
 
+# Timers (RM0351 sections 31-34). params: kind basic|general|advanced, width 16|32, the APB
+# bus whose PCLK clocks it, the NVIC vector of each interrupt source (shared vectors such as
+# TIM1_UP_TIM16 are OR'ed across timers) and option registers [offset, reset] (OR1..OR3).
+[[peripheral]]
+name = "TIM1"
+model = "stm32l4.tim"
+base = 0x40012C00
+size = 0x400
+rcc_enable = { reg = "APB2ENR", bit = 11 }
+params = { kind = "advanced", width = 16, bus = "apb2", irq = { update = 25, cc = 27, break = 24, trg_com = 26 }, opt = [[0x50, 0], [0x60, 1], [0x64, 1]] }
+
+[[peripheral]]
+name = "TIM2"
+model = "stm32l4.tim"
+base = 0x40000000
+size = 0x400
+rcc_enable = { reg = "APB1ENR1", bit = 0 }
+params = { kind = "general", width = 32, bus = "apb1", irq = { update = 28, cc = 28, trg_com = 28 }, opt = [[0x50, 0], [0x60, 0]] }
+
+[[peripheral]]
+name = "TIM3"
+model = "stm32l4.tim"
+base = 0x40000400
+size = 0x400
+rcc_enable = { reg = "APB1ENR1", bit = 1 }
+params = { kind = "general", width = 16, bus = "apb1", irq = { update = 29, cc = 29, trg_com = 29 }, opt = [[0x50, 0], [0x60, 0]] }
+
+[[peripheral]]
+name = "TIM4"
+model = "stm32l4.tim"
+base = 0x40000800
+size = 0x400
+rcc_enable = { reg = "APB1ENR1", bit = 2 }
+params = { kind = "general", width = 16, bus = "apb1", irq = { update = 30, cc = 30, trg_com = 30 } }
+
+[[peripheral]]
+name = "TIM5"
+model = "stm32l4.tim"
+base = 0x40000C00
+size = 0x400
+rcc_enable = { reg = "APB1ENR1", bit = 3 }
+params = { kind = "general", width = 32, bus = "apb1", irq = { update = 50, cc = 50, trg_com = 50 } }
+
+[[peripheral]]
+name = "TIM6"
+model = "stm32l4.tim"
+base = 0x40001000
+size = 0x400
+rcc_enable = { reg = "APB1ENR1", bit = 4 }
+params = { kind = "basic", width = 16, bus = "apb1", irq = { update = 54 } }
+
+[[peripheral]]
+name = "TIM7"
+model = "stm32l4.tim"
+base = 0x40001400
+size = 0x400
+rcc_enable = { reg = "APB1ENR1", bit = 5 }
+params = { kind = "basic", width = 16, bus = "apb1", irq = { update = 55 } }
+
+[[peripheral]]
+name = "TIM8"
+model = "stm32l4.tim"
+base = 0x40013400
+size = 0x400
+rcc_enable = { reg = "APB2ENR", bit = 13 }
+params = { kind = "advanced", width = 16, bus = "apb2", irq = { update = 44, cc = 46, break = 43, trg_com = 45 }, opt = [[0x50, 0], [0x60, 1], [0x64, 1]] }
+
+# TIM15-17: up-counting, RCR + BDTR + CH1N (RM0351 section 33); TIM15 has 2 channels.
+[[peripheral]]
+name = "TIM15"
+model = "stm32l4.tim"
+base = 0x40014000
+size = 0x400
+rcc_enable = { reg = "APB2ENR", bit = 16 }
+params = { kind = "general", width = 16, bus = "apb2", channels = 2, complementary = 1, up_only = true, irq = { update = 24, cc = 24, break = 24, trg_com = 24 }, opt = [[0x50, 0], [0x60, 1]] }
+
+[[peripheral]]
+name = "TIM16"
+model = "stm32l4.tim"
+base = 0x40014400
+size = 0x400
+rcc_enable = { reg = "APB2ENR", bit = 17 }
+params = { kind = "general", width = 16, bus = "apb2", channels = 1, complementary = 1, up_only = true, irq = { update = 25, cc = 25, break = 25, trg_com = 25 }, opt = [[0x50, 0], [0x60, 1]] }
+
+[[peripheral]]
+name = "TIM17"
+model = "stm32l4.tim"
+base = 0x40014800
+size = 0x400
+rcc_enable = { reg = "APB2ENR", bit = 18 }
+params = { kind = "general", width = 16, bus = "apb2", channels = 1, complementary = 1, up_only = true, irq = { update = 26, cc = 26, break = 26, trg_com = 26 }, opt = [[0x50, 0], [0x60, 1]] }
+
 # External interrupts: IRQn from stm32l496xx.h (79 is reserved).
 [irq]
 WWDG = 0

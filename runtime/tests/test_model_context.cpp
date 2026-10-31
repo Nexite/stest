@@ -173,3 +173,29 @@ TEST_CASE("bench: Bus::write gated vs ungated ns/op" * doctest::skip()) {
                 std::chrono::duration<double, std::nano>(t1 - t0).count() / N);
   }
 }
+
+TEST_CASE("model context: set_irq_source ORs the sources sharing an IRQ line") {
+  Bus bus;
+  Clock clock;
+  const IrqHandler table[16 + 4] = {};
+  Cortexm core(bus, clock, 4, table, 16 + 4);
+  ModelContext ctx(clock, core, bus);
+  int a = 0, b = 0;
+  ctx.set_irq_source(2, &a, true);  // low -> high: pends
+  CHECK(core.pending(2));
+  core.clear_pending(2);
+  ctx.set_irq_source(2, &b, true);  // already high (a): no new edge
+  CHECK_FALSE(core.pending(2));
+  ctx.set_irq_source(2, &a, false);  // b keeps it high
+  ctx.set_irq_source(2, &a, true);
+  CHECK_FALSE(core.pending(2));
+  ctx.set_irq_source(2, &a, false);
+  ctx.set_irq_source(2, &b, false);  // both low
+  ctx.set_irq_source(2, &b, false);  // idempotent
+  ctx.set_irq_source(2, &a, true);   // new rising edge
+  CHECK(core.pending(2));
+  core.clear_pending(2);
+  ctx.set_irq_source(3, &a, true);   // independent line
+  CHECK(core.pending(3));
+  CHECK_FALSE(core.pending(2));
+}

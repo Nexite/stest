@@ -19,7 +19,7 @@ stest is an open-source (Apache-2.0) STM32 software-in-the-loop simulator. Real 
 | `cmake/` | `StestToolchain.cmake` (finds upstream LLVM), `StestFetchST.cmake` (pinned ST sources), `stest_add_firmware.cmake` |
 | `selftest/` | Self-test firmwares (`firmware/blinky`, `faults`, `pollcount`) and CTest checks |
 | `spike/` | Interception benchmarks and the speed gate (`run_gate.py`) |
-| `python/stest/`, `python/tests/` | `Sim`/`Node`, protocol mirror, DWARF/Mach-O symbol lookup, pytest plugin; Python tests |
+| `python/stest/`, `python/tests/` | `Sim`/`Node`, protocol mirror, DWARF/Mach-O symbol lookup, typed peripheral helpers (`peripherals.py`: `node.timer()`), pytest plugin; Python tests |
 | `docs/superpowers/{specs,plans}/` | Design spec and per-plan implementation plans; `docs/spikes/` gate results |
 | `docker/Dockerfile`, `.devcontainer/` | Ubuntu 24.04 + LLVM 18 image (also the zero-setup environment) |
 
@@ -94,7 +94,7 @@ Note the Docker build writes into the host `build/`; if you share the tree with 
 1. Create `chips/<family>/models/<kind>.{hpp,cpp}`: class `stest::<family>::<Kind>` deriving `stest::Peripheral`, ctor `(name, params-json, ModelContext& ctx)` (use `ctx.clock()`, `ctx.core()`; do not look up other models here); implement `name/read/write/reset`, and `call()` for Python-facing ops (throw `UnknownOp` otherwise).
 2. Cross-model wiring goes in `connect(ModelContext&)`, called once every model exists: `ctx.get<OtherModel>("NAME")` (wrong type/missing -> `std::logic_error`), `ctx.clocks()` (the RCC's `ClockTree`: SYSCLK/HCLK/PCLKx/PLLSAIxR/ADCSEL, computed live from RCC registers; never cache a frequency), and `Signal<T>::subscribe` for synchronous notifications.
 3. Use `RegisterFile`: `declare(off, reset, rw_mask, w1c_mask)`; `declare_write_only` for BSRR/KEYR-style registers; rw=w1c=0 makes a register read-only (writes abort). Layouts and reset values follow RM0351 and ST's `stm32l496xx.h`.
-4. Time-driven behaviour: schedule `Clock` events (model contract above). Emit observable changes with `emit_event`. Raise IRQs through the Cortexm/NVIC API, not directly.
+4. Time-driven behaviour: schedule `Clock` events (model contract above); derive counters from virtual time and schedule only the next instant a flag can change (see `tim.hpp`: no per-tick events, nothing scheduled while flags are already set). Emit observable changes with `emit_event`. Flag-driven interrupts are levels: `Cortexm::set_irq_level`, or `ModelContext::set_irq_source(irqn, &tag, high)` when the vector is shared (TIM1_UP_TIM16, TIM6_DAC, ...; the line is the OR of its sources). Never `set_pending` for a status flag.
 5. Add the `.cpp` to `chips/stm32l4/CMakeLists.txt`, doctest cases to `chips/stm32l4/tests/`, a `[[peripheral]]` entry (`name`, `model = "stm32l4.<kind>"`, `base`, `size`, optional `params`, and `rcc_enable = { reg = "APB2ENR", bit = n }` if RCC gates its clock; `reg` must be listed in `[clock_tree] enable_regs`). Gated peripherals abort on any access while the bit is clear: `access to <NAME> while its clock is disabled (RCC <REG> bit <n>) (<read|write><bits> 0x%08x)`.
 6. Add a Python/e2e test and, if firmware behaviour matters, a self-test firmware (enable the peripheral's RCC clock first).
 

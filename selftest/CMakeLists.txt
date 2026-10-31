@@ -41,6 +41,14 @@ stest_add_firmware(exti
           ${_bl}/Src/stm32l4xx_hal_msp.c
   INCLUDE_DIRS ${_bl}/Inc)
 
+# TIM: CubeMX-style TIM7 20 kHz time base driving a software PWM on PA6 (TIM module enabled
+# in its own HAL config; handlers/MSP from blinky).
+stest_add_firmware(tim
+  CHIP STM32L496RG
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/firmware/tim/main.c ${_bl}/Src/stm32l4xx_it.c
+          ${_bl}/Src/stm32l4xx_hal_msp.c
+  INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/firmware/tim/Inc ${_bl}/Inc)
+
 # Poll fast-forward regression firmware (counting loop over a constant volatile read).
 stest_add_firmware(pollcount
   CHIP STM32L496RG

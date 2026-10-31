@@ -1,7 +1,9 @@
 #include "stest/model_context.hpp"
+#include <algorithm>
 #include <cxxabi.h>
 #include <cstdlib>
 #include <memory>
+#include "stest/cortexm.hpp"
 
 namespace stest {
 
@@ -28,6 +30,20 @@ Peripheral* ModelContext::find(std::string_view name) const {
 ClockTree& ModelContext::clocks() const {
   if (!tree_) throw std::logic_error("model context: no clock tree registered (set_clock_tree)");
   return *tree_;
+}
+
+void ModelContext::set_irq_source(int irqn, const void* source, bool high) {
+  std::vector<const void*>& v = irq_high_[irqn];
+  auto it = std::find(v.begin(), v.end(), source);
+  bool was = !v.empty();
+  if (high && it == v.end())
+    v.push_back(source);
+  else if (!high && it != v.end())
+    v.erase(it);
+  else
+    return;
+  bool now = !v.empty();
+  if (now != was) core_.set_irq_level(irqn, now);
 }
 
 }  // namespace stest
