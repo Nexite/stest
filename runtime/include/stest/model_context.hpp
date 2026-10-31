@@ -10,6 +10,7 @@
 //   5. bus.map(...) + bus.set_gate(...) for peripherals with an RCC enable bit
 // Constructors must not look up other models (they may not exist yet); do it in connect().
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <map>
 #include <stdexcept>
@@ -45,18 +46,21 @@ struct ClockTree {
 
 // Synchronous model-to-model notification: emit() calls every subscriber in subscription
 // order, on the calling thread, before returning. No queues, no threads.
+// Re-entrancy: a subscriber may subscribe further handlers while it runs; they are called
+// from the next emit on. Subscribers live in a std::deque, whose push_back never moves or
+// destroys existing elements, so the running std::function stays valid. (Unsubscribing
+// does not exist.)
 template <class T>
 class Signal {
  public:
   using Fn = std::function<void(const T&)>;
   void subscribe(Fn f) { subs_.push_back(std::move(f)); }
   void emit(const T& v) {
-    // Index loop: a subscriber may subscribe further handlers (they see the next emit).
-    for (size_t i = 0, n = subs_.size(); i < n; ++i) subs_[i](v);
+    for (size_t i = 0, n = subs_.size(); i < n; ++i) subs_[i](v);  // n: snapshot of the count
   }
 
  private:
-  std::vector<Fn> subs_;
+  std::deque<Fn> subs_;
 };
 
 std::string demangled_type_name(const std::type_info& t);

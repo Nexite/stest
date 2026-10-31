@@ -97,6 +97,43 @@ TEST_CASE("signal: synchronous, in subscription order") {
   CHECK(log == std::vector<std::string>{"a1", "b1", "a2", "b2", "c2"});
 }
 
+namespace {
+// Captured by a subscriber; a move leaves the source "dead". If the Signal relocated the
+// running handler (std::vector growth moves its elements), the running lambda's own
+// capture would read dead afterwards (or be destroyed outright).
+struct LiveTag {
+  const char* s;
+  explicit LiveTag(const char* t) : s(t) {}
+  LiveTag(const LiveTag& o) = default;
+  LiveTag(LiveTag&& o) noexcept : s(o.s) { o.s = "moved-from"; }
+  ~LiveTag() { s = "destroyed"; }
+};
+Signal<int>* g_sig = nullptr;
+std::vector<std::string>* g_sig_log = nullptr;
+}  // namespace
+
+TEST_CASE("signal: a subscriber may subscribe more handlers while it runs") {
+  Signal<int> s;
+  std::vector<std::string> log;
+  g_sig = &s;
+  g_sig_log = &log;
+  // Small capture (fits std::function's inline buffer), so relocation really moves it.
+  s.subscribe([tag = LiveTag("keep-me")](const int& v) {
+    for (int i = 0; i < 64; ++i)
+      g_sig->subscribe([i](const int& w) {
+        if (i == 0) g_sig_log->push_back("late" + std::to_string(w));
+      });
+    g_sig_log->push_back(std::string(tag.s) + std::to_string(v));
+  });
+  s.emit(1);  // handlers added during emit are not called by that emit
+  CHECK(log == std::vector<std::string>{"keep-me1"});
+  log.clear();
+  s.emit(2);  // the first handler subscribes 64 more; the earlier late ones run now
+  CHECK(log == std::vector<std::string>{"keep-me2", "late2"});
+  g_sig = nullptr;
+  g_sig_log = nullptr;
+}
+
 TEST_CASE("bus: gated peripheral aborts while its clock is disabled") {
   Bus bus;
   FakeTree t;
