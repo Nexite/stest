@@ -1,4 +1,5 @@
 #include "cortexm/itm.hpp"
+#include <cstdio>
 #include <nlohmann/json.hpp>
 #include "stest/node.hpp"
 #include "stest/stdout_capture.hpp"  // sanitize_utf8
@@ -61,7 +62,19 @@ void Itm::write(uint32_t off, unsigned width, uint32_t v) {
     for (unsigned i = 0; i < width; ++i) put_byte(port, static_cast<uint8_t>(v >> (8 * i)));
     return;
   }
-  switch (off & ~3u) {
+  const uint32_t reg = off & ~3u;
+  if (locked_ && (reg == kTer || reg == kTpr || reg == kTcr)) {
+    // Software lock (CoreSight LAR/LSR): the write is ignored, as on hardware.
+    if (!warned_locked_) {
+      warned_locked_ = true;
+      std::fprintf(stderr,
+                   "stest: warning: ITM %s write ignored: the ITM is locked (write 0xC5ACCE55 to "
+                   "ITM->LAR first, as a debugger does)\n",
+                   reg == kTer ? "TER" : reg == kTpr ? "TPR" : "TCR");
+    }
+    return;
+  }
+  switch (reg) {
     case kTer: ter_ = lane_merge(ter_, off, width, v); return;
     case kTpr: tpr_ = lane_merge(tpr_, off, width, v) & 0xFu; return;
     case kTcr: tcr_ = lane_merge(tcr_, off, width, v) & kTcrWritable; return;

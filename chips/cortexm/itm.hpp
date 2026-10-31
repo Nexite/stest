@@ -8,7 +8,14 @@
 // UTF-8 bytes are replaced by U+FFFD (events are JSON).
 //
 // Output is delivered only while DEMCR.TRCENA, TCR.ITMENA and the port's TER bit are all
-// set, as on hardware; otherwise the store is dropped. Reads of a port return 1
+// set, as on hardware; otherwise the store is dropped.
+//
+// Software lock (CoreSight LAR/LSR, ARMv7-M): writing 0xC5ACCE55 to LAR unlocks, any other
+// value locks. While locked, writes to TER/TPR/TCR are ignored (one stderr warning per run
+// names the first one); stimulus-port stores and reads are unaffected. LSR reads 3 (SLI |
+// SLK) locked, 1 unlocked. Bare board (debugger_attached = false): reset state locked with
+// TER/TCR = 0, so firmware must unlock before enabling the ITM. Debugger attached (default):
+// the debugger has unlocked the ITM and set TCR.ITMENA and TER port 0 (LSR = 1). Reads of a port return 1
 // (FIFOREADY), so CMSIS ITM_SendChar never blocks. Registers the model does not cover
 // (PID/CID, ...) abort in strict mode. TCR's TSENA/SYNCENA/TXENA/SWOENA/TSPrescale/
 // TraceBusID bits are stored but have no effect (there is no trace port to drive).
@@ -47,6 +54,7 @@ class Itm : public Peripheral {
   bool attached_;
   uint32_t ter_ = 0, tpr_ = 0, tcr_ = 0;
   bool locked_ = true;
+  bool warned_locked_ = false;
   std::array<std::string, 32> line_;
 };
 

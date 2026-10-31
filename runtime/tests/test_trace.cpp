@@ -50,14 +50,52 @@ TEST_CASE("detached power-on state: everything off, output dropped") {
   CHECK(t.r(DHCSR) == 0);
   t.puts("lost\n");
   CHECK(take_events().empty());
-  // firmware enables everything itself
+  CHECK(t.r(ITM + 0xFB4) == 3);  // LSR: lock present (SLI) and locked (SLK)
+  // firmware enables everything itself, unlocking the ITM first (LAR = 0xC5ACCE55)
   t.w(DEMCR, 4, 1u << 24);
+  t.w(ITM + 0xFB0, 4, 0xC5ACCE55u);
+  CHECK(t.r(ITM + 0xFB4) == 1);  // unlocked
   t.w(ITM + 0xE80, 4, 1);
   t.w(ITM + 0xE00, 4, 1);
   t.puts("seen\n");
   auto ev = take_events();
   REQUIRE(ev.size() == 1);
   CHECK(ev[0].data["text"] == "seen");
+}
+
+TEST_CASE("detached: TER/TPR/TCR writes are ignored while the ITM is locked (no LAR unlock)") {
+  Rig t(false);
+  t.w(DEMCR, 4, 1u << 24);      // TRCENA
+  t.w(ITM + 0xE80, 4, 1);       // TCR.ITMENA: ignored, locked
+  t.w(ITM + 0xE00, 4, 1);       // TER port 0: ignored
+  t.w(ITM + 0xE40, 4, 0xF);     // TPR: ignored
+  CHECK(t.r(ITM + 0xE80) == 0);
+  CHECK(t.r(ITM + 0xE00) == 0);
+  CHECK(t.r(ITM + 0xE40) == 0);
+  CHECK(t.r(ITM + 0xFB4) == 3);
+  t.puts("lost\n");
+  CHECK(take_events().empty());
+  // a wrong key keeps it locked; the right key unlocks; any other value locks again
+  t.w(ITM + 0xFB0, 4, 0x12345678u);
+  CHECK(t.r(ITM + 0xFB4) == 3);
+  t.w(ITM + 0xFB0, 4, 0xC5ACCE55u);
+  t.w(ITM + 0xE80, 4, 1);
+  t.w(ITM + 0xE00, 4, 1);
+  t.puts("ok\n");
+  auto ev = take_events();
+  REQUIRE(ev.size() == 1);
+  CHECK(ev[0].data["text"] == "ok");
+  t.w(ITM + 0xFB0, 4, 0);       // lock
+  CHECK(t.r(ITM + 0xFB4) == 3);
+  t.w(ITM + 0xE80, 4, 0);       // ignored: ITM stays enabled
+  CHECK(t.r(ITM + 0xE80) == 1);
+}
+
+TEST_CASE("attached: a debugger has unlocked the ITM (LSR = 1)") {
+  Rig t(true);
+  CHECK(t.r(ITM + 0xFB4) == 1);
+  t.w(ITM + 0xE00, 4, 0x3);
+  CHECK(t.r(ITM + 0xE00) == 0x3);
 }
 
 TEST_CASE("ITM lines: per-port buffers, widths, CRLF, virtual timestamps") {
