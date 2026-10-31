@@ -130,7 +130,26 @@ void send_or_exit(uint8_t type, const std::string& payload) {
   if (!send_msg(type, payload)) _exit(0);  // Python went away: nothing left to report to
 }
 
-void abort_hook(const char* msg) { (void)send_msg(STEST_MSG_ERROR, msg); }
+// Unterminated ITM text (a log line without its '\n') at exit/abort is written to stderr as
+//   stest: ITM unterminated {"port":N,"text":"..."}
+// so it reaches the crash report and the Python side (Node._drain_stderr turns port-0 ones
+// into a final Node.log entry).
+void report_itm_partial() {
+  try {
+    if (Cortexm* c = Cortexm::installed())
+      for (auto& [port, text] : c->take_itm_partial()) {
+        nlohmann::json j = {{"port", port}, {"text", text}};
+        std::fprintf(stderr, "stest: ITM unterminated %s\n", j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace).c_str());
+      }
+    std::fflush(stderr);
+  } catch (...) {
+  }
+}
+
+void abort_hook(const char* msg) {
+  report_itm_partial();
+  (void)send_msg(STEST_MSG_ERROR, msg);
+}
 
 // ---- fault-safe memory copy ----
 // Copies through a pipe: the kernel validates both addresses (EFAULT instead of a
@@ -244,6 +263,9 @@ void run_control_channel(int fd, const ChipDesc& chip, FirmwareMain fw, const vo
   (void)::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
 #endif
   set_abort_hook(&abort_hook);
+  // Firmware printf output goes to a pipe the host drains: line-buffer it so lines appear
+  // as they are printed (and flush partial lines whenever the node reports STOPPED).
+  std::setvbuf(stdout, nullptr, _IOLBF, 0);
   watch_parent();
   if (const char* c = std::getenv("STEST_ACCESS_COST_NS")) {
     char* end = nullptr;
@@ -266,6 +288,7 @@ void run_control_channel(int fd, const ChipDesc& chip, FirmwareMain fw, const vo
     for (;;) {
       uint8_t hdr[5];
       if (!read_all(hdr, sizeof hdr)) {  // EOF: Python closed the channel
+        report_itm_partial();
         std::fflush(stdout);
         _exit(0);
       }
@@ -291,6 +314,7 @@ void run_control_channel(int fd, const ChipDesc& chip, FirmwareMain fw, const vo
           if (node->run_until(t) == Node::Stop::Exited)
             stest_rt_abort("firmware main returned %d at t=%" PRIu64 " ns", node->exit_code(),
                            node->now_ns());
+          std::fflush(stdout);  // everything printed so far is in the pipe before STOPPED
           std::vector<Event> evs = take_events();
           Out o;
           o.u64(node->now_ns());
@@ -340,6 +364,7 @@ void run_control_channel(int fd, const ChipDesc& chip, FirmwareMain fw, const vo
           break;
         case STEST_MSG_SHUTDOWN:
           in.end();
+          report_itm_partial();
           std::fflush(stdout);
           std::fflush(stderr);
           _exit(0);

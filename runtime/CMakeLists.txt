@@ -11,8 +11,10 @@ FetchContent_MakeAvailable(doctest nlohmann_json)
 # Never instrumented by the MMIO pass: runtime volatile accesses must not recurse.
 find_package(Threads REQUIRED)
 add_library(stest_runtime STATIC src/mmio.cpp src/bus.cpp src/clock.cpp src/peripheral.cpp src/cortexm.cpp
-                                 src/node.cpp src/control_channel.cpp src/model_context.cpp)
-target_include_directories(stest_runtime PUBLIC include)
+                                 src/node.cpp src/control_channel.cpp src/model_context.cpp
+                                 # Core-generic ITM/DWT/CoreDebug models (chips/cortexm), mapped by Cortexm.
+                                 ../chips/cortexm/coredebug.cpp ../chips/cortexm/itm.cpp ../chips/cortexm/dwt.cpp)
+target_include_directories(stest_runtime PUBLIC include ${PROJECT_SOURCE_DIR}/chips)
 target_link_libraries(stest_runtime PUBLIC nlohmann_json::nlohmann_json Threads::Threads)
 # Hot path of every firmware access: always optimised, even in Debug/unset configs.
 target_compile_options(stest_runtime PRIVATE -O2)
@@ -91,6 +93,11 @@ add_test(NAME runtime_poll_skip COMMAND runtime_poll_skip_tests)
 add_executable(runtime_model_context_tests tests/main.cpp tests/test_model_context.cpp)
 target_link_libraries(runtime_model_context_tests PRIVATE stest_runtime doctest::doctest)
 add_test(NAME runtime_model_context COMMAND runtime_model_context_tests)
+
+# ---- Plan 2 Task 8: ITM / DWT / CoreDebug (chips/cortexm) ----
+add_executable(runtime_trace_tests tests/main.cpp tests/test_trace.cpp)
+target_link_libraries(runtime_trace_tests PRIVATE stest_runtime doctest::doctest)
+add_test(NAME runtime_trace COMMAND runtime_trace_tests)
 
 # Every CTest that runs a firmware/node executable gets a 30 s timeout.
 get_property(_stest_rt_tests DIRECTORY PROPERTY TESTS)

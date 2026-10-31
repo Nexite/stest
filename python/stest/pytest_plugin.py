@@ -9,10 +9,13 @@ Registered through the ``pytest11`` entry point (installed with the package).
 * option ``--stest-poll-skip`` (poll fast-forward threshold; 0 disables; default: runtime's 64).
 * option ``--stest-strict-analog``: converting an ADC channel with no input voltage aborts
   the node (default: it reads 0 V with one stderr warning).
-* marker ``@pytest.mark.stest(quantum_us=..., wall_timeout_s=..., poll_skip=..., strict_analog=...)``
-  overrides them per test.
-* on failure each node's last 200 stderr lines and the merged event log are attached to the
-  report as ``stest node <name> stderr`` and ``stest events`` sections.
+* option ``--stest-no-debugger``: power-on state without an attached debugger (ITM/DWT trace
+  disabled; ``ITM_SendChar`` drops output). Default: a debugger is attached.
+* marker ``@pytest.mark.stest(quantum_us=..., wall_timeout_s=..., poll_skip=..., strict_analog=...,
+  debugger_attached=...)`` overrides them per test (marker > CLI > default).
+* on failure each node's last 200 stderr lines, ITM port-0 log, last 200 stdout lines and the
+  merged event log are attached to the report as ``stest node <name> stderr`` / ``log`` /
+  ``stdout`` and ``stest events`` sections.
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ import pytest
 from .sim import Sim
 
 EVENT_LOG_LINES = 500
+ITM_LOG_LINES = 200
 _SIM_KEY = pytest.StashKey[Sim]()
 
 
@@ -37,14 +41,17 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     g.addoption("--stest-strict-analog", action="store_true", default=None,
                 help="abort a node that converts an ADC channel with no input voltage set "
                      "(default: read 0 V and warn once per channel)")
+    g.addoption("--stest-no-debugger", action="store_true", default=None,
+                help="start without an attached debugger: ITM/DWT trace and DHCSR.C_DEBUGEN off, "
+                     "so CMSIS ITM_SendChar drops output (default: debugger attached)")
 
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
-        "stest(quantum_us=..., wall_timeout_s=..., poll_skip=..., strict_analog=...): override the "
-        "simulation quantum, wall-clock timeout, poll fast-forward threshold and strict analog "
-        "inputs of the `sim` fixture for this test",
+        "stest(quantum_us=..., wall_timeout_s=..., poll_skip=..., strict_analog=..., debugger_attached=...): "
+        "override the simulation quantum, wall-clock timeout, poll fast-forward threshold, strict "
+        "analog inputs and debugger-attached power-on state of the `sim` fixture for this test",
     )
 
 
@@ -55,20 +62,23 @@ def sim(request: pytest.FixtureRequest):
     wall_timeout_s = cfg.getoption("--stest-wall-timeout")
     poll_skip = cfg.getoption("--stest-poll-skip")
     strict_analog = cfg.getoption("--stest-strict-analog")
+    debugger_attached = False if cfg.getoption("--stest-no-debugger") else None
     marker = request.node.get_closest_marker("stest")
     if marker is not None:
-        unknown = set(marker.kwargs) - {"quantum_us", "wall_timeout_s", "poll_skip", "strict_analog"}
+        unknown = set(marker.kwargs) - {"quantum_us", "wall_timeout_s", "poll_skip", "strict_analog",
+                                         "debugger_attached"}
         if unknown or marker.args:
             raise pytest.UsageError(
-                "@pytest.mark.stest accepts only quantum_us=, wall_timeout_s=, poll_skip= and "
-                f"strict_analog= (got {marker.args} {sorted(unknown)})"
+                "@pytest.mark.stest accepts only quantum_us=, wall_timeout_s=, poll_skip=, "
+                f"strict_analog= and debugger_attached= (got {marker.args} {sorted(unknown)})"
             )
         quantum_us = marker.kwargs.get("quantum_us", quantum_us)
         wall_timeout_s = marker.kwargs.get("wall_timeout_s", wall_timeout_s)
         poll_skip = marker.kwargs.get("poll_skip", poll_skip)
         strict_analog = marker.kwargs.get("strict_analog", strict_analog)
+        debugger_attached = marker.kwargs.get("debugger_attached", debugger_attached)
     s = Sim(quantum_us=quantum_us, wall_timeout_s=wall_timeout_s, poll_skip=poll_skip,
-            strict_analog=strict_analog)
+            strict_analog=strict_analog, debugger_attached=debugger_attached)
     request.node.stash[_SIM_KEY] = s
     try:
         yield s
@@ -85,6 +95,14 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
             lines = n.stderr_lines(200)
             item.add_report_section(
                 call.when, f"stest node {n.name} stderr", "\n".join(lines) if lines else "(no stderr output)"
+            )
+            log = n.log
+            item.add_report_section(
+                call.when, f"stest node {n.name} log", "\n".join(log[-ITM_LOG_LINES:]) if log else "(no ITM output)"
+            )
+            out = n.stdout_lines(200)
+            item.add_report_section(
+                call.when, f"stest node {n.name} stdout", "\n".join(out) if out else "(no stdout output)"
             )
         if s.event_log:
             log = s.event_log[-EVENT_LOG_LINES:]

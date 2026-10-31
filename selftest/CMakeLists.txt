@@ -21,10 +21,10 @@ add_test(NAME selftest_blinky_speed
           $<TARGET_FILE:blinky> 5000 2.0)
 
 # Fault-injection firmware: one executable per variant (faults_spin, faults_crash,
-# faults_unmodelled, faults_ro_write, faults_clkoff). Uses no HAL, so the HAL archive is a single file; the HAL config
+# faults_unmodelled, faults_ro_write, faults_clkoff, faults_printf). Uses no HAL, so the HAL archive is a single file; the HAL config
 # header is borrowed from blinky.
 stest_st_family_dirs(stm32l4 _st_hal _st_dev)
-foreach(variant SPIN CRASH UNMODELLED RO_WRITE CLKOFF)
+foreach(variant SPIN CRASH UNMODELLED RO_WRITE CLKOFF PRINTF)
   string(TOLOWER ${variant} v)
   stest_add_firmware(faults_${v}
     CHIP STM32L496RG
@@ -92,6 +92,14 @@ foreach(variant TXRX TX)
     INCLUDE_DIRS ${_spi}/Inc ${_bl}/Inc
     DEFINES SPI_VARIANT=SPI_${variant})
 endforeach()
+
+# ITM/DWT: CMSIS ITM_SendChar logging every 100 ms + DWT CYCCNT across HAL_Delay(9) (blinky
+# scaffolding for clocks/handlers/MSP).
+stest_add_firmware(itm
+  CHIP STM32L496RG
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/firmware/itm/main.c ${_bl}/Src/stm32l4xx_it.c
+          ${_bl}/Src/stm32l4xx_hal_msp.c
+  INCLUDE_DIRS ${_bl}/Inc)
 
 # Poll fast-forward regression firmware (counting loop over a constant volatile read).
 stest_add_firmware(pollcount

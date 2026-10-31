@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import collections
 import json
+import fcntl
 import os
+import re
+import select
 import signal
 import socket
 import subprocess
+import sys
 import threading
+import termios
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -23,6 +28,8 @@ if TYPE_CHECKING:
 
 STDERR_TAIL_LINES = 20  # shown in NodeCrashed messages / Node.stderr_tail
 STDERR_KEEP_LINES = 200  # retained per node (the pytest plugin's failure report)
+STDOUT_KEEP_LINES = 200  # retained firmware stdout lines (Node.stdout_tail)
+_ITM_PARTIAL_PREFIX = "stest: ITM unterminated "
 
 
 class Node:
@@ -43,6 +50,11 @@ class Node:
         self._stderr: collections.deque[str] = collections.deque(maxlen=STDERR_KEEP_LINES)
         self._stderr_lock = threading.Lock()
         self._stderr_thread: threading.Thread | None = None
+        self._stdout: collections.deque[str] = collections.deque(maxlen=STDOUT_KEEP_LINES)
+        self._stdout_lock = threading.Lock()  # held by the drain thread from read() to append
+        self._stdout_thread: threading.Thread | None = None
+        self._itm: dict[int, list[str]] = {}  # port -> completed lines
+        self._log_cursor = 0  # Node.wait_for_log has consumed log[:cursor]
         self._seq = 0
         self._pin_history: dict[tuple[str, int], list[tuple[int, int]]] = {}
         self._spi_bursts: dict[str, list[SpiBurst]] = {}
@@ -57,6 +69,50 @@ class Node:
         """The node's last ``n`` (at most 200) captured stderr lines."""
         with self._stderr_lock:
             return list(self._stderr)[-n:] if n > 0 else []
+
+    @property
+    def log(self) -> list[str]:
+        """ITM port-0 lines (text before each ``\\n``) in order, as of the last completed
+        quantum. Empty when no ITM output happened (e.g. ``Sim(debugger_attached=False)``).
+        A final unterminated line is appended if the node exits or aborts mid-line."""
+        return list(self._itm.get(0, ()))
+
+    def itm_port(self, port: int) -> list[str]:
+        """Lines written to ITM stimulus port ``port`` (0 is :attr:`log`)."""
+        return list(self._itm.get(int(port), ()))
+
+    @property
+    def stdout_tail(self) -> list[str]:
+        """The node's last 200 firmware stdout lines (``printf``; line-buffered by the
+        runtime, complete as of the last completed quantum)."""
+        return self.stdout_lines(STDOUT_KEEP_LINES)
+
+    def stdout_lines(self, n: int = STDOUT_KEEP_LINES) -> list[str]:
+        """The node's last ``n`` (at most 200) captured stdout lines."""
+        self._sync_stdout()
+        with self._stdout_lock:
+            return list(self._stdout)[-n:] if n > 0 else []
+
+    def wait_for_log(self, pattern: str, timeout_ms: float) -> re.Match:
+        """Advances the simulation until a ITM port-0 line not yet consumed by an earlier
+        ``wait_for_log`` matches the regex ``pattern`` (``re.search``); returns the match and
+        consumes lines up to and including the matching one. Raises WaitTimeout after
+        ``timeout_ms`` of virtual time. Checked at every quantum boundary."""
+        rx = re.compile(pattern)
+        found: list[re.Match] = []
+
+        def cond() -> bool:
+            lines = self._itm.get(0, [])
+            for i in range(self._log_cursor, len(lines)):
+                m = rx.search(lines[i])
+                if m:
+                    self._log_cursor = i + 1
+                    found.append(m)
+                    return True
+            return False
+
+        self.sim.wait_for(cond, timeout_ms, what=f"log line matching {pattern!r} on node {self.name!r}")
+        return found[0]
 
     def pin(self, name: str) -> Pin:
         return Pin(self, name)
@@ -143,6 +199,7 @@ class Node:
                 [str(self.exe)],
                 env=env,
                 stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 pass_fds=(child.fileno(),),
             )
@@ -154,6 +211,10 @@ class Node:
             target=self._drain_stderr, name=f"stest-stderr-{self.name}", daemon=True
         )
         self._stderr_thread.start()
+        self._stdout_thread = threading.Thread(
+            target=self._drain_stdout, name=f"stest-stdout-{self.name}", daemon=True
+        )
+        self._stdout_thread.start()
 
     def _drain_stderr(self) -> None:
         assert self._proc and self._proc.stderr
@@ -161,10 +222,65 @@ class Node:
             line = raw.decode("utf-8", "replace").rstrip("\r\n")
             with self._stderr_lock:
                 self._stderr.append(line)
+            if line.startswith(_ITM_PARTIAL_PREFIX):  # runtime flushed an unterminated ITM line
+                try:
+                    d = json.loads(line[len(_ITM_PARTIAL_PREFIX):])
+                    self._itm.setdefault(int(d["port"]), []).append(str(d["text"]))
+                except (ValueError, KeyError, TypeError):
+                    pass
+
+    def _drain_stdout(self) -> None:
+        """Reads the stdout pipe with non-blocking reads so a chatty firmware never fills it.
+        The lock is held from read() through the append: _sync_stdout() relies on it."""
+        assert self._proc and self._proc.stdout
+        fd = self._proc.stdout.fileno()
+        os.set_blocking(fd, False)
+        pending = b""
+        eof = False
+        while not eof:
+            select.select([fd], [], [])
+            with self._stdout_lock:
+                while True:
+                    try:
+                        chunk = os.read(fd, 65536)
+                    except BlockingIOError:
+                        break
+                    except OSError:
+                        eof = True
+                        break
+                    if not chunk:
+                        eof = True
+                        break
+                    pending += chunk
+                    *lines, pending = pending.split(b"\n")
+                    for raw in lines:
+                        self._stdout.append(raw.decode("utf-8", "replace").rstrip("\r"))
+                if eof and pending:
+                    self._stdout.append(pending.decode("utf-8", "replace").rstrip("\r"))
+
+    def _sync_stdout(self) -> None:
+        """Returns once everything the (parked or exited) node has written to stdout has been
+        consumed by the drain thread. The runtime flushes stdout before each STOPPED."""
+        if not self._proc or not self._proc.stdout or not self._stdout_thread:
+            return
+        fd = self._proc.stdout.fileno()
+        deadline = time.monotonic() + 2.0
+        while self._stdout_thread.is_alive() and time.monotonic() < deadline:
+            with self._stdout_lock:
+                try:
+                    buf = bytearray(4)
+                    fcntl.ioctl(fd, termios.FIONREAD, buf)
+                    if int.from_bytes(buf, sys.byteorder, signed=True) == 0:
+                        return
+                except OSError:
+                    return
+            time.sleep(0.0005)
 
     def _join_stderr(self, timeout: float = 2.0) -> None:
         if self._stderr_thread:
             self._stderr_thread.join(timeout)
+        if self._stdout_thread:
+            self._stdout_thread.join(timeout)
 
     @property
     def _alive(self) -> bool:
@@ -256,6 +372,8 @@ class Node:
                 self._spi_bursts.setdefault(data["bus"], []).append(
                     SpiBurst(int(data["t_start"]), bytes.fromhex(data["mosi"]), bytes.fromhex(data["miso"]), t)
                 )
+            elif data.get("kind") == "itm":
+                self._itm.setdefault(int(data["port"]), []).append(data["text"])
             out.append((t, self.index, self._seq, self.name, js))
             self._seq += 1
         return out

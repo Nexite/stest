@@ -86,6 +86,9 @@ int run_standalone(int argc, char** argv) {
   while (t < end_ns) {
     t = (end_ns - t > q_ns) ? t + q_ns : end_ns;
     stest::Node::Stop stop = node->run_until(t);
+    if (stop == stest::Node::Stop::Exited)  // unterminated ITM text is flushed as a last event
+      for (auto& [port, text] : node->core().take_itm_partial())
+        stest::emit_event(node->now_ns(), {{"kind", "itm"}, {"port", port}, {"text", text}, {"partial", true}});
     print_events();
     if (stop == stest::Node::Stop::Exited) {
       std::fflush(stdout);

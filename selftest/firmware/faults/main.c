@@ -4,6 +4,8 @@
  *   UNMODELLED  write to USART1 (0x40013800, not modelled) at 10 ms (strict abort)
  *   RO_WRITE    write to GPIOA->IDR (read-only register) at 10 ms (strict abort)
  *   CLKOFF      write to GPIOB->ODR without enabling the GPIOB clock at 10 ms (strict abort)
+ *   PRINTF      no fault: at 10 ms printf("hi\n") to stdout (after STEST_FAULT_STDOUT_LINES lines
+ *               "line <i>", if set), then sleep; used to test stdout capture
  *
  * Every variant except CLKOFF enables the GPIOA clock first (GPIO access with its RCC
  * enable bit clear is itself a strict abort).
@@ -22,8 +24,9 @@
 #define UNMODELLED 3
 #define RO_WRITE 4
 #define CLKOFF 5
+#define PRINTF 6
 #ifndef FAULT
-#error "define FAULT=SPIN|CRASH|UNMODELLED|RO_WRITE|CLKOFF"
+#error "define FAULT=SPIN|CRASH|UNMODELLED|RO_WRITE|CLKOFF|PRINTF"
 #endif
 
 static volatile uint32_t ticks;
@@ -58,6 +61,14 @@ int main(void)
   GPIOA->IDR = 1u; /* read-only register: strict abort, not a silent no-op */
 #elif FAULT == CLKOFF
   GPIOB->ODR = 1u; /* GPIOB clock (RCC AHB2ENR bit 1) never enabled: strict abort */
+#elif FAULT == PRINTF
+  {
+    const char *lines = getenv("STEST_FAULT_STDOUT_LINES");
+    long n = lines ? strtol(lines, NULL, 10) : 0;
+    for (long i = 0; i < n; i++)
+      printf("line %ld\n", i);
+    printf("hi\n");
+  }
 #else
 #error "unknown FAULT"
 #endif

@@ -246,3 +246,58 @@ def test_node_exits_when_parent_pid_does_not_match(faults_exe):
         a.close()
         b.close()
     assert p.returncode == 1
+
+
+def test_debugger_option_and_marker(pytester):
+    pytester.makepyfile(
+        test_default="""
+        import pytest
+
+        def test_default(sim):
+            assert sim.debugger_attached is None
+
+        @pytest.mark.stest(debugger_attached=False)
+        def test_marker(sim):
+            assert sim.debugger_attached is False
+        """,
+        test_cli="""
+        import pytest
+
+        def test_cli(sim):
+            assert sim.debugger_attached is False
+
+        @pytest.mark.stest(debugger_attached=True)
+        def test_marker_wins(sim):
+            assert sim.debugger_attached is True
+
+        @pytest.mark.stest(quantum_us=50)
+        def test_other_marker_keeps_cli(sim):
+            assert sim.debugger_attached is False
+        """,
+    )
+    pytester.runpytest("test_default.py", "--strict-markers").assert_outcomes(passed=2)
+    r = pytester.runpytest("test_cli.py", "--stest-no-debugger", "--strict-markers")
+    r.assert_outcomes(passed=3)
+
+
+def test_failure_report_has_itm_and_stdout_sections(pytester, itm_exe, faults_exe):
+    pytester.makepyfile(
+        f"""
+        def test_itm_fails(sim):
+            n = sim.node("a", r"{itm_exe}")
+            sim.start()
+            sim.advance(ms=150)
+            assert False, "boom"
+
+        def test_stdout_fails(sim):
+            n = sim.node("b", r"{faults_exe('printf')}")
+            sim.start()
+            sim.advance(ms=20)
+            assert False, "boom"
+        """
+    )
+    r = pytester.runpytest("--strict-markers")
+    r.assert_outcomes(failed=2)
+    out = r.stdout.str()
+    assert "stest node a log" in out and "hello 1" in out
+    assert "stest node b stdout" in out

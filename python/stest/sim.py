@@ -44,7 +44,8 @@ class Sim:
     """
 
     def __init__(self, quantum_us: int = 1000, wall_timeout_s: float = 30.0, access_cost_ns: int = 25,
-                 poll_skip: int | None = None, strict_analog: bool | None = None):
+                 poll_skip: int | None = None, strict_analog: bool | None = None,
+                 debugger_attached: bool | None = None):
         if quantum_us <= 0:
             raise ValueError("quantum_us must be positive")
         if wall_timeout_s <= 0:
@@ -60,6 +61,10 @@ class Sim:
         # True: converting an ADC channel with no input voltage aborts the node (else it
         # reads 0 V with one stderr warning). None: inherit STEST_STRICT_ANALOG.
         self.strict_analog = strict_analog
+        # False: power-on state of an unattached board (ITM/TRCENA/C_DEBUGEN all off, so CMSIS
+        # ITM_SendChar drops output). None/True: a debugger is attached (STEST_DEBUGGER unset
+        # or any value but "0"; the default).
+        self.debugger_attached = debugger_attached
         self.nodes: list[Node] = []
         # Merged event log: (t_ns, node name, event JSON text), in merge order.
         self.event_log: list[tuple[int, str, str]] = []
@@ -95,6 +100,8 @@ class Sim:
             extra["STEST_POLL_SKIP"] = str(int(self.poll_skip))
         if self.strict_analog is not None:
             extra["STEST_STRICT_ANALOG"] = "1" if self.strict_analog else "0"
+        if self.debugger_attached is not None:
+            extra["STEST_DEBUGGER"] = "1" if self.debugger_attached else "0"
         try:
             for n in self.nodes:
                 n._spawn(extra)

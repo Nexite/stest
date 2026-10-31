@@ -88,3 +88,8 @@ def spi_exe():
         return _exe(f"spi_{variant}" if variant else "spi")
 
     return get
+
+
+@pytest.fixture
+def itm_exe() -> Path:
+    return _exe("itm")

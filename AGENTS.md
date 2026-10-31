@@ -13,6 +13,7 @@ stest is an open-source (Apache-2.0) STM32 software-in-the-loop simulator. Real 
 | `compiler/mmio_pass/` | LLVM pass plugin (`StestMmioPass.cpp`) rewriting volatile loads/stores |
 | `runtime/include/stest/`, `runtime/src/` | Bus, Clock, Cortexm core (NVIC/SysTick/wfi), MMIO entry points, Node, control channel, `protocol.h` |
 | `runtime/tests/` | doctest unit tests + abort/e2e helpers (CTest `runtime_*`) |
+| `chips/cortexm/` | Core-generic ITM, DWT and CoreDebug (DHCSR/DEMCR) models; compiled into `stest_runtime` and mapped by `Cortexm` for every chip |
 | `chips/<family>/models/`, `parts/*.toml` | Peripheral models (C++) and per-part chip descriptions (`stm32l4/parts/stm32l496rg.toml`) |
 | `chips/cmsis_host/` | Host shim for CMSIS `cmsis_compiler.h` (replaces ARM toolchain header) |
 | `tools/gen_chip.py` | TOML -> generated chip glue (IRQ table, weak handlers, model instances, `stest_chip`) |
@@ -107,7 +108,7 @@ Note the Docker build writes into the host `build/`; if you share the tree with 
 ## Testing conventions
 
 - TDD: write the failing test first. C++ uses doctest; CTest names are prefixed `runtime_`, `chip_`, `selftest_` (and `python_tests`). Python and e2e use pytest (`python/tests/`, `pytester` for plugin tests).
-- Self-test firmwares live in `selftest/firmware/*`; fault injection is one exe per variant (`faults_spin|crash|unmodelled|ro_write|clkoff`).
+- Self-test firmwares live in `selftest/firmware/*`; fault injection is one exe per variant (`faults_spin|crash|unmodelled|ro_write|clkoff`, plus `faults_printf` for stdout capture).
 - Every CTest has a `TIMEOUT` (30 s for runtime/selftests, 300 for `python_tests`); set one on new tests.
 - Before claiming done, run the full suite natively AND in Docker (Linux-only paths like `PR_SET_PDEATHSIG` and `/proc` differ from macOS).
 - Do not match on raw JSON key order in event logs (keys are sorted).
@@ -119,6 +120,7 @@ Note the Docker build writes into the host `build/`; if you share the tree with 
 - Do not put CMSIS-Core headers (`core_cm*.h`, `cmsis_gcc.h`, `cmsis_compiler.h`) in `INCLUDE_DIRS`; configure fails by design.
 - `HAL_Delay(n)` waits n+1 ticks (ST adds one); blinky uses `HAL_Delay(499)` so edges land at 500 ms, 1000 ms...
 - Analog: pin voltages live in the GPIO models (`Pin.set_voltage`, DAC outputs); the ADC resolves channels to pins through the part TOML's `[[analog]]` table (injected into the ADC's params by `gen_chip.py`). An unset input reads 0 V with one stderr warning per (ADC, channel), or aborts with `STEST_STRICT_ANALOG=1` / `Sim(strict_analog=True)` / `--stest-strict-analog` / `@pytest.mark.stest(strict_analog=True)`. MODEL_CALL (Python) bypasses RCC clock gating by design.
+- ITM/DWT/CoreDebug (`chips/cortexm/`) are mapped by `Cortexm` on every chip; the default models an attached debugger (ITM/TRCENA/C_DEBUGEN on) so CMSIS `ITM_SendChar` works. `STEST_DEBUGGER=0` / `Sim(debugger_attached=False)` / `--stest-no-debugger` / `@pytest.mark.stest(debugger_attached=False)` selects the bare-board state (marker > CLI > default), where `ITM_SendChar` drops output. Python: `node.log` (ITM port-0 lines), `node.itm_port(n)`, `node.wait_for_log(regex, timeout_ms)`, `node.stdout_tail` (last 200 firmware `printf` lines; the runtime line-buffers stdout and Python drains the pipe like stderr). ITM events are `{"kind":"itm","port":N,"text":...}`; an unterminated line at abort/exit is written to stderr as `stest: ITM unterminated {"port":N,"text":...}` (and appended to `node.log`). DWT CYCCNT derives from virtual time x `SystemCoreClock` (a clock change applies to the time since the previous DWT access); comparators and other trace features abort.
 - Poll fast-forward dilates loops that count iterations over constant volatile reads (`while (--n && !(REG & FLAG));`). Disable with `STEST_POLL_SKIP=0`, `Sim(poll_skip=0)`, `--stest-poll-skip 0` or `@pytest.mark.stest(poll_skip=0)`.
 - Zombie nodes: in a container where pytest is PID 1 (as in CI's `docker run ... bash -c '...; uv run pytest'`), killed orphans are never reaped; `python/tests/test_plugin.py` checks `/proc/<pid>/stat` for state `Z`. Keep that in mind when writing process-lifetime tests.
 - Nodes exit when their parent dies: Python passes `STEST_PARENT_PID`; the runtime uses `PR_SET_PDEATHSIG` (Linux) plus a getppid watchdog thread. Do not use `preexec_fn` for this. macOS SIGTERM bypasses `atexit`.

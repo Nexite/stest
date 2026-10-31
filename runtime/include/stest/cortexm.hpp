@@ -22,6 +22,12 @@
 // core clock comes from a registered getter (firmware's CMSIS SystemCoreClock); it
 // is re-read on every SysTick register access and wrap. Wraps are Clock events.
 //
+// Core-generic debug/trace blocks (chips/cortexm/): ITM (0xE0000000), DWT (0xE0001000) and
+// CoreDebug DHCSR/DEMCR (0xE000EDF0) are mapped for every chip. The power-on state models an
+// attached debugger (DHCSR.C_DEBUGEN, DEMCR.TRCENA, ITM TCR.ITMENA and TER bit 0 set) so CMSIS
+// ITM_SendChar works unchanged; the node env STEST_DEBUGGER=0 (or the constructor argument)
+// selects the bare-board state, where ITM_SendChar drops its output.
+//
 // Unmodelled offsets in any block throw UnmodelledRegister (strict mode -> abort).
 // Unsupported actions (SYSRESETREQ, NMIPENDSET) throw std::runtime_error and invalid
 // IRQn (NMI/faults, out of range) std::out_of_range; the C boundary (mmio access,
@@ -29,6 +35,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 #include "stest/bus.hpp"
 #include "stest/clock.hpp"
 #include "stest/runtime.hpp"
@@ -43,12 +53,15 @@ class Cortexm {
   static constexpr uint64_t kSysTickBase = 0xE000E010, kSysTickSize = 0x10;
   static constexpr uint64_t kNvicBase = 0xE000E100, kNvicSize = 0x3F0;  // ISER..IPR[239]
   static constexpr uint64_t kScbBase = 0xE000ED00, kScbSize = 0x90;     // CPUID..CPACR
+  static constexpr uint64_t kItmBase = 0xE0000000, kDwtBase = 0xE0001000, kCoreDebugBase = 0xE000EDF0;
   static constexpr int kSVCall_IRQn = -5, kPendSV_IRQn = -2, kSysTick_IRQn = -1;
 
   // irq_table[IRQn + 16] = handler (null entries abort if ever delivered).
   // n_irqs = number of table entries (16 + external IRQ count, <= 16 + 240).
-  // Maps the three core blocks on `bus`; unmaps them in the destructor.
-  Cortexm(Bus& bus, Clock& clock, unsigned prio_bits, const IrqHandler* irq_table, size_t n_irqs);
+  // Maps the core blocks on `bus`; unmaps them in the destructor. debugger_attached: nullopt
+  // reads STEST_DEBUGGER (only "0" means detached; default attached).
+  Cortexm(Bus& bus, Clock& clock, unsigned prio_bits, const IrqHandler* irq_table, size_t n_irqs,
+          std::optional<bool> debugger_attached = std::nullopt);
   ~Cortexm();
   Cortexm(const Cortexm&) = delete;
   Cortexm& operator=(const Cortexm&) = delete;
@@ -96,6 +109,10 @@ class Cortexm {
   void set_quantum_hook(QuantumHook h);  // null by default
 
   void set_core_clock_getter(CoreClockGetter g);
+
+  bool debugger_attached() const;
+  // Unterminated ITM text (port, text) written so far; clears it. Called at exit/abort.
+  std::vector<std::pair<int, std::string>> take_itm_partial();
   // >= 1; default 1. Configuring it also marks the external reference as present
   // (SysTick CALIB.NOREF reads 0 instead of 1).
   void set_systick_external_divider(uint32_t div);

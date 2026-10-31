@@ -2,9 +2,14 @@
 // See stest/cortexm.hpp for the dispatch model.
 #include "stest/cortexm.hpp"
 #include <algorithm>
+#include <cstdlib>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "cortexm/coredebug.hpp"
+#include "cortexm/dwt.hpp"
+#include "cortexm/itm.hpp"
 #include "stest/cortexm_c.h"
 #include "stest/mmio.h"
 #include "stest/peripheral.hpp"
@@ -201,10 +206,13 @@ struct Cortexm::Impl {
     }
   };
 
-  Impl(Bus& b, Clock& k, unsigned bits, const IrqHandler* t, size_t n)
+  Impl(Bus& b, Clock& k, unsigned bits, const IrqHandler* t, size_t n, bool attached_)
       : bus(b), clock(k), prio_bits(bits), prio_mask(static_cast<uint8_t>(0xFFu << (8 - bits))),
         table(t), n_exc(n), en(n, 0), pend(n, 0), act(n, 0), prio(n, 0), lvl(n, 0),
-        nvic(*this), scb(*this), systick(*this) {}
+        nvic(*this), scb(*this), systick(*this), attached(attached_), coredebug(attached_),
+        itm(k, coredebug, attached_), dwt(k, coredebug, [this] { return core_hz(); }, attached_) {
+    coredebug.set_dwt(&dwt);
+  }
 
   Bus& bus;
   Clock& clock;
@@ -237,6 +245,26 @@ struct Cortexm::Impl {
   Nvic nvic;
   Scb scb;
   SysTick systick;
+
+  // Core-generic debug/trace blocks (chips/cortexm): CoreDebug (DHCSR/DEMCR), ITM, DWT.
+  bool attached;
+  CoreDebug coredebug;
+  Itm itm;
+  Dwt dwt;
+  void unmap_all() {
+    bus.unmap(&systick);
+    bus.unmap(&nvic);
+    bus.unmap(&scb);
+    bus.unmap(&coredebug);
+    bus.unmap(&itm);
+    bus.unmap(&dwt);
+  }
+  uint32_t core_hz() const {
+    if (!getter)
+      throw std::runtime_error("DWT CYCCNT running but no core clock getter registered "
+                               "(Cortexm::set_core_clock_getter)");
+    return getter();
+  }
 
   // ---- dispatcher ----
   int exc_of(int irqn) const {
@@ -401,18 +429,25 @@ struct Cortexm::Impl {
 };
 
 Cortexm::Cortexm(Bus& bus, Clock& clock, unsigned prio_bits, const IrqHandler* irq_table,
-                 size_t n_irqs) {
+                 size_t n_irqs, std::optional<bool> debugger_attached) {
   if (prio_bits < 2 || prio_bits > 8) throw std::invalid_argument("Cortexm: prio_bits must be 2..8");
   if (!irq_table) throw std::invalid_argument("Cortexm: null irq_table");
   if (n_irqs < 16 || n_irqs > 16 + 240) throw std::invalid_argument("Cortexm: n_irqs must be 16..256");
-  impl_ = std::make_unique<Impl>(bus, clock, prio_bits, irq_table, n_irqs);
-  bus.map(kSysTickBase, kSysTickSize, &impl_->systick);
+  bool attached = debugger_attached.value_or(true);
+  if (!debugger_attached) {
+    const char* e = std::getenv("STEST_DEBUGGER");
+    if (e && std::strcmp(e, "0") == 0) attached = false;
+  }
+  impl_ = std::make_unique<Impl>(bus, clock, prio_bits, irq_table, n_irqs, attached);
   try {
+    bus.map(kSysTickBase, kSysTickSize, &impl_->systick);
     bus.map(kNvicBase, kNvicSize, &impl_->nvic);
     bus.map(kScbBase, kScbSize, &impl_->scb);
+    bus.map(kCoreDebugBase, CoreDebug::kSize, &impl_->coredebug);
+    bus.map(kItmBase, Itm::kSize, &impl_->itm);
+    bus.map(kDwtBase, Dwt::kSize, &impl_->dwt);
   } catch (...) {
-    bus.unmap(&impl_->systick);
-    bus.unmap(&impl_->nvic);
+    impl_->unmap_all();
     throw;
   }
 }
@@ -423,10 +458,11 @@ Cortexm::~Cortexm() {
     set_delivery_hook(nullptr);
   }
   if (impl_->st_has_event) impl_->clock.cancel(impl_->st_event);
-  impl_->bus.unmap(&impl_->systick);
-  impl_->bus.unmap(&impl_->nvic);
-  impl_->bus.unmap(&impl_->scb);
+  impl_->unmap_all();
 }
+
+bool Cortexm::debugger_attached() const { return impl_->attached; }
+std::vector<std::pair<int, std::string>> Cortexm::take_itm_partial() { return impl_->itm.take_partial(); }
 
 void Cortexm::set_pending(int irqn) { impl_->set_pend(impl_->exc_of(irqn), true); }
 void Cortexm::set_irq_level(int irqn, bool high) {
@@ -487,6 +523,7 @@ void Cortexm::set_quantum_end(uint64_t t_ns) { impl_->quantum_end = t_ns; }
 uint64_t Cortexm::quantum_end() const { return impl_->quantum_end; }
 
 void Cortexm::set_core_clock_getter(CoreClockGetter g) {
+  impl_->dwt.settle();  // time so far counted at the previous clock
   impl_->getter = g;
   impl_->st_sync();
 }
