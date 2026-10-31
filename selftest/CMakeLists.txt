@@ -148,6 +148,8 @@ foreach(case bad_include bad_compiler models_unknown models_unsupported)
             -DCMAKE_BIN=${CMAKE_COMMAND} -DGEN=${CMAKE_GENERATOR}
             -DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM} -DSTEST_CLANGXX=${STEST_CLANGXX}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/check_configure_fails.cmake)
+  # A nested configure (and, for some cases, the ST source fetch) can be slow on a cold cache.
+  set_tests_properties(selftest_configure_${case} PROPERTIES TIMEOUT 120)
 endforeach()
 
 # Python harness tests (python/tests) against the self-test executables. Uses uv with a

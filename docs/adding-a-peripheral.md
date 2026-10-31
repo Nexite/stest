@@ -22,11 +22,11 @@ firmware  GPIOA->BSRR = x
 
 - **One C++ class per peripheral kind, one instance per TOML entry.** `model = "stm32l4.tim"` in a part's `[[peripheral]]` maps to class `stest::stm32l4::Tim` in `chips/stm32l4/models/tim.hpp` (see `model_class()` in `tools/gen_chip.py`). TIM1 through TIM17 are all instances of `Tim`, and each instance takes its variant from `params`.
 - Models are plain, uninstrumented C++ in the static library `stest_chip_<family>`, which is linked into every firmware executable of that family.
-- Every model, Clock and core access is single-threaded. The firmware thread and the loop thread hand a baton back and forth (`runtime/include/stest/node.hpp:5-19`), so models need no locks.
+- Every model, Clock and core access is single-threaded. The firmware thread and the loop thread hand a baton back and forth (`stest::Node` in `runtime/include/stest/node.hpp`, header comment), so models need no locks.
 
 ## 2. Skeleton
 
-The interface is in `runtime/include/stest/peripheral.hpp:37-47`:
+The interface is `struct Peripheral` in `runtime/include/stest/peripheral.hpp`:
 
 ```cpp
 struct Peripheral {
@@ -39,7 +39,7 @@ struct Peripheral {
 };
 ```
 
-A minimal model has the shape of `chips/stm32l4/models/syscfg.hpp:15-30` and `syscfg.cpp`:
+A minimal model has the shape of `class Syscfg` in `chips/stm32l4/models/syscfg.hpp` and `syscfg.cpp`:
 
 ```cpp
 namespace stest::stm32l4 {
@@ -61,13 +61,13 @@ class Foo : public Peripheral {
 
 Rules:
 
-- **Constructor `(std::string name, const nlohmann::json& params, ModelContext& ctx)`.** Parse and validate `params` here. On bad params, throw `std::invalid_argument` with a message that names the instance (`Tim::Tim`, `tim.cpp:37-60`). Keep references to `ctx.clock()` and `ctx.core()` if you need them. **Do not look up other models in the constructor**, because they may not exist yet.
+- **Constructor `(std::string name, const nlohmann::json& params, ModelContext& ctx)`.** Parse and validate `params` here. On bad params, throw `std::invalid_argument` with a message that names the instance (`Tim::Tim` in `tim.cpp`). Keep references to `ctx.clock()` and `ctx.core()` if you need them. **Do not look up other models in the constructor**, because they may not exist yet.
 - **`connect(ModelContext&)`** runs once every model exists and the clock tree is registered. Look up peers and subscribe to their Signals here (section 6).
-- **`reset()`** returns the model to its reset state. The generated init calls it right after construction, so cancel any pending Clock event in it (`Tim::reset`, `tim.cpp:149-162`).
+- **`reset()`** returns the model to its reset state. The generated init calls it right after construction, so cancel any pending Clock event in it (`Tim::reset` in `tim.cpp`).
 - **`call(op, args)`** is the Python-facing surface (section 8). Throw `UnknownOp(op)` for anything you do not handle. The base implementation already does this.
 - The model header carries the documentation. Start it with a comment that gives the RM section, the registers modelled, the `params` schema, the strictness rules and the `call()` ops (see the top of `tim.hpp` and `exti.hpp`).
 
-The generated chip init (`model_context.hpp:4-11`, `tools/gen_chip.py` `generate()`) runs in TOML order:
+The generated chip init (header comment of `model_context.hpp`, `tools/gen_chip.py` `generate()`) runs in TOML order:
 1. Constructs every model and calls `reset()` on it.
 2. Calls `ctx.add`.
 3. Calls `ctx.set_clock_tree(&RCC)`.
@@ -76,7 +76,7 @@ The generated chip init (`model_context.hpp:4-11`, `tools/gen_chip.py` `generate
 
 ## 3. Registers: `RegisterFile`
 
-`RegisterFile` (`peripheral.hpp:63-93`) stores 32-bit registers with reset values and write masks, and enforces strictness for you:
+`RegisterFile` (`peripheral.hpp`) stores 32-bit registers with reset values and write masks, and enforces strictness for you:
 
 | Call | Meaning |
 |---|---|
@@ -89,12 +89,12 @@ The generated chip init (`model_context.hpp:4-11`, `tools/gen_chip.py` `generate
 
 Strictness that you get for free:
 
-- An access to an undeclared offset throws `UnmodelledRegister`, and the node aborts with `stest: unmodelled read32 0x... (NAME)` (`runtime/src/mmio.cpp:101-125`).
-- A **sub-word access that crosses a register boundary** (`(off & 3) + width > 4`) also throws `UnmodelledRegister` (`runtime/src/peripheral.cpp:26,31`).
-- **Sub-word lanes** are handled. A byte or halfword access reads or writes the matching lane of the containing aligned register. When you handle a register by hand, use the same helpers: `lane_mask`, `lane_extract` and `lane_merge` (`peripheral.hpp:49-61`). `Tim::read` for `CNT` (`tim.cpp:518-542`) is the pattern. Call `regs_.read(off, width)` first for the strictness check, then compute the live value and `lane_extract` it.
+- An access to an undeclared offset throws `UnmodelledRegister`, and the node aborts with `stest: unmodelled read32 0x... (NAME)` (`abort_access` / `bus_read` / `bus_write` in `runtime/src/mmio.cpp`).
+- A **sub-word access that crosses a register boundary** (`(off & 3) + width > 4`) also throws `UnmodelledRegister` (`RegisterFile::find` in `runtime/src/peripheral.cpp`).
+- **Sub-word lanes** are handled. A byte or halfword access reads or writes the matching lane of the containing aligned register. When you handle a register by hand, use the same helpers: `lane_mask`, `lane_extract` and `lane_merge` (`peripheral.hpp`). `Tim::read` for `CNT` (`tim.cpp`) is the pattern. Call `regs_.read(off, width)` first for the strictness check, then compute the live value and `lane_extract` it.
 - Offsets must be word aligned and below `RegisterFile::kMaxBlock` (0x400). Otherwise `declare` throws `std::invalid_argument`.
 
-When a write has side effects, **validate before you mutate**. `Tim::write` (`tim.cpp:544-557`) merges the lane into the full word, runs `check_write` (which may abort with "not modelled"), and only then updates state.
+When a write has side effects, **validate before you mutate**. `Tim::write` (`tim.cpp`) merges the lane into the full word, runs `check_write` (which may abort with "not modelled"), and only then updates state.
 
 **Source of truth.** Take register offsets, bit positions and masks from ST's CMSIS device header for the part. For the L496 that is `stm32l496xx.h` in `cmsis_device_l4`, fetched into your build dir by `cmake/StestFetchST.cmake` (e.g. `TIM_TypeDef`, `TIM_CR1_CEN`). Take reset values and access types (rw, rc_w1, rc_w0, r) from the reference manual (RM0351 for L4). **Never write them from memory.** Note the RM section and the header in the model's header comment, and check reset values in a unit test (`chips/stm32l4/tests/test_exti.cpp`, "syscfg/exti: reset values").
 
@@ -102,34 +102,34 @@ When a write has side effects, **validate before you mutate**. `Tim::write` (`ti
 
 Virtual time is in nanoseconds (`Clock::now_ns()`). `Clock::schedule_at(t_ns, fn)` returns an `EventId` that `Clock::cancel(id)` removes (`runtime/include/stest/clock.hpp`). Events fire on the firmware thread in (time, insertion) order.
 
-**The model contract** (`peripheral.hpp:32-36`, `AGENTS.md`): a register value may change over time only in two ways:
+**The model contract** (comment above `struct Peripheral` in `peripheral.hpp`, `AGENTS.md`): a register value may change over time only in two ways:
 
 1. through a **scheduled Clock event** at the instant it changes, or
 2. by **reading differently on each access** (like SysTick VAL, or TIM CNT).
 
 Never expose lazily computed "ready at time T" state that has no event at T.
 
-**Why.** Poll fast-forward (`runtime/include/stest/runtime.hpp:37-52`) watches for loops that re-read the same (addr, width, value) tuples. After 64 store-free loads it jumps the clock to the next Clock event or the quantum end. If your flag only "becomes" set when read after T, the jump skips past T, and the firmware sees it late or never. A scheduled event at T makes the jump stop exactly there.
+**Why.** Poll fast-forward (`set_poll_skip_threshold` and the comment above it in `runtime/include/stest/runtime.hpp`) watches for loops that re-read the same (addr, width, value) tuples. After 64 store-free loads it jumps the clock to the next Clock event or the quantum end. If your flag only "becomes" set when read after T, the jump skips past T, and the firmware sees it late or never. A scheduled event at T makes the jump stop exactly there.
 
 How `tim` satisfies the contract without hurting speed:
 
-- **Derive counters from virtual time.** CNT is computed from an exact anchor, the clock period and PSC. It is not incremented by events (`tim.hpp:23-28`, `Tim::q_at` / `cnt_of`). A read returns the live value.
-- **Schedule only the next instant something observable changes.** `Tim::schedule_from` (`tim.cpp:486-499`) computes the next update event or compare match whose flag is still clear and schedules one event. If every relevant flag is already set, or the counter is stopped, nothing is scheduled. That rules out event storms.
+- **Derive counters from virtual time.** CNT is computed from an exact anchor, the clock period and PSC. It is not incremented by events (header comment of `tim.hpp`, `Tim::q_at` / `cnt_of`). A read returns the live value.
+- **Schedule only the next instant something observable changes.** `Tim::schedule_from` (`tim.cpp`) computes the next update event or compare match whose flag is still clear and schedules one event. If every relevant flag is already set, or the counter is stopped, nothing is scheduled. That rules out event storms.
 - **No per-tick events, ever.** A 20 kHz timer costs one event per update, not one per counter tick. This is what keeps the speed budget (≤ 0.4 s wall per virtual second per node) for the 20 kHz TIM7 test.
 - **Reschedule on every timing-affecting write**: CR1, SR (clearing a flag re-arms), EGR, CNT, ARR, PSC/CCRx/RCR, and the clock tree. `Tim::write` ends each case with `schedule()`. It reads the kernel clock from the clock tree whenever it (re)schedules, and never caches a frequency across configuration changes.
-- **Cancel stale events** before scheduling (`Tim::cancel_event`, `tim.cpp:476-479`) and in `reset()`.
+- **Cancel stale events** before scheduling (`Tim::cancel_event` in `tim.cpp`) and in `reset()`.
 
-If something is "instant" on hardware within the accuracy you need, just do it synchronously in the write. The RCC sets `xxRDY` the moment `xxON` is written (`rcc.hpp:4-6`).
+If something is "instant" on hardware within the accuracy you need, just do it synchronously in the write. The RCC sets `xxRDY` the moment `xxON` is written (header comment of `rcc.hpp`).
 
 ## 5. Interrupts
 
-Flag-driven interrupts are **levels**, as on STM32. Use `Cortexm::set_irq_level(irqn, high)` (`runtime/include/stest/cortexm.hpp:57-64`):
+Flag-driven interrupts are **levels**, as on STM32. Use `Cortexm::set_irq_level(irqn, high)` (`runtime/include/stest/cortexm.hpp`), or on a vector that may be shared `ModelContext::set_irq_source` (below; every L4 model uses it):
 
 - A low-to-high change pends the IRQ.
 - If the line is still high when the handler returns (the ISR did not clear the flag), the IRQ pends again and the handler re-enters, as on hardware.
-- Recompute the level whenever the flag or the enable bit changes, and call only on a change. `Tim::update_irqs` (`tim.cpp:501-515`) and `Exti::pend_new` (`exti.cpp:46-57`) are examples.
+- Recompute the level whenever the flag or the enable bit changes, and call only on a change. `Tim::update_irqs` (`tim.cpp`) and `Exti::pend_new` (`exti.cpp`) are examples.
 
-**Shared vectors** (TIM1_UP_TIM16, TIM6_DAC, TIM1_BRK_TIM15, EXTI9_5, ...): if more than one *model instance* or source can drive one NVIC input, use `ModelContext::set_irq_source(irqn, &tag, high)` (`model_context.hpp:96-102`). `tag` is any address unique to the source (`Tim` uses `&src_tag_[s]`). The line is the OR of all high sources. Calling `set_irq_level` directly from two models would let one override the other. (EXTI drives `set_irq_level` itself because it alone owns lines 0-15 and ORs them internally.)
+**Shared vectors** (TIM1_UP_TIM16, TIM6_DAC, TIM1_BRK_TIM15, EXTI9_5, ...): if more than one *model instance* or source can drive one NVIC input, use `ModelContext::set_irq_source(irqn, &tag, high)` (`model_context.hpp`). `tag` is any address unique to the source (`Tim` uses `&src_tag_[s]`). The line is the OR of all high sources. Calling `set_irq_level` directly from two models would let one override the other. (EXTI registers one source per line; SPI, ADC, DAC and TIM one per instance or flag group.) Note that clearing the pending bit (NVIC ICPR, `Cortexm::clear_pending`) while the line is still high re-pends it at once, as on ARMv7-M.
 
 **`set_pending(irqn)`** is only for genuinely pulse-style sources, an event with no status flag the ISR clears. **Never use it for a status flag.**
 
@@ -141,14 +141,14 @@ In `connect(ModelContext& ctx)` (`runtime/include/stest/model_context.hpp`):
 
 - **`ctx.get<T>("NAME")`** returns the peer as a `T&`. If the peer is missing or of the wrong type, it throws `std::logic_error` naming both. Use it for required peers (`Exti::connect`: `ctx.get<Syscfg>("SYSCFG")`).
 - **`ctx.find("NAME")`** returns `Peripheral*` or nullptr, for optional peers (`Exti::connect` probes `GPIOA`..`GPIOI` and `dynamic_cast`s).
-- **`ctx.clocks()`** returns the family's `ClockTree` (`model_context.hpp:31-44`), implemented by the RCC model: `sysclk_hz`, `hclk_hz`, `pclk1_hz`, `pclk2_hz`, `pllsai1r_hz`, `pllsai2r_hz`, `adcsel`, `enabled(reg_off, bit)`. Every value is computed live from RCC registers. Keep the reference (`Tim::connect` stores `&ctx.clocks()`), but **never cache a frequency**. Example, the timer ×2 rule (RM0351 6.2.14), `tim.cpp:225-229`:
+- **`ctx.clocks()`** returns the family's `ClockTree` (`struct ClockTree` in `model_context.hpp`), implemented by the RCC model: `sysclk_hz`, `hclk_hz`, `pclk1_hz`, `pclk2_hz`, `pllsai1r_hz`, `pllsai2r_hz`, `adcsel`, `enabled(reg_off, bit)`. Every value is computed live from RCC registers. Keep the reference (`Tim::connect` stores `&ctx.clocks()`), but **never cache a frequency**. Example, the timer ×2 rule (RM0351 6.2.14), `Tim::timer_clk` in `tim.cpp`:
 
   ```cpp
   uint64_t pclk = apb2_ ? clocks_->pclk2_hz() : clocks_->pclk1_hz();
   return pclk != clocks_->hclk_hz() ? 2 * pclk : pclk;  // x2 when the APB prescaler != 1
   ```
 
-- **`Signal<T>`** (`model_context.hpp:46-60`) gives synchronous notifications. `emit()` calls every subscriber in order on the calling thread before returning (no queues). `Gpio::edges()` is a `Signal<PinEdge>` that fires on every pin level change, whether caused by firmware or by Python `drive_pin`. EXTI subscribes to it in `connect()` and latches PR synchronously, so the IRQ pends inside the very access that made the edge. If you add a Signal, expose it as a public accessor and document what fires it.
+- **`Signal<T>`** (`model_context.hpp`) gives synchronous notifications. `emit()` calls every subscriber in order on the calling thread before returning (no queues); a subscriber may subscribe more handlers while it runs (they see the next emit). `Gpio::edges()` is a `Signal<PinEdge>` that fires on every pin level change, whether caused by firmware or by Python `drive_pin`. EXTI subscribes to it in `connect()` and latches PR synchronously, so the IRQ pends inside the very access that made the edge. If you add a Signal, expose it as a public accessor and document what fires it.
 
 Keep a model's dependencies one-directional where possible. A model publishes a Signal, and its consumers subscribe to it.
 
@@ -158,27 +158,27 @@ Strict by default (`AGENTS.md`, "Non-negotiable rules"). The node aborts with ex
 
 - **Unmodelled register, crossing access, write to a read-only register**: `RegisterFile` handles these (section 3).
 - **Unsupported features abort when firmware enables them, not when it touches the register.** Store configuration bits that are harmless until used. Throw `stest::NotModelled(name_, "<feature> (<REG>.<BITS>)")` (`runtime/include/stest/peripheral.hpp`) when a write *selects* behaviour you do not model; `Tim::not_modelled` and `Tim::check_write` in `chips/stm32l4/models/tim.cpp` list every TIM case (slave mode, input capture, DMA requests, break inputs, option-register remaps, ...). At an MMIO access the runtime (`bus_read`/`bus_write` in `runtime/src/mmio.cpp`) prints `stest: <NAME>: <feature> not modelled (<read|write><bits> 0x<addr> = 0x<value>)` (no value for reads); from a Clock event it prints `stest: <NAME>: <feature> not modelled`. Any other `std::exception` thrown from `read`/`write` becomes `stest: exception in model at 0x...: <what>`, and one from a Clock event `stest: exception in clock event: ...` (`run_due_events` in `mmio.cpp`).
-- **Reserved registers that ST's HAL reads anyway** may read 0 and abort on write (`Tim`'s SMCR on TIM6/7, `tim.hpp:6-8`). Write a comment explaining why.
-- **Clock gating.** Give the TOML entry `rcc_enable = { reg = "APB1ENR1", bit = 5 }`. The generated init calls `Bus::set_gate` (`bus.hpp:36-43`), and any firmware access while the bit is clear aborts with `access to TIM7 while its clock is disabled (RCC APB1ENR1 bit 5) (read32 0x...)`. The model is not called, so models do not check this themselves. Model-to-model calls (e.g. EXTI reading `Syscfg::exti_port`) are not gated.
+- **Reserved registers that ST's HAL reads anyway** may read 0 and abort on write (`Tim`'s SMCR on TIM6/7, header comment of `tim.hpp`). Write a comment explaining why.
+- **Clock gating.** Give the TOML entry `rcc_enable = { reg = "APB1ENR1", bit = 5 }`. The generated init calls `Bus::set_gate` (`bus.hpp`), and any firmware access while the bit is clear aborts with `access to TIM7 while its clock is disabled (RCC APB1ENR1 bit 5) (read32 0x...)`. The model is not called, so models do not check this themselves. Model-to-model calls (e.g. EXTI reading `Syscfg::exti_port`) are not gated.
 - **Never silently ignore**: a write that would change behaviour you do not model, an unknown `params` key value, a DMA or trigger request, or a mode bit. When in doubt, abort and name the feature. A user can then see exactly what to model next.
 
 ## 8. Python surface
 
-**`call()` ops.** Python's `node.call("TIM7", "state")` (`python/stest/node.py:67-70`) sends a MODEL_CALL. The runtime looks up the model by name (`register_model`, done by the generated init) and calls `Peripheral::call(op, args)` with `args` as a JSON object (`runtime/src/control_channel.cpp:182-208`). Conventions:
+**`call()` ops.** Python's `node.call("TIM7", "state")` (`Node.call` in `python/stest/node.py`) sends a MODEL_CALL. The runtime looks up the model by name (`register_model`, done by the generated init) and calls `Peripheral::call(op, args)` with `args` as a JSON object (`handle_model_call` in `runtime/src/control_channel.cpp`). Conventions:
 
-- Read-only queries return a JSON object (`Tim` `"state"`, `tim.cpp:664-725`). Document its schema in the model header (`tim.hpp:46-57`).
+- Read-only queries return a JSON object (`Tim` `"state"`, `Tim::call` in `tim.cpp`). Document its schema in the model header (as `tim.hpp` does).
 - Injection ops take named args (`Gpio`: `"drive_pin" {pin, level}`, `"release_pin" {pin}`, `"get_pin" {pin}`).
 - Throw `UnknownOp` for unknown ops and `std::invalid_argument` (or any `std::exception`) for bad args. Python raises `StestError`, and the **node keeps running** (REQ_ERROR, not ERROR).
 - MODEL_CALL runs on the loop thread while the firmware is parked between quanta. It calls the model directly, **bypassing Bus clock gating by design**: it models the outside world, or a debugger, looking at the chip.
 
-**Events.** Call `emit_event(clock.now_ns(), json)` (`runtime/include/stest/node.hpp:35-41`) for changes a test wants as a timeline. Conventions:
+**Events.** Call `emit_event(clock.now_ns(), json)` (`emit_event` in `runtime/include/stest/node.hpp`) for changes a test wants as a timeline. Conventions:
 - The event is a flat JSON object with a `"kind"` key naming the event type and a `"periph"` key naming the emitting instance (the model's `name()`: `"GPIOA"`, `"TIM7"`, `"DAC1"`, `"SPI1"`, `"ITM"`), stamped with the event's virtual time. Example from `Gpio::update()`: `{"kind":"gpio","periph":"GPIOA","port":"A","pin":5,"level":1}`. Do not use `"bus"` for the instance (it is reserved for simulated buses such as CAN); every Python consumer keys on `periph`.
 - Keys are serialized sorted, so tests must not match on raw key order.
 - An event must stay under 64 KiB of JSON.
-- Events show up in `Sim.event_log` and in standalone `EVT <t_ns> <json>` lines (`runtime/src/node_main.cpp:60`).
+- Events show up in `Sim.event_log` and in standalone-mode stdout lines (`print_events` in `runtime/src/node_main.cpp`): `EVT <t_ns> <json>` for every kind except `gpio`, which uses the special format `EVT <t_ns> GPIO <port><pin> <level>` (e.g. `EVT 500001825 GPIO A5 1`).
 - Emit one event per meaningful change, never per tick. Events cost wall time.
 
-**Typed helper.** Add a class to `python/stest/peripherals.py` that wraps the raw `call()`s (see `Timer` / `TimerChannel`), and an accessor on `Node` (`node.timer(name)`, `python/stest/node.py:63-65`). Raise `StestError` with a clear message for misuse (e.g. "TIM7 has no channel 1").
+**Typed helper.** Add a class to `python/stest/peripherals.py` that wraps the raw `call()`s (see `Timer` / `TimerChannel`), and an accessor on `Node` (`Node.timer` in `python/stest/node.py`). Raise `StestError` with a clear message for misuse (e.g. "TIM7 has no channel 1").
 
 ### 8.1 Analog models (ADC, DAC, pin voltages)
 
@@ -211,7 +211,7 @@ Analog values belong to the **pin**, not to the ADC. `Gpio` keeps a per-pin volt
 
 Write the failing test first (TDD, `AGENTS.md`). Test at three levels.
 
-**a) doctest unit tests** in `chips/<family>/tests/test_<kind>.cpp`, one executable per file, registered in `chips/<family>/CMakeLists.txt` as CTest `chip_<family>_<kind>` with `TIMEOUT 30`. Build a private rig that mirrors the generated init (`chips/stm32l4/tests/test_tim.cpp:35-136`):
+**a) doctest unit tests** in `chips/<family>/tests/test_<kind>.cpp`, one executable per file, registered in `chips/<family>/CMakeLists.txt` as CTest `chip_<family>_<kind>` with `TIMEOUT 30`. Build a private rig that mirrors the generated init (`struct Rig` in `chips/stm32l4/tests/test_tim.cpp`):
 
 ```cpp
 struct Rig {

@@ -30,7 +30,7 @@ docker run --rm -v "$PWD":/w stest sh -c 'cmake -S . -B build-docker -G Ninja &&
 ./build/selftest/blinky --run-ms 2100
 ```
 
-Standalone, the firmware runs against the simulated chip for the given span of virtual time without a harness, and prints its GPIO events: `EVT 500001825 GPIO A5 1` is PA5 (the LED) going high at 500.0018 ms of virtual time.
+Standalone, the firmware runs against the simulated chip for the given span of virtual time without a harness, and prints its events: `EVT 500001825 GPIO A5 1` is PA5 (the LED) going high at 500.0018 ms of virtual time (GPIO events use this `EVT <t_ns> GPIO <port><pin> <level>` form; every other kind, including the firmware's own stdout lines, is printed as `EVT <t_ns> <json>`).
 
 ## Run the tests
 

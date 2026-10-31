@@ -54,7 +54,7 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release   # add -DSTEST_LLVM_ROO
 cmake --build build
 ctest --test-dir build --output-on-failure                 # includes python_tests (uv, per-build-dir venv)
 uv run pytest python/tests -q                              # Python alone; uses build/selftest or $STEST_SELFTEST_BIN
-./build/selftest/blinky --run-ms 2100                      # standalone firmware, prints EVT lines
+./build/selftest/blinky --run-ms 2100                      # standalone: EVT <t> GPIO <port><pin> <level> / EVT <t> <json>
 uv run spike/run_gate.py                                   # speed gate (builds build-gate/ itself)
 ```
 
@@ -111,7 +111,7 @@ Note the Docker build writes into the host `build/`; if you share the tree with 
 
 - TDD: write the failing test first. C++ uses doctest; CTest names are prefixed `runtime_`, `chip_`, `selftest_` (and `python_tests`). Python and e2e use pytest (`python/tests/`, `pytester` for plugin tests).
 - Self-test firmwares live in `selftest/firmware/*`; fault injection is one exe per variant (`faults_spin|crash|unmodelled|ro_write|clkoff`, plus `faults_printf` for stdout capture). HAL-mode builds are suffixed `_gpio_hal` (`blinky_gpio_hal`, `exti_gpio_hal`, `hal_direct_gpio_hal`).
-- Every CTest has a `TIMEOUT` (30 s for runtime/selftests, 300 for `python_tests`); set one on new tests.
+- Every CTest has a `TIMEOUT` (30 s for runtime/chip/selftests, 120 for the `selftest_configure_*` nested configures, 300 for `python_tests`); set one on new tests.
 - Before claiming done, run the full suite natively AND in Docker (Linux-only paths like `PR_SET_PDEATHSIG` and `/proc` differ from macOS).
 - Do not match on raw JSON key order in event logs (keys are sorted).
 
