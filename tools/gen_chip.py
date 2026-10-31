@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Generate the C++ chip glue for one stest chip part (TOML).
 
-    gen_chip.py <part.toml> <out.cpp>     write the generated C++ file
+    gen_chip.py <part.toml> <out.cpp> [--hal TYPE[,TYPE...]]   write the generated C++ file
     gen_chip.py --info <part.toml>        print "name;family;device_define" (for CMake)
+    gen_chip.py --types <part.toml>       print the peripheral types, ";"-separated (for CMake)
 
 The generated file defines, for the part:
   * a weak default for every core exception and external IRQ handler, e.g.
@@ -15,6 +16,13 @@ The generated file defines, for the part:
     (peripherals with rcc_enable) + register_model, core clock getter (CMSIS
     SystemCoreClock) and the SysTick external-reference divider,
   * `extern const stest::ChipDesc stest_chip` consumed by node_main.cpp.
+
+Peripheral types: a model "<family>.<kind>" has type KIND upper-cased (stm32l4.gpio -> GPIO);
+they are what stest_add_firmware's `MODELS <TYPE>=register|hal` names. `--hal GPIO` marks
+every peripheral of that type hal-owned in the generated init (Bus::set_hal_owned: firmware
+MMIO to it warns once per register). This is how a node learns its hal-mode types: they are
+baked into the per-firmware generated glue by stest_add_firmware (which validates TYPE
+against `--types` and the family's family.cmake).
 
 Model "<family>.<kind>" maps to class stest::<family>::<Kind> declared in
 chips/<family>/models/<kind>.hpp, constructed as (name, params-json, ModelContext&).
@@ -164,9 +172,20 @@ def model_class(model: str) -> tuple[str, str]:
     return f"{fam}/models/{kind}.hpp", f"stest::{fam}::{cls}"
 
 
-def generate(data: dict, source_name: str) -> str:
+def periph_type(p: dict) -> str:
+    return p["model"].partition(".")[2].upper()
+
+
+def types(data: dict) -> list[str]:
+    return sorted({periph_type(p) for p in data.get("peripheral", [])})
+
+
+def generate(data: dict, source_name: str, hal: tuple[str, ...] = ()) -> str:
     chip = data["chip"]
     periphs = data.get("peripheral", [])
+    for t in hal:
+        if t not in types(data):
+            raise ChipError(f"--hal {t}: no peripheral of type {t} (types: {' '.join(types(data))})")
     irqs = sorted(data.get("irq", {}).items(), key=lambda kv: kv[1])
     n_ext = (max(n for _, n in irqs) + 1) if irqs else 0
     n_table = 16 + n_ext
@@ -244,6 +263,8 @@ def generate(data: dict, source_name: str) -> str:
                 f"  bus.set_gate(&{var}, ctx.clocks().enable_word(0x{off:02X}u), 1u << {gate['bit']}, "
                 f'"{tree["peripheral"]} {gate["reg"]} bit {gate["bit"]}");'
             )
+        if periph_type(p) in hal:
+            w(f'  bus.set_hal_owned(&{var}, "{periph_type(p)}");')
         w(f"  stest::register_model(&{var});")
     w("  core.set_core_clock_getter(&core_clock);")
     if divider:
@@ -264,11 +285,18 @@ def main(argv: list[str]) -> int:
             chip = load(Path(argv[2]))["chip"]
             print(f"{chip['name']};{chip['family']};{chip['device_define']}")
             return 0
-        if len(argv) != 3:
+        if len(argv) == 3 and argv[1] == "--types":
+            print(";".join(types(load(Path(argv[2])))))
+            return 0
+        hal: tuple[str, ...] = ()
+        if len(argv) == 5 and argv[3] == "--hal":
+            hal = tuple(t for t in argv[4].split(",") if t)
+            argv = argv[:3]
+        if len(argv) != 3 or argv[1].startswith("--"):
             print(__doc__, file=sys.stderr)
             return 2
         src, dst = Path(argv[1]), Path(argv[2])
-        text = generate(load(src), src.name)
+        text = generate(load(src), src.name, hal)
         if not dst.exists() or dst.read_text() != text:
             dst.write_text(text)
         return 0

@@ -198,6 +198,37 @@ void poll_streak_break() {
   ++g_break_epoch;
   streak_reset();
 }
+
+uint32_t shim_access(uint64_t addr, unsigned width, bool is_write, ShimOp op, void* ctx) {
+  if (is_write) streak_reset();
+  charge();
+  uint32_t r = 0;
+  try {
+    Peripheral* p = g_bus.require_clock(addr, width, is_write);
+    try {
+      r = op(*p, ctx);
+    } catch (const ReadOnlyRegister&) {
+      throw UnmodelledAccess(addr, width, true, std::string(p->name()), /*ro=*/true);
+    } catch (const UnmodelledRegister&) {
+      throw UnmodelledAccess(addr, width, is_write, std::string(p->name()));
+    }
+  }
+  catch (const UnmodelledAccess& e) { abort_access(e); }
+  catch (const ClockDisabled& e) { stest_rt_abort("%s", e.what()); }
+  catch (const std::exception& e) { stest_rt_abort("exception in model at 0x%08x: %s", (unsigned)addr, e.what()); }
+  catch (...) { stest_rt_abort("unknown exception in model at 0x%08x", (unsigned)addr); }
+  if (is_write) {
+    deliver();
+    return 0;
+  }
+  uint64_t epoch = g_break_epoch;
+  deliver();
+  if (__builtin_expect(g_skip_threshold != 0, 1)) {
+    if (epoch != g_break_epoch) streak_reset();
+    else if (streak_load(addr, width, r)) fast_forward();
+  }
+  return r;
+}
 }  // namespace stest
 
 extern "C" {

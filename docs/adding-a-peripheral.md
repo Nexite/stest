@@ -8,7 +8,7 @@ This guide covers writing a register-level peripheral model for stest. The worke
 
 Read `AGENTS.md` first. Where this guide and the design spec (`docs/superpowers/specs/2026-10-30-stest-sil-design.md`, sections 4.2 and 4.3) disagree, the spec wins.
 
-> HAL-mode shims (`stest_add_firmware(... MODELS <TYPE>=hal)`, where a shim replaces ST's `stm32xx_hal_<ppp>.c` at link time) are coming in Plan 2 Task 9 (`docs/superpowers/plans/2026-10-31-stest-plan-2-l4-peripherals.md`). They will get their own section here. Everything below is about `register` mode, the default and currently the only mode.
+Sections 1-10 are about `register` mode, the default. Section 11 covers `hal` mode (`stest_add_firmware(... MODELS <TYPE>=hal)`), where a shim replaces ST's `stm32xx_hal_<ppp>.c` at link time.
 
 ## 1. Where a model fits
 
@@ -281,3 +281,14 @@ That command writes into the host `build/`. If you also build natively in the sa
 - [ ] `python/stest/peripherals.py` typed helper and `Node` accessor, if Python needs more than raw `call()`.
 - [ ] Docs: the model header comment, `AGENTS.md` repo map or notes if conventions change, and this guide if you introduced a new pattern.
 - [ ] The full suite passes natively and in Docker.
+
+## 11. Writing a HAL shim
+
+`MODELS <TYPE>=hal` swaps one whole ST HAL file for an stest shim; ST files are never patched. The GPIO shim (`chips/stm32l4/hal/stm32l4xx_hal_gpio_shim.c`) is the worked example.
+
+1. **Register the shim** in `chips/<family>/family.cmake`: add the type to `STEST_<FAMILY>_HAL_SHIMS` and set `STEST_<FAMILY>_HAL_SHIM_<TYPE>_REPLACES` (the ST file name) and `..._SOURCE`. `stest_add_firmware` drops the ST file from the HAL archive, adds the shim and passes `--hal <TYPE>` to `gen_chip.py`. The generated init then calls `Bus::set_hal_owned` on every peripheral of that type, so firmware MMIO to it still works but prints one `stest: warning: firmware accessed GPIOA ODR directly while GPIO is in hal mode` per register (name it with `Peripheral::reg_name`). TYPE is the model kind upper-cased. Unknown types, types without a shim and other modes fail at configure time.
+2. **Same symbols, same signatures.** Define every public (non-static) symbol of the ST file, `__weak` callbacks included, with ST's prototypes from its header. A missing symbol is a link error for firmware that uses it.
+3. **No MMIO to the hal-mode peripheral.** The shim is compiled like the HAL (with the MMIO pass) but never dereferences the peripheral's `TypeDef`: derive the instance from the pointer value and call the model's C API in `runtime/include/stest/hal_api.h`. Other peripherals the ST code touches (SYSCFG/EXTI for GPIO) stay in register mode. Keep ST's code for them as it is, so their accesses, strictness and timing are unchanged.
+4. **The C API lives in the model** (`extern "C"` at the end of `<kind>.cpp`). It updates the model so its registers read back as in register mode. Account time with `stest::shim_access(addr, width, is_write, fn)` (`runtime.hpp`), one call per register access ST's code makes, in the same order. Each call charges the access cost, fires due events, checks the mapping and clock gate (strict aborts as for MMIO), runs `fn(Peripheral&)` on the model, delivers IRQs and feeds poll fast-forward, and never triggers the hal-mode warning. When the shim matches ST's access sequence, event logs are byte-identical to register mode. `test_hal_mode.py` checks this for blinky and exti.
+5. **Test it.** Add doctests for the C API (registers after each call, access counts, no warning; see `chips/stm32l4/tests/test_gpio_hal.cpp`), `_<type>_hal` self-test builds of existing firmwares compared against register mode, and a direct-access warning case.
+

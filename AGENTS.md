@@ -15,6 +15,7 @@ stest is an open-source (Apache-2.0) STM32 software-in-the-loop simulator. Real 
 | `runtime/tests/` | doctest unit tests + abort/e2e helpers (CTest `runtime_*`) |
 | `chips/cortexm/` | Core-generic ITM, DWT and CoreDebug (DHCSR/DEMCR) models; compiled into `stest_runtime` and mapped by `Cortexm` for every chip |
 | `chips/<family>/models/`, `parts/*.toml` | Peripheral models (C++) and per-part chip descriptions (`stm32l4/parts/stm32l496rg.toml`) |
+| `chips/<family>/family.cmake`, `chips/<family>/hal/` | HAL-mode shims (`MODELS <TYPE>=hal`) replacing whole ST HAL files (L4: GPIO) |
 | `chips/cmsis_host/` | Host shim for CMSIS `cmsis_compiler.h` (replaces ARM toolchain header) |
 | `tools/gen_chip.py` | TOML -> generated chip glue (IRQ table, weak handlers, model instances, `stest_chip`) |
 | `cmake/` | `StestToolchain.cmake` (finds upstream LLVM), `StestFetchST.cmake` (pinned ST sources), `stest_add_firmware.cmake` |
@@ -27,8 +28,9 @@ stest is an open-source (Apache-2.0) STM32 software-in-the-loop simulator. Real 
 ## How it works
 
 Build time:
-- `stest_add_firmware(name CHIP <part> SOURCES ... [INCLUDE_DIRS] [DEFINES] [HAL_SOURCES])` builds firmware + HAL with `STEST_CLANG` + the pass, `-g -O0`. Firmware sources (only) get `-Dmain=stest_firmware_main`; the runtime's `node_main.cpp` provides the real `main`.
+- `stest_add_firmware(name CHIP <part> SOURCES ... [INCLUDE_DIRS] [DEFINES] [HAL_SOURCES] [MODELS <TYPE>=register|hal ...])` builds firmware + HAL with `STEST_CLANG` + the pass, `-g -O0`. Firmware sources (only) get `-Dmain=stest_firmware_main`; the runtime's `node_main.cpp` provides the real `main`.
 - `tools/gen_chip.py` generates per-part glue from the TOML. Model `<family>.<kind>` maps to class `stest::<family>::<Kind>` in `chips/<family>/models/<kind>.hpp`, constructed `(name, params-json, ModelContext&)`; the generated init then calls `ctx.add`, `set_clock_tree`, `connect()` on each, `Bus::map` and `Bus::set_gate` (see `runtime/include/stest/model_context.hpp`).
+- `MODELS <TYPE>=hal` (TYPE = model kind upper-cased): `chips/<family>/family.cmake` lists the types with a HAL shim (`STEST_<FAMILY>_HAL_SHIMS`, `..._HAL_SHIM_<TYPE>_REPLACES/_SOURCE`); the shim (`chips/<family>/hal/*_shim.c`) replaces that whole ST file in the HAL archive, is compiled with the pass like the HAL, and calls the model's C API (`runtime/include/stest/hal_api.h`, implemented in the model; each call is accounted as the register accesses ST's code makes via `stest::shim_access`, so event logs match register mode). The node learns the hal types from the generated chip glue (`gen_chip.py --hal GPIO` emits `Bus::set_hal_owned`): firmware MMIO to a hal-owned block works but warns once per (peripheral, register). Only GPIO has a shim (L4).
 - ST sources (L4 HAL, CMSIS device, CMSIS-Core) are fetched at pinned commits with SHA-256 (`cmake/StestFetchST.cmake`). Override with `-DSTEST_STM32L4_HAL_DIR=`, `-DSTEST_STM32L4_CMSIS_DEVICE_DIR=`, `-DSTEST_CMSIS_CORE_DIR=`. CMSIS-Core is staged without its toolchain headers so the host shim wins.
 
 Run time:
@@ -86,7 +88,7 @@ Note the Docker build writes into the host `build/`; if you share the tree with 
 - `runtime/include/stest/protocol.h` <-> `python/stest/protocol.py`: byte-for-byte mirror. Bump `STEST_PROTO_VERSION` / `PROTO_VERSION` on any wire change, update the header comment table, and add a Python test.
 - `chips/*/parts/*.toml` <-> `tools/gen_chip.py` (schema/validation) <-> model class names/ctors. `stest_add_firmware` re-runs the generator when either changes.
 - Model added: its source in `chips/<family>/CMakeLists.txt`, a TOML `[[peripheral]]` entry, and tests.
-- HAL shims <-> `family.cmake` (Plan 2: neither exists yet; check `docs/superpowers/plans/2026-10-31-stest-plan-2-l4-peripherals.md` Task 9).
+- HAL shims (`chips/<family>/hal/`) <-> `family.cmake` <-> `runtime/include/stest/hal_api.h` <-> the model's C API implementation; a shim must define every public symbol of the ST file it replaces, with ST's signatures (see `docs/adding-a-peripheral.md`, "Writing a HAL shim").
 - New `stest_add_firmware` options: update the header comment in `cmake/stest_add_firmware.cmake` and README.
 
 ## Adding a peripheral model (current state)
@@ -108,7 +110,7 @@ Note the Docker build writes into the host `build/`; if you share the tree with 
 ## Testing conventions
 
 - TDD: write the failing test first. C++ uses doctest; CTest names are prefixed `runtime_`, `chip_`, `selftest_` (and `python_tests`). Python and e2e use pytest (`python/tests/`, `pytester` for plugin tests).
-- Self-test firmwares live in `selftest/firmware/*`; fault injection is one exe per variant (`faults_spin|crash|unmodelled|ro_write|clkoff`, plus `faults_printf` for stdout capture).
+- Self-test firmwares live in `selftest/firmware/*`; fault injection is one exe per variant (`faults_spin|crash|unmodelled|ro_write|clkoff`, plus `faults_printf` for stdout capture). HAL-mode builds are suffixed `_gpio_hal` (`blinky_gpio_hal`, `exti_gpio_hal`, `hal_direct_gpio_hal`).
 - Every CTest has a `TIMEOUT` (30 s for runtime/selftests, 300 for `python_tests`); set one on new tests.
 - Before claiming done, run the full suite natively AND in Docker (Linux-only paths like `PR_SET_PDEATHSIG` and `/proc` differ from macOS).
 - Do not match on raw JSON key order in event logs (keys are sorted).

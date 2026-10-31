@@ -1,7 +1,10 @@
 #include "stm32l4/models/gpio.hpp"
 #include <cmath>
 #include <stdexcept>
+#include "stest/hal_api.h"
+#include "stest/mmio.h"
 #include "stest/node.hpp"
+#include "stest/runtime.hpp"
 
 namespace stest::stm32l4 {
 namespace {
@@ -167,6 +170,23 @@ void Gpio::write(uint32_t off, unsigned width, uint32_t v) {
   update();
 }
 
+std::string_view Gpio::reg_name(uint32_t off) const {
+  switch (off & ~3u) {
+    case MODER: return "MODER";
+    case OTYPER: return "OTYPER";
+    case OSPEEDR: return "OSPEEDR";
+    case PUPDR: return "PUPDR";
+    case IDR: return "IDR";
+    case ODR: return "ODR";
+    case BSRR: return "BSRR";
+    case LCKR: return "LCKR";
+    case AFRL: return "AFRL";
+    case AFRH: return "AFRH";
+    case BRR: return "BRR";
+    default: return {};
+  }
+}
+
 nlohmann::json Gpio::call(std::string_view op, const nlohmann::json& args) {
   if (op == "get_pin") return pin_level(pin_arg(args));
   if (op == "drive_pin") {
@@ -201,3 +221,89 @@ nlohmann::json Gpio::call(std::string_view op, const nlohmann::json& args) {
 }
 
 }  // namespace stest::stm32l4
+
+// ---- HAL-mode C API (stest/hal_api.h) ----
+// Each helper is one register access of ST's stm32l4xx_hal_gpio.c, applied to the GPIO model
+// mapped at that address via stest::shim_access (same time/IRQ/poll accounting as MMIO).
+namespace {
+using stest::Peripheral;
+using stest::stm32l4::Gpio;
+using namespace stest::stm32l4;  // register offsets (MODER, ODR, ...)
+constexpr uint64_t kGpioBase = 0x48000000u, kGpioStride = 0x400u;  // GPIOA_BASE, RM0351 2.2.2
+// ST GPIO_InitTypeDef.Mode encoding (stm32l4xx_hal_gpio.h).
+constexpr uint32_t kModeMask = 0x3u, kModeOutput = 1u, kModeAf = 2u, kModeAnalog = 3u;
+constexpr unsigned kOutputTypePos = 4u;
+
+uint64_t port_base(char port) {
+  if (port < 'A' || port > 'Z') stest_rt_abort("GPIO HAL shim: bad GPIO port (not a GPIOx pointer)");
+  return kGpioBase + static_cast<uint64_t>(port - 'A') * kGpioStride;
+}
+Gpio& as_gpio(Peripheral& p) {
+  if (auto* g = dynamic_cast<Gpio*>(&p)) return *g;
+  stest_rt_abort("GPIO HAL shim: %.*s is not a GPIO model", static_cast<int>(p.name().size()),
+                 p.name().data());
+}
+uint32_t load(uint64_t base, uint32_t off) {
+  return stest::shim_access(base + off, 4, false, [&](Peripheral& p) { return as_gpio(p).read(off, 4); });
+}
+void store(uint64_t base, uint32_t off, uint32_t v) {
+  stest::shim_access(base + off, 4, true, [&](Peripheral& p) { as_gpio(p).write(off, 4, v); });
+}
+// temp = REG; temp &= ~clear; temp |= set; REG = temp;
+void rmw(uint64_t base, uint32_t off, uint32_t clear, uint32_t set) {
+  store(base, off, (load(base, off) & ~clear) | set);
+}
+}  // namespace
+
+extern "C" {
+
+void stest_gpio_hal_init(char port, uint16_t pins, uint32_t mode, uint32_t pull, uint32_t speed,
+                         uint32_t alternate) {
+  const uint64_t b = port_base(port);
+  const uint32_t m = mode & kModeMask;
+  for (unsigned pos = 0; pos < 16; ++pos) {
+    if (!(pins & (1u << pos))) continue;
+    if (m == kModeOutput || m == kModeAf) {
+      rmw(b, OSPEEDR, 3u << (pos * 2), speed << (pos * 2));
+      rmw(b, OTYPER, 1u << pos, ((mode >> kOutputTypePos) & 1u) << pos);
+    }
+    if (m != kModeAnalog) rmw(b, PUPDR, 3u << (pos * 2), pull << (pos * 2));
+    if (m == kModeAf) {
+      const uint32_t afr = pos < 8 ? AFRL : AFRH, sh = (pos & 7u) * 4;
+      rmw(b, afr, 0xFu << sh, alternate << sh);
+    }
+    rmw(b, MODER, 3u << (pos * 2), m << (pos * 2));
+  }
+}
+
+void stest_gpio_hal_deinit(char port, uint16_t pins) {
+  const uint64_t b = port_base(port);
+  for (unsigned pos = 0; pos < 16; ++pos) {
+    if (!(pins & (1u << pos))) continue;
+    rmw(b, MODER, 0, 3u << (pos * 2));
+    rmw(b, pos < 8 ? AFRL : AFRH, 0xFu << ((pos & 7u) * 4), 0);
+    rmw(b, OSPEEDR, 3u << (pos * 2), 0);
+    rmw(b, OTYPER, 1u << pos, 0);
+    rmw(b, PUPDR, 3u << (pos * 2), 0);
+  }
+}
+
+void stest_gpio_hal_write(char port, uint16_t pins, int level) {
+  store(port_base(port), level ? BSRR : BRR, pins);
+}
+
+int stest_gpio_hal_read(char port, uint16_t pin) {
+  return (load(port_base(port), IDR) & pin) != 0 ? 1 : 0;
+}
+
+void stest_gpio_hal_toggle(char port, uint16_t pins) {
+  const uint64_t b = port_base(port);
+  const uint32_t odr = load(b, ODR);
+  store(b, BSRR, ((odr & pins) << 16) | (~odr & pins));
+}
+
+void stest_gpio_hal_lckr_write(char port, uint32_t value) { store(port_base(port), LCKR, value); }
+
+uint32_t stest_gpio_hal_lckr_read(char port) { return load(port_base(port), LCKR); }
+
+}  // extern "C"

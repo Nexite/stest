@@ -101,6 +101,28 @@ stest_add_firmware(itm
           ${_bl}/Src/stm32l4xx_hal_msp.c
   INCLUDE_DIRS ${_bl}/Inc)
 
+# HAL mode (MODELS GPIO=hal): stest's GPIO shim replaces ST's stm32l4xx_hal_gpio.c. blinky and
+# exti rebuilt unchanged in hal mode (their event logs must match register mode), plus
+# hal_direct, which also pokes GPIOA->BSRR directly (one warning, run continues).
+stest_add_firmware(blinky_gpio_hal
+  CHIP STM32L496RG
+  SOURCES ${_bl}/Src/main.c ${_bl}/Src/stm32l4xx_it.c ${_bl}/Src/stm32l4xx_hal_msp.c
+          ${_bl}/Src/vars.c ${_bl}/Src/vars2.c
+  INCLUDE_DIRS ${_bl}/Inc
+  MODELS GPIO=hal)
+stest_add_firmware(exti_gpio_hal
+  CHIP STM32L496RG
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/firmware/exti/main.c ${_bl}/Src/stm32l4xx_it.c
+          ${_bl}/Src/stm32l4xx_hal_msp.c
+  INCLUDE_DIRS ${_bl}/Inc
+  MODELS GPIO=hal)
+stest_add_firmware(hal_direct_gpio_hal
+  CHIP STM32L496RG
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/firmware/hal_direct/main.c ${_bl}/Src/stm32l4xx_it.c
+          ${_bl}/Src/stm32l4xx_hal_msp.c
+  INCLUDE_DIRS ${_bl}/Inc
+  MODELS GPIO=hal)
+
 # Poll fast-forward regression firmware (counting loop over a constant volatile read).
 stest_add_firmware(pollcount
   CHIP STM32L496RG
@@ -108,8 +130,9 @@ stest_add_firmware(pollcount
   INCLUDE_DIRS ${_bl}/Inc
   HAL_SOURCES ${_st_hal}/Src/stm32l4xx_hal.c)
 
-# Configure-time checks of stest_add_firmware (compiler identity, CMSIS include dirs).
-foreach(case bad_include bad_compiler)
+# Configure-time checks of stest_add_firmware (compiler identity, CMSIS include dirs,
+# MODELS= types/modes).
+foreach(case bad_include bad_compiler models_unknown models_unsupported)
   add_test(NAME selftest_configure_${case}
     COMMAND ${CMAKE_COMMAND} -DCASE=${case} -DSTEST_ROOT=${PROJECT_SOURCE_DIR}
             -DWORK=${CMAKE_CURRENT_BINARY_DIR}/cmake_checks_${case}

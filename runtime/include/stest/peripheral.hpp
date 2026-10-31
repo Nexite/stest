@@ -44,6 +44,9 @@ struct Peripheral {  // one instance per mapped block
   // (generated init, see model_context.hpp): look up peers, subscribe to their Signals.
   virtual void connect(ModelContext&) {}
   virtual nlohmann::json call(std::string_view op, const nlohmann::json& args);  // throws UnknownOp
+  // Reference-manual name of the register at word offset `off` ("ODR"), or empty if the
+  // model does not name it. Used in diagnostics only (e.g. the hal-mode warning, Bus).
+  virtual std::string_view reg_name(uint32_t /*off*/) const { return {}; }
 };
 
 // Sub-word access helpers shared by every model. `off` is taken modulo 4; width is 1, 2 or 4

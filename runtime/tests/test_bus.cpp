@@ -1,4 +1,7 @@
 #include <doctest/doctest.h>
+#include <unistd.h>
+#include <cstdio>
+#include <string>
 #include "stest/bus.hpp"
 using namespace stest;
 
@@ -141,4 +144,67 @@ TEST_CASE("Bus: mapping outside the MMIO windows throws") {
   CHECK_THROWS_AS(b.map(0xE0000000, 0x200000, &p), std::invalid_argument);
   CHECK_NOTHROW(b.map(0x5FFFFC00, 0x400, &p));
   CHECK_NOTHROW(b.map(0xE000E000, 0x1000, &p));
+}
+
+namespace {
+// Runs f with stderr redirected to a temporary file; returns what was written.
+template <class F>
+std::string capture_stderr(F f) {
+  std::fflush(stderr);
+  FILE* tmp = std::tmpfile();
+  REQUIRE(tmp);
+  int saved = dup(2);
+  dup2(fileno(tmp), 2);
+  f();
+  std::fflush(stderr);
+  dup2(saved, 2);
+  close(saved);
+  std::string out;
+  std::rewind(tmp);
+  for (int c; (c = std::fgetc(tmp)) != EOF;) out += static_cast<char>(c);
+  std::fclose(tmp);
+  return out;
+}
+struct Named : Peripheral {
+  uint32_t r[4] = {};
+  std::string_view name() const override { return "GPIOA"; }
+  uint32_t read(uint32_t off, unsigned) override { return r[off / 4]; }
+  void write(uint32_t off, unsigned, uint32_t v) override { r[off / 4] = v; }
+  std::string_view reg_name(uint32_t off) const override { return off == 4 ? "ODR" : ""; }
+};
+}  // namespace
+
+TEST_CASE("Bus: hal-owned peripheral warns once per register, access still works") {
+  Named p;
+  Bus b;
+  b.map(0x48000000, 0x10, &p);
+  b.set_hal_owned(&p, "GPIO");
+  std::string err = capture_stderr([&] {
+    b.write(0x48000004, 4, 7);
+    b.write(0x48000004, 4, 8);
+    CHECK(b.read(0x48000004, 4) == 8);   // same register: no second warning
+    (void)b.read(0x48000006, 2);         // sub-word access to the same register: no warning
+    b.write(0x48000008, 4, 1);           // unnamed register: offset instead of a name
+    b.write(0x48000008, 4, 2);
+  });
+  CHECK(err ==
+        "stest: warning: firmware accessed GPIOA ODR directly while GPIO is in hal mode\n"
+        "stest: warning: firmware accessed GPIOA +0x008 directly while GPIO is in hal mode\n");
+  CHECK(p.r[1] == 8);
+  CHECK(p.r[2] == 2);
+  b.unmap(&p);
+  b.map(0x48000000, 0x10, &p);  // unmap drops the hal marking
+  CHECK(capture_stderr([&] { b.write(0x48000004, 4, 1); }).empty());
+}
+
+TEST_CASE("Bus: require_clock checks mapping and gate without accessing the model") {
+  Named p;
+  Bus b;
+  b.map(0x48000000, 0x10, &p);
+  uint32_t en = 0;
+  b.set_gate(&p, &en, 1u, "RCC AHB2ENR bit 0");
+  CHECK_THROWS_AS(b.require_clock(0x48000004, 4, true), ClockDisabled);
+  en = 1;
+  CHECK(b.require_clock(0x48000004, 4, true) == &p);
+  CHECK_THROWS_AS(b.require_clock(0x48000010, 4, false), UnmodelledAccess);
 }

@@ -93,3 +93,18 @@ def spi_exe():
 @pytest.fixture
 def itm_exe() -> Path:
     return _exe("itm")
+
+
+@pytest.fixture
+def blinky_gpio_hal_exe() -> Path:
+    return _exe("blinky_gpio_hal")
+
+
+@pytest.fixture
+def exti_gpio_hal_exe() -> Path:
+    return _exe("exti_gpio_hal")
+
+
+@pytest.fixture
+def hal_direct_gpio_hal_exe() -> Path:
+    return _exe("hal_direct_gpio_hal")

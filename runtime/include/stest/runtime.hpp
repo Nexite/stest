@@ -12,6 +12,7 @@
 //    the access proceeds. The node uses it to hand the baton back to its loop
 //    thread; the hook returns once the loop has set a later quantum end.
 #include <cstdint>
+#include <type_traits>
 #include "stest/bus.hpp"
 #include "stest/clock.hpp"
 
@@ -54,4 +55,28 @@ uint32_t poll_skip_threshold();
 // Ends the current poll streak. Called by the core when it takes an exception and by
 // the node after a quantum handoff (the loop thread may have changed state).
 void poll_streak_break();
+
+// HAL-shim access (MODELS <TYPE>=hal; the C++ side of stest/hal_api.h). One register access
+// that ST's replaced driver function would have made, performed by calling the model directly
+// on the firmware's behalf: exactly like an MMIO access at `addr` (charge the access cost, due
+// events fire, quantum end; Bus::require_clock mapping/clock-gate checks; op(p, ctx), with p
+// the peripheral mapped at addr, applies the model-side effect and returns the loaded value; then the IRQ delivery point; a store ends
+// the poll streak, a load feeds it with (addr, width, value)), but without the Bus's hal-mode
+// warning. Any error aborts strictly like MMIO (unmodelled, read-only, clock disabled).
+// So a shim that accounts for the same accesses as ST's code gives byte-identical event logs.
+using ShimOp = uint32_t (*)(Peripheral& p, void* ctx);
+uint32_t shim_access(uint64_t addr, unsigned width, bool is_write, ShimOp op, void* ctx);
+template <class F>  // f: (Peripheral&) -> uint32_t (loads) or (Peripheral&) -> void (stores)
+uint32_t shim_access(uint64_t addr, unsigned width, bool is_write, F&& f) {
+  using Fn = std::remove_reference_t<F>;
+  return shim_access(addr, width, is_write, [](Peripheral& p, void* c) -> uint32_t {
+    Fn& fn = *static_cast<Fn*>(c);
+    if constexpr (std::is_void_v<decltype(fn(p))>) {
+      fn(p);
+      return 0;
+    } else {
+      return static_cast<uint32_t>(fn(p));
+    }
+  }, &f);
+}
 }  // namespace stest

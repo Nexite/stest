@@ -64,6 +64,8 @@ Firmware logging: every chip maps core-generic ITM, DWT and CoreDebug models, so
 
 Poll fast-forward: after 64 store-free loads that re-read already-seen (address, width, value) tuples, a node jumps its clock to the next scheduled event or the quantum end. For loops that poll a hardware value this is exact. A loop that counts iterations in a non-volatile local while reading constant volatile values (`while (--n && !(REG & FLAG));`, flag never set) is time-dilated by it (potentially hundreds of times longer than on hardware, and quantum-dependent when no event is pending). Control the threshold with `Sim(..., poll_skip=N)`, `--stest-poll-skip N`, `@pytest.mark.stest(poll_skip=N)`, or the node env var `STEST_POLL_SKIP=N`; `0` disables it, the default is 64.
 
+HAL mode: by default every peripheral is simulated at the register level (ST's HAL compiles unchanged and its register accesses reach the models). `stest_add_firmware(<name> CHIP ... SOURCES ... MODELS GPIO=hal)` instead replaces ST's `stm32l4xx_hal_gpio.c` with stest's shim (`chips/stm32l4/hal/`), which drives the GPIO model directly while keeping its registers, pins, EXTI setup, event times and IRQs identical to register mode. Firmware that still writes a hal-mode block directly works but gets one stderr warning per register (`stest: warning: firmware accessed GPIOA ODR directly while GPIO is in hal mode`). `MODELS <TYPE>=register` is the default; unknown types and types without a shim (only GPIO has one so far) fail at configure time.
+
 ## Design
 
 See the [design spec](docs/superpowers/specs/2026-10-30-stest-sil-design.md).

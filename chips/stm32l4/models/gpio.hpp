@@ -24,6 +24,14 @@
 // outside world driving the pin, so set_voltage works whatever the RCC clock state.
 // call(): "set_voltage" {pin, volts (finite number)}; "get_voltage" {pin} -> volts | null;
 // "release_voltage" {pin} (drop the external voltage).
+//
+// HAL mode (MODELS GPIO=hal): the GPIO shim (chips/stm32l4/hal/stm32l4xx_hal_gpio_shim.c)
+// calls the stest_gpio_hal_* C API (stest/hal_api.h, implemented at the end of gpio.cpp),
+// which applies ST's driver operations to this model directly through read()/write() (so
+// locking, BSRR priority, levels and events behave exactly as in register mode), accounting
+// each as the register access ST's code makes (stest::shim_access). Firmware MMIO to a
+// hal-mode GPIO block still works but warns once per register (Bus::set_hal_owned, using
+// reg_name()).
 #include <array>
 #include <cstdint>
 #include <optional>
@@ -52,6 +60,7 @@ class Gpio : public Peripheral {
   void write(uint32_t off, unsigned width, uint32_t v) override;
   void reset() override;
   nlohmann::json call(std::string_view op, const nlohmann::json& args) override;
+  std::string_view reg_name(uint32_t off) const override;
 
   int pin_level(unsigned pin) const;
   // Analog voltage of `pin` (external, else on-chip driver), empty if neither is set.

@@ -3,6 +3,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -41,6 +42,19 @@ class Bus {
   // Same, gated on (*word & mask) != 0, read live on every access (one load, no call); the
   // form the generated chip init uses, with word = ClockTree::enable_word(<RCC reg>).
   void set_gate(Peripheral* p, const uint32_t* word, uint32_t mask, std::string what);
+  // HAL mode (stest_add_firmware MODELS <TYPE>=hal; the generated chip init calls this for
+  // every peripheral of a hal-mode type): `p` is driven by a HAL shim through the model's
+  // C++ API (stest/hal_api.h), not by firmware MMIO. A firmware access to it through read()/
+  // write() still works but prints once per (peripheral, register word), on stderr:
+  //   stest: warning: firmware accessed GPIOA ODR directly while GPIO is in hal mode
+  // (register named by Peripheral::reg_name, else "+0x018"). `type` is the MODELS type name.
+  // Cost on the access path: one predicted branch when not hal-owned. p not mapped ->
+  // std::invalid_argument.
+  void set_hal_owned(Peripheral* p, std::string type);
+  // The peripheral mapped at [addr, addr+width), after the same mapping and clock-gate checks
+  // read()/write() make (UnmodelledAccess / ClockDisabled), without accessing the model and
+  // without the hal-mode warning: for HAL-shim accesses performed on the firmware's behalf.
+  Peripheral* require_clock(uint64_t addr, unsigned width, bool is_write) const;
   // width in bytes (1,2,4). Throws UnmodelledAccess if unmapped or the peripheral
   // throws UnmodelledRegister (then .peripheral is set; .read_only for ReadOnlyRegister).
   // Throws ClockDisabled for a gated peripheral whose clock is off (the model is not called).
@@ -56,12 +70,18 @@ class Bus {
     std::string what;
     bool open() const { return word ? (*word & mask) != 0 : clocked(); }
   };
+  struct HalOwned {
+    std::string type;
+    std::set<uint32_t> warned;  // register word offsets already reported
+  };
   void install_gate(Peripheral* p, Gate g);
-  struct Mapping { uint64_t base; uint32_t size; Peripheral* p; const Gate* gate; };
+  struct Mapping { uint64_t base; uint32_t size; Peripheral* p; const Gate* gate; HalOwned* hal; };
   const Mapping* find(uint64_t addr, unsigned width) const;
   [[noreturn]] static void gated(const Mapping& m, uint64_t addr, unsigned width, bool is_write);
+  static void hal_access(const Mapping& m, uint64_t addr);
   std::vector<Mapping> maps_;  // sorted by base
   std::map<Peripheral*, std::unique_ptr<Gate>> gates_;
+  std::map<Peripheral*, std::unique_ptr<HalOwned>> hal_;
 };
 
 }  // namespace stest

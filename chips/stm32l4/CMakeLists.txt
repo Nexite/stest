@@ -29,6 +29,10 @@ add_executable(stm32l4_spi_tests ${PROJECT_SOURCE_DIR}/runtime/tests/main.cpp te
 target_link_libraries(stm32l4_spi_tests PRIVATE stest_chip_stm32l4 doctest::doctest)
 add_test(NAME chip_stm32l4_spi COMMAND stm32l4_spi_tests)
 
+add_executable(stm32l4_gpio_hal_tests ${PROJECT_SOURCE_DIR}/runtime/tests/main.cpp tests/test_gpio_hal.cpp)
+target_link_libraries(stm32l4_gpio_hal_tests PRIVATE stest_chip_stm32l4 doctest::doctest)
+add_test(NAME chip_stm32l4_gpio_hal COMMAND stm32l4_gpio_hal_tests)
+
 # Generator output for the L496 part: the weak-handler line format and table size.
 add_test(NAME chip_gen_stm32l496rg
   COMMAND ${CMAKE_COMMAND} -DPYTHON=${Python3_EXECUTABLE}
@@ -36,4 +40,5 @@ add_test(NAME chip_gen_stm32l496rg
           -DTOML=${CMAKE_CURRENT_SOURCE_DIR}/parts/stm32l496rg.toml
           -DOUT=${CMAKE_CURRENT_BINARY_DIR}/gen_check_stm32l496rg.cpp
           -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_gen.cmake)
-set_tests_properties(chip_stm32l4_models chip_stm32l4_rcc_clocks chip_stm32l4_exti chip_stm32l4_tim chip_stm32l4_adc chip_stm32l4_spi chip_gen_stm32l496rg PROPERTIES TIMEOUT 30)
+set_tests_properties(chip_stm32l4_models chip_stm32l4_rcc_clocks chip_stm32l4_exti chip_stm32l4_tim chip_stm32l4_adc chip_stm32l4_spi chip_stm32l4_gpio_hal
+  chip_gen_stm32l496rg PROPERTIES TIMEOUT 30)
