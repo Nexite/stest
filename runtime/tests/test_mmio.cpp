@@ -125,4 +125,17 @@ TEST_CASE("mmio: memset/memcpy split into aligned <=4-byte accesses through the 
   for (int i = 0; i < 16; ++i) buf[i] = (uint8_t)i;
   __stest_mmio_memcpy(buf + 4, buf, 11);  // aligned both sides, overlapping
   for (int i = 0; i < 11; ++i) CHECK(buf[4 + i] == i);
+
+  // volatile self-copy still performs every read and write (side effects, strictness)
+  r.ops.clear();
+  uint64_t t1 = stest_rt_now_ns();
+  __stest_mmio_memcpy((void*)0x40021030, (void*)0x40021030, 6);
+  REQUIRE(r.ops.size() == 4);
+  CHECK((!r.ops[0].wr && r.ops[0].off == 0x30 && r.ops[0].w == 4));
+  CHECK((r.ops[1].wr && r.ops[1].off == 0x30 && r.ops[1].w == 4 && r.ops[1].v == 0x04030201));
+  CHECK((!r.ops[2].wr && r.ops[2].off == 0x34 && r.ops[2].w == 2));
+  CHECK((r.ops[3].wr && r.ops[3].off == 0x34 && r.ops[3].w == 2 && r.ops[3].v == 0x0605));
+  CHECK(stest_rt_now_ns() - t1 == 4 * 25);
+  __stest_mmio_memcpy((void*)0x40021030, (void*)0x40021030, 0);  // n == 0: no access
+  CHECK(r.ops.size() == 4);
 }

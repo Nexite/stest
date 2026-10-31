@@ -303,7 +303,7 @@ void __stest_mmio_store64(volatile void* a, uint64_t v) { do_store(a, 8, v); }
 
 void __stest_mmio_memcpy(volatile void* dst, const volatile void* src, size_t n) {
   uint64_t d = (uint64_t)(uintptr_t)dst, s = (uint64_t)(uintptr_t)src;
-  if (d == s) return;
+  // No d == s shortcut: a volatile self-copy still performs its reads and writes.
   if (d > s && d - s < n) {  // dst overlaps the tail of src: copy backwards
     for (size_t e = n; e > 0;) {
       unsigned w = 1;
