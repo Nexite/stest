@@ -17,7 +17,13 @@ def _alive(pid: int) -> bool:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
-    return True
+    # A killed orphan stays a zombie until its new parent reaps it; in a container whose
+    # PID 1 doesn't reap (e.g. `docker run img uv run pytest`) that can be forever.
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            return f.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except OSError:
+        return True  # no /proc (macOS): kill(pid, 0) is the best we have
 
 
 def _wait_gone(pid: int, timeout_s: float = 5.0) -> bool:
