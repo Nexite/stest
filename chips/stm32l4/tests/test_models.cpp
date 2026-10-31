@@ -175,6 +175,47 @@ TEST_CASE("gpio: output pin via BSRR/ODR/BRR, IDR, events, calls") {
   CHECK_THROWS_AS(gpio.call("nope", json::object()), UnknownOp);
 }
 
+TEST_CASE("gpio: deliver drive_pin schedules the drive at t, event stamped t") {
+  Bus bus;
+  Clock clock;
+  Cortexm core(bus, clock, 4, kTable, 16);
+  ModelContext ctx(clock, core, bus);
+  stm32l4::Gpio gpio("GPIOA", json{{"port", "A"}, {"moder_reset", 0xABFFFFFFu},
+                                   {"pupdr_reset", 0x64000000u}},
+                     ctx);
+  (void)take_events();
+  gpio.deliver("drive_pin", {{"pin", 0}, {"level", 1}}, 1000);
+  gpio.deliver("drive_pin", {{"pin", 0}, {"level", nullptr}}, 2000);  // release
+  CHECK(gpio.pin_level(0) == 0);  // nothing changes before t
+  CHECK(take_events().empty());
+  clock.advance(1010);  // the firmware's next access overshoots t by 10 ns
+  clock.run_due();
+  CHECK(gpio.pin_level(0) == 1);
+  auto ev = take_events();
+  REQUIRE(ev.size() == 1);
+  CHECK(ev[0].t_ns == 1000);  // stamped t, not the time it fired
+  clock.advance(1000);
+  clock.run_due();
+  CHECK(gpio.pin_level(0) == 0);
+  ev = take_events();
+  REQUIRE(ev.size() == 1);
+  CHECK(ev[0].t_ns == 2000);
+  CHECK_THROWS_AS(gpio.deliver("drive_pin", {{"pin", 0}, {"level", 2}}, 3000), std::invalid_argument);
+  CHECK_THROWS_AS(gpio.deliver("drive_pin", {{"pin", 0}}, 3000), std::invalid_argument);
+  CHECK_THROWS(gpio.deliver("drive_pin", {{"pin", 16}, {"level", 1}}, 3000));
+  CHECK_THROWS_AS(gpio.deliver("get_pin", {{"pin", 0}}, 3000), UnknownOp);  // call() ops are not inbox ops
+  CHECK(clock.next_event_ns() == UINT64_MAX);  // rejected messages scheduled nothing
+}
+
+TEST_CASE("peripheral: deliver defaults to UnknownOp") {
+  struct P : Peripheral {
+    std::string_view name() const override { return "P"; }
+    uint32_t read(uint32_t, unsigned) override { return 0; }
+    void write(uint32_t, unsigned, uint32_t) override {}
+  } p;
+  CHECK_THROWS_AS(p.deliver("x", json::object(), 0), UnknownOp);
+}
+
 TEST_CASE("gpio: open-drain output follows pull when ODR=1") {
   Bus bus;
   Clock clock;

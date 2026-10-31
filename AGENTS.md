@@ -19,7 +19,7 @@ stest is an open-source (Apache-2.0) STM32 software-in-the-loop simulator. Real 
 | `chips/cmsis_host/` | Host shim for CMSIS `cmsis_compiler.h` (replaces ARM toolchain header) |
 | `tools/gen_chip.py` | TOML -> generated chip glue (IRQ table, weak handlers, model instances, `stest_chip`) |
 | `cmake/` | `StestToolchain.cmake` (finds upstream LLVM), `StestFetchST.cmake` (pinned ST sources), `stest_add_firmware.cmake` |
-| `selftest/` | Self-test firmwares (`firmware/`: `adc`, `blinky`, `dac`, `exti`, `faults` (variants incl. `faults_abort_output`), `hal_direct`, `itm` (+ `itm_mixed`: printf and ITM interleaved), `pollcount`, `spi`, `tim`) and CTest checks |
+| `selftest/` | Self-test firmwares (`firmware/`: `adc`, `blinky`, `dac`, `exti`, `faults` (variants incl. `faults_abort_output`, `faults_abort_events`), `hal_direct`, `itm` (+ `itm_mixed`: printf and ITM interleaved), `pollcount`, `spi`, `tim`) and CTest checks |
 | `spike/` | Interception benchmarks and the speed gate (`run_gate.py`) |
 | `python/stest/`, `python/tests/` | `Sim`/`Node`, protocol mirror, DWARF/Mach-O symbol lookup, typed peripheral helpers (`peripherals.py`: `node.timer()`, `node.adc()`, `node.dac()`, `node.spi()`; `pin.py`: levels and analog voltages), pytest plugin; Python tests |
 | `docs/superpowers/{specs,plans}/` | Design spec and per-plan implementation plans; `docs/spikes/` gate results |
@@ -36,7 +36,7 @@ Build time:
 Run time:
 - One node = one process = one MCU. The firmware runs on its own thread; the thread owning the Node (loop thread) holds the "baton". Exactly one runs at a time (mutex + condvar handoff), so all model/clock/core access is single-threaded. See `runtime/include/stest/node.hpp`.
 - Every MMIO access goes `mmio.cpp` -> `Bus` -> model, charging virtual time. Models schedule `Clock` events; IRQ handlers and events run on the firmware thread.
-- Control channel (`runtime/include/stest/protocol.h`): framed messages (`u32 len | u8 type | payload`) over the socket fd in `STEST_CTRL`: HELLO, RUN_UNTIL, STOPPED (+events), READ_MEM/WRITE_MEM, MODEL_CALL, ERROR (node exits 70), SHUTDOWN, REQ_ERROR. Without `STEST_CTRL` the node runs standalone (`--run-ms N`); there a strict abort first prints the aborting quantum's pending events and partial stdout/ITM lines as EVT lines (standalone abort hook in `node_main.cpp`), then exits 70.
+- Control channel (`runtime/include/stest/protocol.h`, version 2): framed messages (`u32 len | u8 type | payload`) over the socket fd in `STEST_CTRL`: HELLO, RUN_UNTIL (+inbox), STOPPED (+events), READ_MEM/WRITE_MEM, MODEL_CALL, ERROR (+events; node exits 70), SHUTDOWN, REQ_ERROR. RUN_UNTIL's inbox carries `Node.post(model, op, args, t_ns)` messages, applied in order before the node runs via `Peripheral::deliver` (which schedules Clock events at `t_ns`); an inbox message the node cannot apply (unknown model/op, bad args, `t_ns` before node now) is a strict abort. ERROR carries the aborting quantum's pending events plus the unterminated ITM/stdout lines as `"partial": true` events; Python records them (event_log, pin history, `node.output`/`log`) before raising NodeCrashed, and ignores the stderr `... unterminated` copies of those lines. Without `STEST_CTRL` the node runs standalone (`--run-ms N`); there a strict abort first prints the aborting quantum's pending events and partial stdout/ITM lines as EVT lines (standalone abort hook in `node_main.cpp`), then exits 70.
 - Python `Sim` advances all nodes in lockstep quanta (default 1000 us). Firmware variables are read/written by name via DWARF (`python/stest/symbols.py`, anchored at the `stest_symbol_anchor` runtime address; Mach-O via `macho.py`).
 - Poll fast-forward (`runtime.hpp`): after 64 store-free loads re-reading seen (addr,width,value) tuples, the clock jumps to the next event or quantum end.
 
@@ -85,7 +85,8 @@ Note the Docker build writes into the host `build/`; if you share the tree with 
 
 ## Change together
 
-- `runtime/include/stest/protocol.h` <-> `python/stest/protocol.py`: byte-for-byte mirror. Bump `STEST_PROTO_VERSION` / `PROTO_VERSION` on any wire change, update the header comment table, and add a Python test.
+- `runtime/include/stest/protocol.h` <-> `runtime/src/control_channel.cpp` <-> `python/stest/protocol.py` (+ `node.py`/`sim.py` consumers): byte-for-byte mirror, currently version 2. Bump `STEST_PROTO_VERSION` / `PROTO_VERSION` together on any wire change (HELLO mismatch names both versions), update the header comment table, and add a Python test (`python/tests/test_protocol_v2.py` has the wire-format goldens).
+- `Peripheral::deliver` ops <-> their Python posters (`Node.post`, `Pin.drive_at`, later the CAN bus engine); document ops in the model header.
 - `chips/*/parts/*.toml` <-> `tools/gen_chip.py` (schema/validation) <-> model class names/ctors. `stest_add_firmware` re-runs the generator when either changes.
 - Model added: its source in `chips/<family>/CMakeLists.txt`, a TOML `[[peripheral]]` entry, and tests.
 - HAL shims (`chips/<family>/hal/`) <-> `family.cmake` <-> `runtime/include/stest/hal_api.h` <-> the model's C API implementation; a shim must define every public symbol of the ST file it replaces, with ST's signatures (see `docs/adding-a-peripheral.md`, "Writing a HAL shim").
@@ -110,7 +111,7 @@ Note the Docker build writes into the host `build/`; if you share the tree with 
 ## Testing conventions
 
 - TDD: write the failing test first. C++ uses doctest; CTest names are prefixed `runtime_`, `chip_`, `selftest_` (and `python_tests`). Python and e2e use pytest (`python/tests/`, `pytester` for plugin tests).
-- Self-test firmwares live in `selftest/firmware/*`; fault injection is one exe per variant (`faults_spin|crash|unmodelled|ro_write|clkoff`, plus `faults_printf` for stdout capture). HAL-mode builds are suffixed `_gpio_hal` (`blinky_gpio_hal`, `exti_gpio_hal`, `hal_direct_gpio_hal`).
+- Self-test firmwares live in `selftest/firmware/*`; fault injection is one exe per variant (`faults_spin|crash|unmodelled|ro_write|clkoff`, plus `faults_printf` for stdout capture, `faults_abort_output` / `faults_abort_events` for output and events of an aborting quantum). HAL-mode builds are suffixed `_gpio_hal` (`blinky_gpio_hal`, `exti_gpio_hal`, `hal_direct_gpio_hal`).
 - Every CTest has a `TIMEOUT` (30 s for runtime/chip/selftests, 120 for the `selftest_configure_*` nested configures, 300 for `python_tests`); set one on new tests.
 - Before claiming done, run the full suite natively AND in Docker (Linux-only paths like `PR_SET_PDEATHSIG` and `/proc` differ from macOS).
 - Do not match on raw JSON key order in event logs (keys are sorted).

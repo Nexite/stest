@@ -6,6 +6,8 @@ nlohmann::json Peripheral::call(std::string_view op, const nlohmann::json&) {
   throw UnknownOp(op);
 }
 
+void Peripheral::deliver(std::string_view op, const nlohmann::json&, uint64_t) { throw UnknownOp(op); }
+
 static void check_declare(uint32_t off) {
   if ((off & 3u) != 0) throw std::invalid_argument("RegisterFile: register offset not word aligned");
   if (off >= RegisterFile::kMaxBlock)

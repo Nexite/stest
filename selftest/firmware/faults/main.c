@@ -12,6 +12,9 @@
  *   PARTIAL_END   no fault: at 10 ms printf("tail") without a newline, then sleep (a normal
  *               --run-ms end must emit it as a partial event)
  *   (ABORT_OUTPUT also prints "early <i>" lines before 10 ms, in earlier quanta)
+ *   ABORT_EVENTS  at 10 ms, in one quantum: PA5 output driven high (a gpio event),
+ *               printf("boom\n"), then the UNMODELLED write (strict abort); used to test that
+ *               the ERROR frame carries the aborting quantum's events
  *
  * Every variant except CLKOFF enables the GPIOA clock first (GPIO access with its RCC
  * enable bit clear is itself a strict abort).
@@ -33,6 +36,7 @@
 #define PRINTF 6
 #define ABORT_OUTPUT 7
 #define PARTIAL_END 8
+#define ABORT_EVENTS 9
 #ifndef FAULT
 #error "define FAULT=SPIN|CRASH|UNMODELLED|RO_WRITE|CLKOFF|PRINTF"
 #endif
@@ -89,6 +93,11 @@ int main(void)
     printf("frag");
     *(volatile uint32_t *)0x40013800u = 1u; /* USART1->CR1: strict abort */
   }
+#elif FAULT == ABORT_EVENTS
+  GPIOA->MODER = (GPIOA->MODER & ~(3u << 10)) | (1u << 10); /* PA5: general-purpose output */
+  GPIOA->BSRR = 1u << 5;                                    /* PA5 high: gpio event */
+  printf("boom\n");
+  *(volatile uint32_t *)0x40013800u = 1u; /* USART1->CR1: strict abort */
 #elif FAULT == PARTIAL_END
   printf("tail");
 #elif FAULT == PRINTF

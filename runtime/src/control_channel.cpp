@@ -3,8 +3,8 @@
 // Threading: the loop thread (this file) owns the socket and the Node. While it is
 // inside Node::run_until the firmware thread runs and the loop thread is parked on the
 // baton, so the socket has exactly one user at a time. The one exception is
-// stest_rt_abort on the firmware thread: its hook (abort_hook) writes the ERROR frame
-// with plain blocking send() calls on the same fd. That cannot interleave with a loop
+// stest_rt_abort on the firmware thread: its hook (abort_hook) drains the pending events
+// and writes the ERROR frame with plain blocking send() calls on the same fd. That cannot interleave with a loop
 // frame (the loop is parked mid-run_until, never mid-write) and does not need the loop
 // thread, so it cannot deadlock.
 #include <sys/socket.h>
@@ -136,27 +136,105 @@ void send_or_exit(uint8_t type, const std::string& payload) {
 // stderr as
 //   stest: ITM unterminated {"port":N,"text":"..."}
 //   stest: stdout unterminated {"text":"..."}
-// so it reaches the crash report and the Python side (Node._drain_stderr turns them into
-// final Node.log / Node.output entries).
-void report_itm_partial() {
+// so it reaches the crash report. At EOF/SHUTDOWN that is the only channel (Node._drain_stderr
+// turns them into final Node.log / Node.output entries). On a strict abort (`as_events`) each
+// line is also emitted as a final event with "partial":true, which the ERROR frame carries;
+// Python then takes them from ERROR (in order after the quantum's events) and ignores the
+// stderr copies.
+void report_itm_partial(bool as_events = false) {
   try {
+    const uint64_t now = runtime_clock().now_ns();
     if (Cortexm* c = Cortexm::installed())
       for (auto& [port, text] : c->take_itm_partial()) {
         nlohmann::json j = {{"port", port}, {"text", text}};
         std::fprintf(stderr, "stest: ITM unterminated %s\n", j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace).c_str());
+        if (as_events)
+          emit_event(now, {{"kind", "itm"}, {"periph", "ITM"}, {"port", port}, {"text", text}, {"partial", true}});
       }
     if (std::optional<std::string> s = take_stdout_partial()) {
       nlohmann::json j = {{"text", *s}};
       std::fprintf(stderr, "stest: stdout unterminated %s\n", j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace).c_str());
+      if (as_events) emit_event(now, {{"kind", "stdout"}, {"periph", "stdout"}, {"text", *s}, {"partial", true}});
     }
     std::fflush(stderr);
   } catch (...) {
   }
 }
 
+// Appends `u32 n_events, events` (STOPPED / ERROR encoding). `strict`: an event JSON over
+// 0xFFFF bytes aborts (STOPPED); otherwise (ERROR, already aborting) it is dropped, as are
+// events past the payload limit, with a note on stderr.
+void put_events(Out& o, const std::vector<Event>& evs, bool strict) {
+  const size_t count_at = o.b.size();
+  o.u32(0);
+  uint32_t n = 0;
+  size_t dropped = 0;
+  for (const Event& e : evs) {
+    std::string js = strict ? e.data.dump()
+                            : e.data.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    if (js.size() > 0xFFFF) {
+      if (strict) stest_rt_abort("event JSON too long (%zu bytes)", js.size());
+      ++dropped;
+      continue;
+    }
+    if (!strict && o.b.size() + 10 + js.size() > STEST_MAX_PAYLOAD) {
+      ++dropped;
+      continue;
+    }
+    o.u64(e.t_ns);
+    o.u16(static_cast<uint16_t>(js.size()));
+    o.bytes(js.data(), js.size());
+    ++n;
+  }
+  for (int i = 0; i < 4; ++i) o.b[count_at + i] = static_cast<char>((n >> (8 * i)) & 0xFF);
+  if (dropped) std::fprintf(stderr, "stest: %zu events of the aborting quantum not reported (too large)\n", dropped);
+}
+
+// Strict abort (stest_rt_abort, which clears the hook before calling it, so this runs once).
+// Runs on the aborting thread: the firmware thread with the loop thread parked inside
+// run_until, or the loop thread with the firmware parked; either way it has exclusive use
+// of the models, the event buffer and the socket (the loop is never mid-write), so it can
+// drain the aborting quantum's events and send them with the message.
 void abort_hook(const char* msg) {
-  report_itm_partial();
-  (void)send_msg(STEST_MSG_ERROR, msg);
+  Out o;
+  try {
+    report_itm_partial(/*as_events=*/true);
+    size_t n = std::strlen(msg);
+    if (n > 0xFFFF) n = 0xFFFF;
+    o.u16(static_cast<uint16_t>(n));
+    o.bytes(msg, n);
+    put_events(o, take_events(), /*strict=*/false);
+  } catch (...) {  // e.g. out of memory: still report the message
+    o = Out{};
+    size_t n = std::strlen(msg);
+    if (n > 0xFFFF) n = 0xFFFF;
+    o.u16(static_cast<uint16_t>(n));
+    o.bytes(msg, n);
+    o.u32(0);
+  }
+  (void)send_msg(STEST_MSG_ERROR, o.b);
+}
+
+// Applies one RUN_UNTIL inbox message (protocol.h, "Inbox"); any failure is a strict abort.
+void apply_inbox(const Node& node, uint64_t t, const uint8_t* js, uint16_t len) {
+  nlohmann::json req = nlohmann::json::parse(js, js + len, nullptr, /*allow_exceptions=*/false);
+  if (req.is_discarded() || !req.is_object() || !req.contains("model") || !req["model"].is_string() ||
+      !req.contains("op") || !req["op"].is_string() || (req.contains("args") && !req["args"].is_object()))
+    stest_rt_abort("control protocol: bad inbox message at t=%" PRIu64
+                   " ns (expected {\"model\": str, \"op\": str, \"args\": {...}})", t);
+  const std::string model = req["model"].get<std::string>(), op = req["op"].get<std::string>();
+  const nlohmann::json args = req.value("args", nlohmann::json::object());
+  Peripheral* p = find_model(model);
+  if (!p)
+    stest_rt_abort("inbox message for %s at t=%" PRIu64 " ns (op %s): unknown model", model.c_str(), t, op.c_str());
+  if (t < node.now_ns())
+    stest_rt_abort("inbox message for %s at t=%" PRIu64 " ns is in the past (now %" PRIu64 " ns; op %s)",
+                   model.c_str(), t, node.now_ns(), op.c_str());
+  try {
+    p->deliver(op, args, t);
+  } catch (const std::exception& e) {
+    stest_rt_abort("inbox message for %s at t=%" PRIu64 " ns (op %s): %s", model.c_str(), t, op.c_str(), e.what());
+  }
 }
 
 // ---- fault-safe memory copy ----
@@ -318,22 +396,20 @@ void run_control_channel(int fd, const ChipDesc& chip, FirmwareMain fw, const vo
       switch (type) {
         case STEST_MSG_RUN_UNTIL: {
           uint64_t t = in.u64();
+          uint32_t n_msgs = in.u32();
+          for (uint32_t i = 0; i < n_msgs; ++i) {  // inbox: in order, before the node runs
+            uint64_t mt = in.u64();
+            uint16_t jl = in.u16();
+            apply_inbox(*node, mt, in.bytes(jl), jl);
+          }
           in.end();
           if (node->run_until(t) == Node::Stop::Exited)
             stest_rt_abort("firmware main returned %d at t=%" PRIu64 " ns", node->exit_code(),
                            node->now_ns());
           std::fflush(stdout);  // everything printed so far is in the pipe before STOPPED
-          std::vector<Event> evs = take_events();
           Out o;
           o.u64(node->now_ns());
-          o.u32(static_cast<uint32_t>(evs.size()));
-          for (const Event& e : evs) {
-            std::string js = e.data.dump();
-            if (js.size() > 0xFFFF) stest_rt_abort("event JSON too long (%zu bytes)", js.size());
-            o.u64(e.t_ns);
-            o.u16(static_cast<uint16_t>(js.size()));
-            o.bytes(js.data(), js.size());
-          }
+          put_events(o, take_events(), /*strict=*/true);
           send_or_exit(STEST_MSG_STOPPED, o.b);
           break;
         }

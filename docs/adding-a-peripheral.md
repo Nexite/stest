@@ -186,6 +186,12 @@ Strict by default (`AGENTS.md`, "Non-negotiable rules"). The node aborts with ex
 - Throw `UnknownOp` for unknown ops and `std::invalid_argument` (or any `std::exception`) for bad args. Python raises `StestError`, and the **node keeps running** (REQ_ERROR, not ERROR).
 - MODEL_CALL runs on the loop thread while the firmware is parked between quanta. It calls the model directly, **bypassing Bus clock gating by design**: it models the outside world, or a debugger, looking at the chip.
 
+**`deliver()`: timestamped messages (cross-node models).** A model that receives something from outside the node *at a known virtual time* (a CAN frame from another node's bus, a scheduled pin drive) implements `Peripheral::deliver(op, args, t_ns)` (`peripheral.hpp`). Python queues the message with `node.post(model, op, args, t_ns)` (`Node.post` in `python/stest/node.py`; `Pin.drive_at(level, t_ns)` wraps `Gpio`'s `"drive_pin" {pin, level: 0|1|null}`); it travels in the inbox of the next RUN_UNTIL (protocol v2, `runtime/include/stest/protocol.h`), and the control channel calls `deliver` on the loop thread, firmware parked, in posting order, before the node runs that quantum (`apply_inbox` in `control_channel.cpp`). Rules:
+- Do not change state in `deliver` itself: schedule each effect as a `Clock` event at `t_ns` (the model contract, section 4), so the firmware sees it at exactly `t_ns` whatever the quantum, and a firmware sleeping in WFI or polling (fast-forward) wakes for it. `t_ns` is never before the node's current time (the channel checks; `t_ns == now` is allowed).
+- Stamp the resulting events with `t_ns` itself, not `clock.now_ns()` when the event fires (which may overshoot by less than an access cost): see `Gpio::deliver` / `Gpio::update(t)`.
+- Validate `args` in `deliver` (before scheduling) and throw `UnknownOp` / `std::invalid_argument`. Unlike `call()`, a failed or past-time inbox message is a **strict abort** (`stest: inbox message for <model> at t=<t> ns (op <op>): <why>`): RUN_UNTIL has no per-message reply, and a bad message is a harness bug, not firmware behaviour.
+- The default `deliver` throws `UnknownOp`; ops are separate from `call()` ops (`Gpio` has `"drive_pin"` in both, with different semantics: immediate vs. at `t_ns`).
+
 **Events.** Call `emit_event(clock.now_ns(), json)` (`emit_event` in `runtime/include/stest/node.hpp`) for changes a test wants as a timeline. Conventions:
 - The event is a flat JSON object with a `"kind"` key naming the event type and a `"periph"` key naming the emitting instance (the model's `name()`: `"GPIOA"`, `"TIM7"`, `"DAC1"`, `"SPI1"`, `"ITM"`), stamped with the event's virtual time. Example from `Gpio::update()`: `{"kind":"gpio","periph":"GPIOA","port":"A","pin":5,"level":1}`. Do not use `"bus"` for the instance (it is reserved for simulated buses such as CAN); every Python consumer keys on `periph`.
 - Keys are serialized sorted, so tests must not match on raw key order.
@@ -322,6 +328,7 @@ That command writes into the host `build/`. If you also build natively in the sa
 - [ ] `selftest/firmware/<name>/` and `selftest/CMakeLists.txt`: HAL-based self-test firmware.
 - [ ] `python/tests/conftest.py` fixture and `python/tests/test_<kind>.py`: e2e, determinism and (if hot) speed.
 - [ ] Analog pins / SPI / output: sections 8.1-8.3 followed if the model touches them.
+- [ ] `deliver()` ops (if the outside world sends the model timestamped input) schedule Clock events at `t_ns`; documented in the header.
 - [ ] `python/stest/peripherals.py` typed helper and `Node` accessor, if Python needs more than raw `call()`.
 - [ ] Docs: the model header comment, `AGENTS.md` repo map or notes if conventions change, and this guide if you introduced a new pattern.
 - [ ] The full suite passes natively and in Docker.

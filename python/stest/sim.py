@@ -72,6 +72,7 @@ class Sim:
         self._started = False
         self._closed = False
         self._dead: StestError | None = None
+        self._merging: list = []  # this quantum's event merge keys not yet in event_log
 
     @property
     def quantum_us(self) -> int:
@@ -118,7 +119,11 @@ class Sim:
             except proto.ProtocolError as e:
                 self._node_gone(n, f"protocol error: {e}")
             if version != proto.PROTO_VERSION:
-                self._node_gone(n, f"protocol version {version}, expected {proto.PROTO_VERSION}")
+                self._node_gone(
+                    n,
+                    f"node speaks control protocol version {version}, but this stest Python expects "
+                    f"version {proto.PROTO_VERSION} (rebuild the firmware with the matching stest runtime)",
+                )
             n.proto_version, n.anchor_addr = version, anchor
             n._load_symbols()
 
@@ -161,11 +166,16 @@ class Sim:
         return (self._now // self.quantum_ns + 1) * self.quantum_ns
 
     def _step(self, t: int) -> None:
-        msg = proto.run_until(t)
+        plain = None  # shared RUN_UNTIL for nodes with an empty inbox
         for n in self.nodes:
+            if n._inbox:
+                msg = proto.run_until(t, n._inbox)
+                n._inbox = []
+            else:
+                msg = plain = plain or proto.run_until(t)
             n._send(msg)
         deadline = time.monotonic() + self.wall_timeout_s
-        merged = []
+        merged = self._merging = []
         for n in self.nodes:
             mtype, payload = n._recv(f"RUN_UNTIL t={fmt_ms(t)}", deadline)
             if mtype != proto.Msg.STOPPED:
@@ -176,9 +186,15 @@ class Sim:
                 self._node_gone(n, f"protocol error: {e}")
             n.now_ns = node_t
             merged.extend(n._record_events(events))
+        self._flush_events()
+        self._now = t
+
+    def _flush_events(self, extra: list | None = None) -> None:
+        """Merge this quantum's recorded events (plus ``extra``: a crashing node's ERROR
+        events) into event_log by (t_ns, node index, per-node sequence)."""
+        merged, self._merging = self._merging + (extra or []), []
         merged.sort(key=lambda e: e[:3])
         self.event_log.extend((t_ns, name, js) for t_ns, _, _, name, js in merged)
-        self._now = t
 
     # ---- lifecycle / failure ----
     def _check_usable(self) -> None:

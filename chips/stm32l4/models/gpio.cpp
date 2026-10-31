@@ -88,12 +88,11 @@ uint16_t Gpio::levels() const {
   return l;
 }
 
-void Gpio::update() {
+void Gpio::update(uint64_t t) {
   uint16_t now = levels();
   uint16_t changed = now ^ last_levels_;
   last_levels_ = now;
   if (!changed) return;
-  const uint64_t t = clock_.now_ns();
   for (unsigned p = 0; p < 16; ++p)
     if (changed & (1u << p)) {
       const int level = (now >> p) & 1u;
@@ -232,6 +231,23 @@ nlohmann::json Gpio::call(std::string_view op, const nlohmann::json& args) {
   if (op == "release_voltage") {
     ext_volts_[pin_arg(args)] = std::nullopt;
     return nullptr;
+  }
+  throw UnknownOp(op);
+}
+
+void Gpio::deliver(std::string_view op, const nlohmann::json& args, uint64_t t_ns) {
+  if (op == "drive_pin") {
+    const unsigned p = pin_arg(args);
+    if (!args.contains("level") ||
+        !(args["level"].is_null() ||
+          (args["level"].is_number_integer() && (args["level"] == 0 || args["level"] == 1))))
+      throw std::invalid_argument("'level' must be 0, 1 or null (release)");
+    const int8_t level = args["level"].is_null() ? int8_t{-1} : static_cast<int8_t>(args["level"].get<int>());
+    clock_.schedule_at(t_ns, [this, p, level, t_ns] {
+      drive_[p] = level;
+      update(t_ns);
+    });
+    return;
   }
   throw UnknownOp(op);
 }

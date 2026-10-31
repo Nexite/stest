@@ -163,6 +163,6 @@ def test_unterminated_stdout_line_is_flushed_on_abort(itm_mixed_exe):
         with pytest.raises(NodeCrashed) as e:
             s.advance(ms=100)
         assert 'stdout unterminated {"text":"half"}' in str(e.value)
-        # events of the quantum that aborted are not delivered (ERROR replaces STOPPED);
-        # the unterminated tail still arrives through stderr
-        assert n.output[0] == "out 0" and n.output[-1] == "half"
+        # protocol v2: ERROR carries the aborting quantum's events ("itm 0", "pc A!") and the
+        # unterminated tail as a final partial event (once, although stderr reports it too)
+        assert n.output == ["out 0", "itm 0", "pc A!", "half"]

@@ -51,6 +51,15 @@ class Pin:
         """Stop driving the pin externally."""
         self.node.call(self.model, "release_pin", pin=self.index)
 
+    def drive_at(self, level: int | None, t_ns: int) -> None:
+        """Drive the pin to ``level`` (0/1) from outside at exactly virtual time ``t_ns``,
+        or release it (``None``), via :meth:`Node.post`: it takes effect during the next
+        quantum that reaches ``t_ns`` and the gpio event is stamped ``t_ns`` whatever the
+        quantum. ``t_ns`` must not be before the node's current time."""
+        if level not in (0, 1, None) or isinstance(level, bool):
+            raise ValueError(f"drive_at: level must be 0, 1 or None (got {level!r})")
+        self.node.post(self.model, "drive_pin", {"pin": self.index, "level": level}, t_ns)
+
     def set_voltage(self, volts: float) -> None:
         """Apply an analog voltage to the pin from outside (ADC input). It wins over an
         on-chip driver (DAC output) and does not change the digital level (IDR). Works
