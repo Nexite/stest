@@ -20,8 +20,9 @@ static void expect(int ok, const char *msg) {
 }
 
 static void expect_rec(int i, int op, uint64_t addr, int w, uint64_t v, int check_v) {
-  char m[64];
-  snprintf(m, sizeof m, "record %d", i);
+  char m[160];
+  snprintf(m, sizeof m, "record %d (nrecs=%d)", i, nrecs);
+  if (i < nrecs) snprintf(m + strlen(m), 60, " got op=%d addr=%llx w=%d", recs[i].op, (unsigned long long)recs[i].addr, recs[i].width);
   expect(i < nrecs && recs[i].op == op && recs[i].addr == addr && recs[i].width == w &&
              (!check_v || recs[i].value == v), m);
 }
@@ -65,6 +66,41 @@ int main(void) {
   scripted = 0x8000;
   uint32_t b16 = *(volatile uint16_t *)0x40003004u;
   expect(b16 == 0x8000, "u16 load 0x8000 not sign-extended");
+
+  /* Volatile aggregate copies/zeroing become __stest_mmio_memcpy/memset calls
+   * (the runtime splits them into aligned <=4-byte accesses). */
+  struct S { uint32_t a, b; };
+  volatile struct S *P = (volatile struct S *)0x40000000u;
+  nrecs = 0;
+  *P = (struct S){1, 2};
+  expect(nrecs >= 1, "volatile struct store reached the runtime");
+  if (nrecs == 1) { /* memcpy form */
+    expect_rec(0, OP_MEMCPY, 0x40000000u, 8, 0, 0);
+  } else { /* the frontend scalarised it: two ordered stores */
+    expect(nrecs == 2, "struct store: two records");
+    expect_rec(0, OP_STORE, 0x40000000u, 32, 1, 1);
+    expect_rec(1, OP_STORE, 0x40000004u, 32, 2, 1);
+  }
+
+  struct Z { uint8_t b[6]; };
+  volatile struct Z *Q = (volatile struct Z *)0x40000010u;
+  nrecs = 0;
+  *Q = (struct Z){{0}};
+  expect(nrecs == 1, "volatile zeroing: one runtime call");
+  /* clang may emit a volatile memset or a memcpy from a zero constant */
+  expect(nrecs == 1 && recs[0].addr == 0x40000010u && recs[0].width == 6 &&
+             (recs[0].op == OP_MEMSET || recs[0].op == OP_MEMCPY), "zeroing: 6 bytes at 0x40000010");
+
+  volatile struct Z *R = (volatile struct Z *)0x40000020u;
+  struct Z host = {{1, 2, 3, 4, 5, 6}};
+  nrecs = 0;
+  *R = host; /* volatile dst, plain src */
+  expect(nrecs == 1, "volatile copy out: one runtime call");
+  expect_rec(0, OP_MEMCPY, 0x40000020u, 6, 0, 1);
+  nrecs = 0;
+  host = *R; /* plain dst, volatile src */
+  expect(nrecs == 1, "volatile copy in: one runtime call");
+  expect_rec(0, OP_MEMCPY, (uint64_t)(uintptr_t)&host, 6, 0, 1);
 
   if (failures) return 1;
   puts("mmio_order OK");

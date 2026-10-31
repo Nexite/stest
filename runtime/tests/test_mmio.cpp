@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 #include <cstring>
+#include <vector>
 #include "stest/mmio.h"
 #include "stest/runtime.hpp"
 using namespace stest;
@@ -46,4 +47,82 @@ TEST_CASE("mmio: init, in-window dispatch, 64-bit split, cost, hook, direct host
   CHECK(stest_rt_now_ns() - t1 == 400);
   set_access_cost_ns(25);
   set_delivery_hook(nullptr);
+}
+
+namespace {
+struct Rec : Peripheral {
+  struct Op { bool wr; uint32_t off; unsigned w; uint32_t v; };
+  std::vector<Op> ops;
+  uint32_t mem[16] = {};
+  std::string_view name() const override { return "rec"; }
+  uint32_t read(uint32_t o, unsigned w) override {
+    ops.push_back({false, o, w, 0});
+    uint32_t v = 0;
+    memcpy(&v, (uint8_t*)mem + o, w);
+    return v;
+  }
+  void write(uint32_t o, unsigned w, uint32_t v) override {
+    ops.push_back({true, o, w, v});
+    memcpy((uint8_t*)mem + o, &v, w);
+  }
+};
+}  // namespace
+
+TEST_CASE("mmio: memset/memcpy split into aligned <=4-byte accesses through the bus") {
+  stest_rt_init();
+  static Rec r;
+  runtime_bus().map(0x40021000, 0x40, &r);
+  set_delivery_hook(nullptr);
+  uint64_t t0 = stest_rt_now_ns();
+
+  __stest_mmio_memset((void*)0x40021010, 0x1A5, 6);  // low byte used
+  REQUIRE(r.ops.size() == 2);
+  CHECK((r.ops[0].wr && r.ops[0].off == 0x10 && r.ops[0].w == 4 && r.ops[0].v == 0xA5A5A5A5));
+  CHECK((r.ops[1].wr && r.ops[1].off == 0x14 && r.ops[1].w == 2 && r.ops[1].v == 0xA5A5));
+  CHECK(stest_rt_now_ns() - t0 == 50);  // one charge per chunk
+
+  r.ops.clear();
+  __stest_mmio_memset((void*)0x40021021, 0, 5);  // misaligned start: 1, 2, 2
+  REQUIRE(r.ops.size() == 3);
+  CHECK((r.ops[0].off == 0x21 && r.ops[0].w == 1));
+  CHECK((r.ops[1].off == 0x22 && r.ops[1].w == 2));  // 0x22 aligned for 2, not 4
+  CHECK((r.ops[2].off == 0x24 && r.ops[2].w == 2));
+  __stest_mmio_memset((void*)0x40021000, 0, 0);  // n == 0: no access
+  CHECK(r.ops.size() == 3);
+
+  // host -> MMIO, both aligned
+  r.ops.clear();
+  alignas(4) uint8_t src[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+  __stest_mmio_memcpy((void*)0x40021030, src, 8);
+  REQUIRE(r.ops.size() == 2);
+  CHECK((r.ops[0].w == 4 && r.ops[0].v == 0x04030201));
+  CHECK((r.ops[1].w == 4 && r.ops[1].off == 0x34 && r.ops[1].v == 0x08070605));
+
+  // src/dst misaligned relative to each other: byte-wise
+  r.ops.clear();
+  __stest_mmio_memcpy((void*)0x40021000, src + 1, 3);
+  REQUIRE(r.ops.size() == 3);
+  for (auto& o : r.ops) CHECK(o.w == 1);
+  CHECK(r.mem[0] == 0x00040302);
+
+  // MMIO -> host
+  r.ops.clear();
+  alignas(4) uint8_t out[4] = {};
+  __stest_mmio_memcpy(out, (void*)0x40021030, 4);
+  REQUIRE(r.ops.size() == 1);
+  CHECK((!r.ops[0].wr && r.ops[0].w == 4));
+  CHECK(memcmp(out, src, 4) == 0);
+
+  // overlapping (host) copies behave like memmove, both directions, runtime length
+  alignas(4) uint8_t buf[16];
+  for (int i = 0; i < 16; ++i) buf[i] = (uint8_t)i;
+  volatile size_t n = 10;
+  __stest_mmio_memcpy(buf + 2, buf, n);
+  for (int i = 0; i < 10; ++i) CHECK(buf[2 + i] == i);
+  for (int i = 0; i < 16; ++i) buf[i] = (uint8_t)i;
+  __stest_mmio_memcpy(buf, buf + 2, n);
+  for (int i = 0; i < 10; ++i) CHECK(buf[i] == i + 2);
+  for (int i = 0; i < 16; ++i) buf[i] = (uint8_t)i;
+  __stest_mmio_memcpy(buf + 4, buf, 11);  // aligned both sides, overlapping
+  for (int i = 0; i < 11; ++i) CHECK(buf[4 + i] == i);
 }

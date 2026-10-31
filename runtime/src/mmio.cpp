@@ -170,6 +170,13 @@ inline void do_store(volatile void* p, unsigned bytes, uint64_t v) {
   }
   deliver();
 }
+
+// Widest of 4/2/1 bytes that fits in `left` and is naturally aligned at `a` (and `b`).
+inline unsigned chunk_width(uint64_t a, uint64_t b, size_t left) {
+  for (unsigned w = 4; w > 1; w >>= 1)
+    if (left >= w && ((a | b) & (w - 1)) == 0) return w;
+  return 1;
+}
 }  // namespace
 
 namespace stest {
@@ -248,5 +255,35 @@ void __stest_mmio_store8(volatile void* a, uint8_t v) { do_store(a, 1, v); }
 void __stest_mmio_store16(volatile void* a, uint16_t v) { do_store(a, 2, v); }
 void __stest_mmio_store32(volatile void* a, uint32_t v) { do_store(a, 4, v); }
 void __stest_mmio_store64(volatile void* a, uint64_t v) { do_store(a, 8, v); }
+
+void __stest_mmio_memcpy(volatile void* dst, const volatile void* src, size_t n) {
+  uint64_t d = (uint64_t)(uintptr_t)dst, s = (uint64_t)(uintptr_t)src;
+  if (d == s) return;
+  if (d > s && d - s < n) {  // dst overlaps the tail of src: copy backwards
+    for (size_t e = n; e > 0;) {
+      unsigned w = 1;
+      for (unsigned c = 4; c > 1; c >>= 1)
+        if (e >= c && (((d + e - c) | (s + e - c)) & (c - 1)) == 0) { w = c; break; }
+      e -= w;
+      do_store((volatile char*)dst + e, w, do_load((const volatile char*)src + e, w));
+    }
+    return;
+  }
+  for (size_t o = 0; o < n;) {
+    unsigned w = chunk_width(d + o, s + o, n - o);
+    do_store((volatile char*)dst + o, w, do_load((const volatile char*)src + o, w));
+    o += w;
+  }
+}
+
+void __stest_mmio_memset(volatile void* dst, int c, size_t n) {
+  uint64_t d = (uint64_t)(uintptr_t)dst;
+  uint32_t b = (uint8_t)c;
+  for (size_t o = 0; o < n;) {
+    unsigned w = chunk_width(d + o, 0, n - o);
+    do_store((volatile char*)dst + o, w, b * (w == 4 ? 0x01010101u : w == 2 ? 0x0101u : 1u));
+    o += w;
+  }
+}
 
 }  // extern "C"

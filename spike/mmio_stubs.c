@@ -1,6 +1,7 @@
 /* Recording stubs for the __stest_mmio_* ABI. Deliberately a separate translation
  * unit from the test so calls cannot be inlined: the real call ABI (e.g. zeroext
  * on i8/i16 arguments and returns) is exercised. */
+#include <stddef.h>
 #include "mmio_stubs.h"
 
 rec_t recs[64];
@@ -20,3 +21,5 @@ void __stest_mmio_store16(volatile void *a, uint16_t v) { rec(OP_STORE, a, 16, v
 void __stest_mmio_store32(volatile void *a, uint32_t v) { rec(OP_STORE, a, 32, v); }
 void __stest_mmio_store64(volatile void *a, uint64_t v) { rec(OP_STORE, a, 64, v); }
 
+void __stest_mmio_memcpy(volatile void *d, const volatile void *s, size_t n) { (void)s; rec(OP_MEMCPY, d, (int)n, 0); }
+void __stest_mmio_memset(volatile void *d, int c, size_t n) { rec(OP_MEMSET, d, (int)n, (uint64_t)(uint8_t)c); }

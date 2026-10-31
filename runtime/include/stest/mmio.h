@@ -2,6 +2,7 @@
  * into these calls (i8/i16 args and returns are zeroext). */
 #ifndef STEST_MMIO_H
 #define STEST_MMIO_H
+#include <stddef.h>
 #include <stdint.h>
 #ifdef __cplusplus
 extern "C" {
@@ -15,6 +16,13 @@ void __stest_mmio_store8(volatile void *addr, uint8_t v);
 void __stest_mmio_store16(volatile void *addr, uint16_t v);
 void __stest_mmio_store32(volatile void *addr, uint32_t v);
 void __stest_mmio_store64(volatile void *addr, uint64_t v);
+
+/* Volatile memcpy/memmove/memset (the pass rewrites llvm.mem* with isvolatile).
+ * Either memcpy side may be MMIO; overlap is handled like memmove. Each is split into
+ * the widest naturally aligned accesses <= 4 bytes (aligned on both sides for memcpy,
+ * else byte-wise), each going through the normal load/store path. */
+void __stest_mmio_memcpy(volatile void *dst, const volatile void *src, size_t n);
+void __stest_mmio_memset(volatile void *dst, int c, size_t n);
 
 /* Prints "stest: " + formatted message to stderr, calls the abort hook if set
  * (stest::set_abort_hook; control mode sends ERROR), and exits with status 70. */
