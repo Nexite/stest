@@ -293,15 +293,18 @@ TEST_CASE("spi IRQ levels: TXEIE, RXNEIE") {
   CHECK_FALSE(r.core.pending(IRQ_SPI1));
   r.wr(SPI1 + CR2, DS8 | FRXTH | TXEIE);  // TXE is set: the line goes high at once
   CHECK(r.core.pending(IRQ_SPI1));
+  r.core.clear_pending(IRQ_SPI1);  // the line is still high: re-pends (ARMv7-M)
+  CHECK(r.core.pending(IRQ_SPI1));
+  r.wr(SPI1 + CR2, DS8 | FRXTH | RXNEIE);  // TXEIE off: the line drops
   r.core.clear_pending(IRQ_SPI1);
-  r.wr(SPI1 + CR2, DS8 | FRXTH | RXNEIE);
   CHECK_FALSE(r.core.pending(IRQ_SPI1));
   r.wr(SPI1 + DR, 1, 1);
   CHECK_FALSE(r.core.pending(IRQ_SPI1));
   r.fire_next();
   CHECK(r.core.pending(IRQ_SPI1));
+  (void)r.rd(SPI1 + DR, 1);  // RXNE falls
   r.core.clear_pending(IRQ_SPI1);
-  (void)r.rd(SPI1 + DR, 1);  // RXNE falls; nothing re-pends
+  CHECK_FALSE(r.core.pending(IRQ_SPI1));
   r.wr(SPI1 + DR, 1, 1);
   r.fire_next();
   CHECK(r.core.pending(IRQ_SPI1));

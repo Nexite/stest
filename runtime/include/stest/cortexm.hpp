@@ -75,6 +75,8 @@ class Cortexm {
   // low does not clear an already latched pending bit (NVIC latches the rising edge).
   // Use set_pending for pulse-style sources. Level state is separate from the pending bit.
   void set_irq_level(int irqn, bool high);
+  // Clears the pending bit (like NVIC ICPR). If the line's level input is still high it
+  // re-pends immediately (ARMv7-M level-sensitive behaviour), so the IRQ is not lost.
   void clear_pending(int irqn);
   bool pending(int irqn) const;
   bool active(int irqn) const;

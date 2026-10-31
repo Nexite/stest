@@ -466,13 +466,13 @@ TEST_CASE("tim: TIM1 update and TIM16 share TIM1_UP_TIM16 (level = OR of both)")
   r.wr(TIM1, EGR, 1);   // URS = 0 now: UG sets UIF
   r.wr(TIM16, EGR, 1);
   CHECK(r.core.pending(IRQ_TIM1_UP_TIM16));
+  r.wr(TIM1, SR, 0);    // TIM16 still holds the line high
   r.core.clear_pending(IRQ_TIM1_UP_TIM16);
-  r.wr(TIM1, SR, 0);    // TIM16 still holds the line high: no new edge, nothing pending
+  CHECK(r.core.pending(IRQ_TIM1_UP_TIM16));  // still asserted: re-pends (ARMv7-M)
+  r.wr(TIM16, SR, 0);   // both low; the latched pending bit stays until cleared
+  CHECK(r.core.pending(IRQ_TIM1_UP_TIM16));
+  r.core.clear_pending(IRQ_TIM1_UP_TIM16);
   CHECK_FALSE(r.core.pending(IRQ_TIM1_UP_TIM16));
-  r.wr(TIM1, EGR, 1);   // TIM1 re-asserts while the shared line is still high: no new pend
-  CHECK_FALSE(r.core.pending(IRQ_TIM1_UP_TIM16));
-  r.wr(TIM1, SR, 0);
-  r.wr(TIM16, SR, 0);   // both low
   r.wr(TIM16, EGR, 1);  // rising edge again
   CHECK(r.core.pending(IRQ_TIM1_UP_TIM16));
   // TIM1 CC goes to its own vector

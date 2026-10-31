@@ -576,3 +576,107 @@ TEST_CASE("cortexm: set_irq_level high while masked pends; dropping it keeps the
   r.core->deliver();
   CHECK(r.count_irq(7) == 1);
 }
+
+// ---- clearing the pending bit of a still-asserted level (ARMv7-M re-pends) ----
+
+namespace {
+void drop9_h() {  // IRQ 9: counts and drops its level (the ISR clears the cause)
+  ++g_count[9 + 16];
+  g_core->set_irq_level(9, false);
+}
+}  // namespace
+
+TEST_CASE("cortexm: ICPR on a still-high level re-pends; the handler runs after enable") {
+  Rig r;
+  r.table[9 + 16] = &drop9_h;
+  r.core->set_irq_level(9, true);
+  CHECK(r.core->pending(9));
+  r.w32(ICPR, 1u << 9);
+  CHECK(r.core->pending(9));  // the line is still asserted
+  CHECK((r.r32(ISPR) >> 9 & 1u) == 1u);
+  r.core->clear_pending(9);
+  CHECK(r.core->pending(9));
+  r.enable(9);
+  r.core->deliver();
+  CHECK(r.count_irq(9) == 1);
+  // Once the level drops, ICPR clears for good.
+  r.core->set_irq_level(9, false);
+  r.core->set_pending(9);
+  r.w32(ICER, 1u << 9);
+  r.w32(ICPR, 1u << 9);
+  CHECK_FALSE(r.core->pending(9));
+  r.core->set_pending(9);
+  r.core->clear_pending(9);
+  CHECK_FALSE(r.core->pending(9));
+}
+
+TEST_CASE("cortexm: level high under PRIMASK is delivered on PRIMASK clear and re-enters while high") {
+  Rig r;
+  r.table[6 + 16] = &level_h;
+  r.enable(6);
+  g_level_entries = 0;
+  g_level_clear_after = 2;
+  r.core->set_primask(true);
+  r.core->set_irq_level(6, true);
+  r.w32(ICPR, 1u << 6);  // firmware clears the pending bit while masked: re-pends
+  r.core->deliver();
+  CHECK(g_level_entries == 0);
+  r.core->set_primask(false);
+  CHECK(g_level_entries == 2);  // entered, still high -> re-entered, then cleared
+  CHECK_FALSE(r.core->pending(6));
+  r.core->deliver();
+  CHECK(g_level_entries == 2);
+}
+
+TEST_CASE("cortexm: level high under BASEPRI is delivered when BASEPRI is lowered") {
+  Rig r;
+  r.table[6 + 16] = &level_h;
+  r.enable(6);
+  r.prio(6, 0x80);
+  g_level_entries = 0;
+  g_level_clear_after = 2;
+  r.core->set_basepri(0x40);
+  r.core->set_irq_level(6, true);
+  r.core->clear_pending(6);
+  r.core->deliver();
+  CHECK(g_level_entries == 0);
+  CHECK(r.core->pending(6));
+  r.core->set_basepri(0);
+  CHECK(g_level_entries == 2);
+  CHECK_FALSE(r.core->pending(6));
+}
+
+namespace {
+int g_outer_entries = 0, g_inner_seen_in_outer = 0;
+void outer_h() {  // IRQ 10: re-asserts IRQ 11's level and clears its pending bit while running
+  ++g_outer_entries;
+  g_core->set_irq_level(11, true);
+  g_core->clear_pending(11);
+  g_core->deliver();  // delivery point inside the handler
+  g_inner_seen_in_outer = g_count[11 + 16];
+}
+void inner_h() {  // IRQ 11
+  ++g_count[11 + 16];
+  g_core->set_irq_level(11, false);
+}
+}  // namespace
+
+TEST_CASE("cortexm: a level re-pend does not preempt a running handler of equal or higher priority") {
+  for (uint8_t inner_prio : {uint8_t(0x40), uint8_t(0x80)}) {  // equal, then lower priority
+    Rig r;
+    r.table[10 + 16] = &outer_h;
+    r.table[11 + 16] = &inner_h;
+    r.enable(10);
+    r.enable(11);
+    r.prio(10, 0x40);
+    r.prio(11, inner_prio);
+    g_outer_entries = 0;
+    g_inner_seen_in_outer = -1;
+    r.core->set_pending(10);
+    r.core->deliver();
+    CHECK(g_outer_entries == 1);
+    CHECK(g_inner_seen_in_outer == 0);  // did not preempt
+    CHECK(r.count_irq(11) == 1);        // tail-chained after the outer handler
+    CHECK_FALSE(r.core->pending(11));
+  }
+}

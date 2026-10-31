@@ -88,7 +88,7 @@ struct Cortexm::Impl {
       if (off < 0x020) each(w, v, [&](int e) { c.en[e] = 1; });
       else if (off >= 0x080 && off < 0x0A0) each(w, v, [&](int e) { c.en[e] = 0; });
       else if (off >= 0x100 && off < 0x120) each(w, v, [&](int e) { c.set_pend(e, true); });
-      else if (off >= 0x180 && off < 0x1A0) each(w, v, [&](int e) { c.set_pend(e, false); });
+      else if (off >= 0x180 && off < 0x1A0) each(w, v, [&](int e) { c.clear_pend(e); });
       else if (off >= 0x200 && off < 0x220) {}  // IABR is read-only
       else if (off >= 0x300 && off < 0x3F0) {
         for (uint32_t b = 0; b < 4; ++b) {
@@ -279,6 +279,13 @@ struct Cortexm::Impl {
     if (pend[exc] == on) return;
     pend[exc] = on;
     if (on) ++n_pend; else --n_pend;
+  }
+  // Software clear (NVIC ICPR, Cortexm::clear_pending). On ARMv7-M a level-sensitive
+  // input that is still asserted re-pends immediately, so clearing only sticks once the
+  // line is low.
+  void clear_pend(int exc) {
+    set_pend(exc, false);
+    if (lvl[exc]) set_pend(exc, true);
   }
   int group(uint32_t p) const { return int(p & ~((2u << prigroup) - 1u) & 0xFFu); }
   int exec_priority(bool with_primask) const {
@@ -471,7 +478,7 @@ void Cortexm::set_irq_level(int irqn, bool high) {
   impl_->lvl[e] = high;
   if (rose) impl_->set_pend(e, true);
 }
-void Cortexm::clear_pending(int irqn) { impl_->set_pend(impl_->exc_of(irqn), false); }
+void Cortexm::clear_pending(int irqn) { impl_->clear_pend(impl_->exc_of(irqn)); }
 bool Cortexm::pending(int irqn) const { return impl_->pend[impl_->exc_of(irqn)] != 0; }
 bool Cortexm::active(int irqn) const { return impl_->act[impl_->exc_of(irqn)] != 0; }
 bool Cortexm::enabled(int irqn) const { return impl_->exc_enabled(impl_->exc_of(irqn)); }

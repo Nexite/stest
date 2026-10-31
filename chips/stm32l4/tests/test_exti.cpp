@@ -69,9 +69,9 @@ TEST_CASE("exti_rising_edge_sets_pr_and_irq") {
   CHECK((r.bus.read(EXTI + PR1, 4) & (1u << 13)) != 0);
   CHECK(r.core.pending(40));
   // falling edge: FTSR not set -> no new PR
-  r.core.clear_pending(40);
-  r.bus.write(EXTI + PR1, 4, 1u << 13);  // rc_w1
+  r.bus.write(EXTI + PR1, 4, 1u << 13);  // rc_w1: the line drops
   CHECK((r.bus.read(EXTI + PR1, 4) & (1u << 13)) == 0);
+  r.core.clear_pending(40);
   r.c.call("drive_pin", {{"pin", 13}, {"level", 0}});
   CHECK((r.bus.read(EXTI + PR1, 4) & (1u << 13)) == 0);
   CHECK_FALSE(r.core.pending(40));
@@ -136,10 +136,12 @@ TEST_CASE("exti_pending_until_unmasked") {
   CHECK_FALSE(r.core.pending(40));
   r.bus.write(EXTI + IMR1, 4, r.bus.read(EXTI + IMR1, 4) | (1u << 13));  // unmask: IRQ fires once
   CHECK(r.core.pending(40));
+  r.core.clear_pending(40);  // PR & IMR still high: re-pends (ARMv7-M level semantics)
+  CHECK(r.core.pending(40));
+  r.bus.write(EXTI + PR1, 4, 1u << 13);  // the line drops
   r.core.clear_pending(40);
   r.bus.write(EXTI + IMR1, 4, r.bus.read(EXTI + IMR1, 4));  // rewriting IMR does not re-fire
   CHECK_FALSE(r.core.pending(40));
-  r.bus.write(EXTI + PR1, 4, 1u << 13);
   r.c.call("drive_pin", {{"pin", 13}, {"level", 0}});
   r.c.call("drive_pin", {{"pin", 13}, {"level", 1}});  // after clearing PR a new edge fires again
   CHECK(r.core.pending(40));
@@ -219,10 +221,11 @@ TEST_CASE("exti: lines sharing an IRQ keep it high until every PR is cleared") {
   r.bus.write(EXTI + IMR1, 4, r.bus.read(EXTI + IMR1, 4) | (3u << 10));
   r.bus.write(EXTI + SWIER1, 4, 3u << 10);
   CHECK(r.core.pending(40));
+  r.bus.write(EXTI + PR1, 4, 1u << 10);  // line 11 still set: level stays high
   r.core.clear_pending(40);
-  r.bus.write(EXTI + PR1, 4, 1u << 10);  // line 11 still set: level stays high, nothing new pends
-  CHECK_FALSE(r.core.pending(40));
+  CHECK(r.core.pending(40));  // still asserted: re-pends
   r.bus.write(EXTI + PR1, 4, 1u << 11);
+  r.core.clear_pending(40);
   CHECK_FALSE(r.core.pending(40));
 }
 

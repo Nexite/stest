@@ -183,17 +183,21 @@ TEST_CASE("model context: set_irq_source ORs the sources sharing an IRQ line") {
   int a = 0, b = 0;
   ctx.set_irq_source(2, &a, true);  // low -> high: pends
   CHECK(core.pending(2));
-  core.clear_pending(2);
-  ctx.set_irq_source(2, &b, true);  // already high (a): no new edge
-  CHECK_FALSE(core.pending(2));
+  core.clear_pending(2);  // line still high: re-pends (ARMv7-M level semantics)
+  CHECK(core.pending(2));
+  ctx.set_irq_source(2, &b, true);   // already high (a)
   ctx.set_irq_source(2, &a, false);  // b keeps it high
-  ctx.set_irq_source(2, &a, true);
+  core.clear_pending(2);
+  CHECK(core.pending(2));
+  ctx.set_irq_source(2, &b, false);  // both low; the latched pending bit stays
+  CHECK(core.pending(2));
+  core.clear_pending(2);
   CHECK_FALSE(core.pending(2));
-  ctx.set_irq_source(2, &a, false);
-  ctx.set_irq_source(2, &b, false);  // both low
   ctx.set_irq_source(2, &b, false);  // idempotent
+  CHECK_FALSE(core.pending(2));
   ctx.set_irq_source(2, &a, true);   // new rising edge
   CHECK(core.pending(2));
+  ctx.set_irq_source(2, &a, false);
   core.clear_pending(2);
   ctx.set_irq_source(3, &a, true);   // independent line
   CHECK(core.pending(3));
