@@ -103,6 +103,16 @@ int run_standalone(int argc, char** argv) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  // STEST_POLL_SKIP: poll fast-forward threshold (0 disables; default 64), both modes.
+  if (const char* ps = std::getenv("STEST_POLL_SKIP")) {
+    uint64_t v = 0;
+    if (!parse_u64(ps, v) || v > UINT32_MAX) {
+      std::fprintf(stderr, "stest: bad STEST_POLL_SKIP '%s' (expected an integer >= 0)\n", ps);
+      std::fflush(stderr);
+      _exit(2);
+    }
+    stest::set_poll_skip_threshold(static_cast<uint32_t>(v));
+  }
   if (const char* ctrl = std::getenv("STEST_CTRL")) {
     uint64_t fd = 0;
     if (!parse_u64(ctrl, fd) || fd > 1'000'000) {

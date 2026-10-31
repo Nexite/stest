@@ -58,6 +58,8 @@ def test_blinky_toggles_pa5(sim):
 
 Options: `--stest-quantum-us` (lockstep quantum, default 1000) and `--stest-wall-timeout` (wall-clock seconds for any blocking wait, default 30). Override per test with `@pytest.mark.stest(quantum_us=100, wall_timeout_s=5)`. When a test fails, the report includes each node's last 200 stderr lines and the merged event log.
 
+Poll fast-forward: after 64 store-free loads that re-read already-seen (address, width, value) tuples, a node jumps its clock to the next scheduled event or the quantum end. For loops that poll a hardware value this is exact. A loop that counts iterations in a non-volatile local while reading constant volatile values (`while (--n && !(REG & FLAG));`, flag never set) is time-dilated by it (potentially hundreds of times longer than on hardware, and quantum-dependent when no event is pending). Control the threshold with `Sim(..., poll_skip=N)`, `--stest-poll-skip N`, `@pytest.mark.stest(poll_skip=N)`, or the node env var `STEST_POLL_SKIP=N`; `0` disables it, the default is 64.
+
 ## Design
 
 See the [design spec](docs/superpowers/specs/2026-10-30-stest-sil-design.md).

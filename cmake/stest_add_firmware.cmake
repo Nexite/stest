@@ -35,6 +35,37 @@ function(stest_add_firmware name)
     message(FATAL_ERROR "stest_add_firmware(${name}): CHIP and SOURCES are required")
   endif()
 
+  # ---- toolchain / include sanity ----
+  # Firmware + HAL must be compiled by the clang the MMIO pass was built against
+  # (CMake has no per-target compiler, so this is enforced rather than overridden).
+  get_filename_component(_fw_cc "${CMAKE_C_COMPILER}" REALPATH)
+  get_filename_component(_fw_clang "${STEST_CLANG}" REALPATH)
+  if(NOT _fw_cc STREQUAL _fw_clang)
+    message(FATAL_ERROR "stest_add_firmware(${name}): the C compiler is ${CMAKE_C_COMPILER} but firmware "
+            "must be built with ${STEST_CLANG} (STEST_CLANG). Configure with "
+            "-DCMAKE_C_COMPILER=${STEST_CLANG} (or leave CMAKE_C_COMPILER unset).")
+  endif()
+  execute_process(COMMAND "${STEST_CLANG}" --version OUTPUT_VARIABLE _fw_cv ERROR_QUIET)
+  get_property(_fw_llvm_ver GLOBAL PROPERTY STEST_LLVM_VERSION)
+  if(NOT _fw_llvm_ver)
+    message(FATAL_ERROR "stest_add_firmware(${name}): add_subdirectory(compiler/mmio_pass) must come first")
+  endif()
+  string(REGEX MATCH "clang version ([0-9]+)" _ "${_fw_cv}")
+  set(_fw_clang_major "${CMAKE_MATCH_1}")
+  string(REGEX MATCH "^[0-9]+" _fw_llvm_major "${_fw_llvm_ver}")
+  if(NOT _fw_clang_major STREQUAL _fw_llvm_major)
+    message(FATAL_ERROR "stest_add_firmware(${name}): clang major version ${_fw_clang_major} (${STEST_CLANG}) "
+            "differs from LLVM ${_fw_llvm_major} the MMIO pass was built against; use a matching clang.")
+  endif()
+  foreach(_d IN LISTS FW_INCLUDE_DIRS)
+    file(GLOB _bad "${_d}/core_cm*.h" "${_d}/cmsis_gcc.h" "${_d}/cmsis_compiler.h")
+    if(_bad)
+      message(FATAL_ERROR "stest_add_firmware(${name}): INCLUDE_DIRS entry ${_d} contains CMSIS-Core headers "
+              "(${_bad}). Drop your Drivers/CMSIS/Include from INCLUDE_DIRS: stest provides CMSIS-Core "
+              "and its host shim (chips/cmsis_host).")
+    endif()
+  endforeach()
+
   # ---- chip part ----
   string(TOLOWER "${FW_CHIP}" part)
   file(GLOB toml "${_STEST_ROOT}/chips/*/parts/${part}.toml")

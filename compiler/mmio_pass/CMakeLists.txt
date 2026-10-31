@@ -2,6 +2,7 @@ find_package(LLVM REQUIRED CONFIG)
 if(LLVM_PACKAGE_VERSION VERSION_LESS 18)
   message(FATAL_ERROR "stest requires LLVM >= 18, found ${LLVM_PACKAGE_VERSION}")
 endif()
+set_property(GLOBAL PROPERTY STEST_LLVM_VERSION "${LLVM_PACKAGE_VERSION}")
 message(STATUS "stest: LLVM ${LLVM_PACKAGE_VERSION} (${LLVM_DIR}), clang ${STEST_CLANG}")
 
 add_library(stest_mmio_pass MODULE StestMmioPass.cpp)

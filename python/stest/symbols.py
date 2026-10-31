@@ -332,7 +332,6 @@ class SymbolTable:
                 if not elf.has_dwarf_info():
                     raise SymbolError(f"{exe}: no DWARF debug info (build with -g)")
                 dwarf = elf.get_dwarf_info()
-                dwarf.get_addr  # noqa: B018 (API presence check)
                 anchor = None
                 symtab = elf.get_section_by_name(".symtab")
                 if symtab is not None:

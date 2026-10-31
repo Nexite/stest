@@ -42,8 +42,12 @@ void set_abort_hook(AbortHook h);  // null by default
 // and then behaves as a charge reaching that time would (due events fire, quantum hook
 // at the quantum end, delivery point); the streak restarts. Spinning would only have
 // re-read the same values until then, so the observable state is the same, with times
-// shifted by less than one access cost. Firmware that counts iterations of a loop
-// whose loads all return constant values (no store) is compressed too.
+// shifted by less than one access cost. For a loop that polls a value this is exact.
+// A loop that counts iterations in a NON-volatile local while re-reading constant
+// volatile values (e.g. `while (--n && !(REG & FLAG));` with FLAG never set) jumps once
+// per `threshold` iterations, so its virtual time is DILATED (can be hundreds of times
+// longer than on hardware) and, when no clock event is pending, depends on the quantum
+// size. Disable with threshold 0 (node env STEST_POLL_SKIP=0).
 // Model contract: see Peripheral (peripheral.hpp).
 void set_poll_skip_threshold(uint32_t loads);  // default 64; 0 disables
 uint32_t poll_skip_threshold();

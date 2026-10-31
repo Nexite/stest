@@ -6,7 +6,8 @@ Registered through the ``pytest11`` entry point (installed with the package).
   test raised or timed out).
 * options ``--stest-quantum-us`` (default 1000) and ``--stest-wall-timeout`` (seconds,
   default 30).
-* marker ``@pytest.mark.stest(quantum_us=..., wall_timeout_s=...)`` overrides them per test.
+* option ``--stest-poll-skip`` (poll fast-forward threshold; 0 disables; default: runtime's 64).
+* marker ``@pytest.mark.stest(quantum_us=..., wall_timeout_s=..., poll_skip=...)`` overrides them per test.
 * on failure each node's last 200 stderr lines and the merged event log are attached to the
   report as ``stest node <name> stderr`` and ``stest events`` sections.
 """
@@ -27,13 +28,16 @@ def pytest_addoption(parser: pytest.Parser) -> None:
                 help="wall-clock limit for every blocking wait on a node (default: 30)")
     g.addoption("--stest-quantum-us", type=int, default=1000, metavar="US",
                 help="lockstep quantum in virtual microseconds (default: 1000)")
+    g.addoption("--stest-poll-skip", type=int, default=None, metavar="N",
+                help="poll fast-forward threshold in store-free loads; 0 disables "
+                     "(default: the runtime's, 64)")
 
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
-        "stest(quantum_us=..., wall_timeout_s=...): override the simulation quantum / wall-clock "
-        "timeout of the `sim` fixture for this test",
+        "stest(quantum_us=..., wall_timeout_s=..., poll_skip=...): override the simulation quantum, "
+        "wall-clock timeout and poll fast-forward threshold of the `sim` fixture for this test",
     )
 
 
@@ -42,16 +46,18 @@ def sim(request: pytest.FixtureRequest):
     cfg = request.config
     quantum_us = cfg.getoption("--stest-quantum-us")
     wall_timeout_s = cfg.getoption("--stest-wall-timeout")
+    poll_skip = cfg.getoption("--stest-poll-skip")
     marker = request.node.get_closest_marker("stest")
     if marker is not None:
-        unknown = set(marker.kwargs) - {"quantum_us", "wall_timeout_s"}
+        unknown = set(marker.kwargs) - {"quantum_us", "wall_timeout_s", "poll_skip"}
         if unknown or marker.args:
             raise pytest.UsageError(
-                f"@pytest.mark.stest accepts only quantum_us= and wall_timeout_s= (got {marker.args} {sorted(unknown)})"
+                f"@pytest.mark.stest accepts only quantum_us=, wall_timeout_s= and poll_skip= (got {marker.args} {sorted(unknown)})"
             )
         quantum_us = marker.kwargs.get("quantum_us", quantum_us)
         wall_timeout_s = marker.kwargs.get("wall_timeout_s", wall_timeout_s)
-    s = Sim(quantum_us=quantum_us, wall_timeout_s=wall_timeout_s)
+        poll_skip = marker.kwargs.get("poll_skip", poll_skip)
+    s = Sim(quantum_us=quantum_us, wall_timeout_s=wall_timeout_s, poll_skip=poll_skip)
     request.node.stash[_SIM_KEY] = s
     try:
         yield s

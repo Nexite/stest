@@ -86,3 +86,7 @@ add_test(NAME runtime_node COMMAND runtime_node_tests)
 add_executable(runtime_poll_skip_tests tests/main.cpp tests/test_poll_skip.cpp)
 target_link_libraries(runtime_poll_skip_tests PRIVATE stest_runtime doctest::doctest)
 add_test(NAME runtime_poll_skip COMMAND runtime_poll_skip_tests)
+
+# Every CTest that runs a firmware/node executable gets a 30 s timeout.
+get_property(_stest_rt_tests DIRECTORY PROPERTY TESTS)
+set_tests_properties(${_stest_rt_tests} PROPERTIES TIMEOUT 30)

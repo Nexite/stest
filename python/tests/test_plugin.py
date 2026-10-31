@@ -102,6 +102,32 @@ def test_options_and_marker_override(pytester):
     r.assert_outcomes(passed=2)
 
 
+def test_poll_skip_option_and_marker(pytester):
+    pytester.makepyfile(
+        test_default="""
+        def test_default(sim):
+            assert sim.poll_skip is None
+        """,
+        test_cli="""
+        import pytest
+
+        def test_cli(sim):
+            assert sim.poll_skip == 3
+
+        @pytest.mark.stest(poll_skip=0)
+        def test_zero(sim):
+            assert sim.poll_skip == 0
+
+        @pytest.mark.stest(quantum_us=50)
+        def test_other_marker_keeps_cli(sim):
+            assert sim.poll_skip == 3
+        """,
+    )
+    pytester.runpytest("test_default.py", "--strict-markers").assert_outcomes(passed=1)
+    r = pytester.runpytest("test_cli.py", "--stest-poll-skip=3", "--strict-markers")
+    r.assert_outcomes(passed=3)
+
+
 def test_teardown_leaves_no_children_when_test_raises(pytester, blinky_exe):
     pidfile = pytester.path / "pid"
     pytester.makepyfile(
