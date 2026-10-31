@@ -13,7 +13,7 @@ from enum import IntEnum
 from typing import Any
 
 PROTO_VERSION = 1
-MAX_PAYLOAD = 64 * 1024 * 1024
+MAX_PAYLOAD = 64 * 1024 * 1024  # STEST_MAX_PAYLOAD: largest frame payload either side accepts
 
 _HDR = struct.Struct("<IB")
 _U64 = struct.Struct("<Q")
@@ -22,6 +22,9 @@ _STOPPED_HDR = struct.Struct("<QI")
 _EVENT_HDR = struct.Struct("<QH")
 _MEM_REQ = struct.Struct("<QI")
 _U16 = struct.Struct("<H")
+
+MAX_READ_MEM = MAX_PAYLOAD  # the MEM reply carries exactly the bytes read
+MAX_WRITE_MEM = MAX_PAYLOAD - _MEM_REQ.size  # WRITE_MEM payload = addr, len, data
 
 
 class Msg(IntEnum):

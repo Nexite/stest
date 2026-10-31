@@ -102,9 +102,18 @@ class Node:
 
     def read_mem(self, addr: int, n: int) -> bytes:
         """Read n bytes of the node's host memory at addr (no MMIO side effects)."""
+        if n > proto.MAX_READ_MEM:
+            raise StestError(
+                f"node {self.name!r}: read_mem of {n} bytes exceeds the protocol maximum of {proto.MAX_READ_MEM}"
+            )
         return self._request(proto.read_mem(addr, n), proto.Msg.MEM, f"READ_MEM {addr:#x}")
 
     def write_mem(self, addr: int, data: bytes) -> None:
+        if len(data) > proto.MAX_WRITE_MEM:
+            raise StestError(
+                f"node {self.name!r}: write_mem of {len(data)} bytes exceeds the protocol maximum "
+                f"of {proto.MAX_WRITE_MEM}"
+            )
         self._request(proto.write_mem(addr, data), proto.Msg.OK, f"WRITE_MEM {addr:#x}")
 
     def var(self, expr: str) -> Any:

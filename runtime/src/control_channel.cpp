@@ -62,6 +62,17 @@ bool read_all(void* p, size_t n) {
   return true;
 }
 
+// Reads and drops n bytes in bounded chunks; false on EOF/error before n bytes.
+bool discard(uint64_t n) {
+  char scratch[64 * 1024];
+  while (n) {
+    size_t chunk = n < sizeof scratch ? static_cast<size_t>(n) : sizeof scratch;
+    if (!read_all(scratch, chunk)) return false;
+    n -= chunk;
+  }
+  return true;
+}
+
 // ---- little-endian payload builder / parser ----
 struct Out {
   std::string b;
@@ -226,7 +237,14 @@ void run_control_channel(int fd, const ChipDesc& chip, FirmwareMain fw, const vo
       uint32_t len = uint32_t{hdr[0]} | uint32_t{hdr[1]} << 8 | uint32_t{hdr[2]} << 16 |
                      uint32_t{hdr[3]} << 24;
       uint8_t type = hdr[4];
-      if (len > STEST_MAX_PAYLOAD) stest_rt_abort("control protocol: payload of %u bytes", len);
+      if (len > STEST_MAX_PAYLOAD) {  // a request error: drop the payload, keep serving
+        if (!discard(len)) stest_rt_abort("control protocol: truncated message");
+        send_or_exit(STEST_MSG_REQ_ERROR, "control protocol: payload of " + std::to_string(len) +
+                                              " bytes exceeds the maximum of " +
+                                              std::to_string(STEST_MAX_PAYLOAD) + " (message type " +
+                                              std::to_string(type) + " discarded)");
+        continue;
+      }
       payload.resize(len);
       if (len && !read_all(payload.data(), len)) stest_rt_abort("control protocol: truncated message");
       In in{payload};
@@ -256,7 +274,12 @@ void run_control_channel(int fd, const ChipDesc& chip, FirmwareMain fw, const vo
           uint64_t addr = in.u64();
           uint32_t n = in.u32();
           in.end();
-          if (n > STEST_MAX_PAYLOAD) stest_rt_abort("control protocol: READ_MEM of %u bytes", n);
+          if (n > STEST_MAX_PAYLOAD) {
+            send_or_exit(STEST_MSG_REQ_ERROR, "read_mem: " + std::to_string(n) +
+                                                  " bytes exceeds the maximum of " +
+                                                  std::to_string(STEST_MAX_PAYLOAD));
+            break;
+          }
           std::string buf(n, '\0');
           if (n && !safe_copy(buf.data(), reinterpret_cast<const void*>(addr), n))
             send_or_exit(STEST_MSG_REQ_ERROR,
