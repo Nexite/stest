@@ -63,8 +63,8 @@ class Sim:
             raise ValueError("wall_timeout_s must be positive")
         if access_cost_ns < 0:
             raise ValueError("access_cost_ns must be >= 0")
-        self.quantum_ns = int(quantum_us) * 1000
-        self._quantum_requested_ns = self.quantum_ns
+        self._quantum_ns = int(quantum_us) * 1000
+        self._quantum_requested_ns = self._quantum_ns
         self.wall_timeout_s = float(wall_timeout_s)
         self.access_cost_ns = int(access_cost_ns)
         if poll_skip is not None and poll_skip < 0:
@@ -94,6 +94,11 @@ class Sim:
         self._can_queue: list[tuple] = []
         self._can_cb_t: int | None = None
         self._can_timers = 0
+
+    @property
+    def quantum_ns(self) -> int:
+        """The quantum in ns (read-only; ``can_bus()`` caps it at the bus lookahead)."""
+        return self._quantum_ns
 
     @property
     def quantum_us(self) -> int:
@@ -137,7 +142,7 @@ class Sim:
             raise ValueError(f"CAN bitrate must be an int in 1..1000000 bit/s (got {bitrate!r})")
         bus = CanBus(self, name, bitrate, len(self._buses))
         self._buses.append(bus)
-        self.quantum_ns = min(self.quantum_ns, lookahead_ns(bitrate))
+        self._quantum_ns = min(self._quantum_ns, lookahead_ns(bitrate))
         return bus
 
     def _resolve_bus(self, b) -> CanBus:
@@ -164,6 +169,9 @@ class Sim:
         if not self.nodes and not self._buses:
             raise StestError("sim.start() with no nodes (and no CAN buses)")
         self._started = True
+        cap = self._can_lookahead_ns()
+        if cap is not None and self._quantum_ns > cap:  # can_bus() caps it; keep the invariant explicit
+            raise StestError(f"internal: quantum {self._quantum_ns} ns exceeds the CAN lookahead {cap} ns")
         if self.quantum_ns < self._quantum_requested_ns:
             limit = min(self._buses, key=lambda b: (-b.bitrate, b._index))
             _log.info(
@@ -286,20 +294,38 @@ class Sim:
             self._can_cb_t = t
             try:
                 if cls == 0:
-                    payload()
+                    payload()  # CanBus._deliver: reports a raising on_frame itself
                 else:
-                    period, fn = payload
+                    period, fn, dev = payload
                     heapq.heappush(q, (t + period, 1, k1, 0, payload))
-                    fn()
+                    try:
+                        fn()
+                    except Exception as e:
+                        self._device_failed(dev, "every", e)
             finally:
                 self._can_cb_t = None
+
+    def _device_failed(self, device: str, what: str, e: Exception) -> NoReturn:
+        """A device callback raised mid-boundary: the buses' state is no longer consistent
+        with virtual time, so the simulation ends (every node killed), like NodeCrashed."""
+        if isinstance(e, StestError) and self._dead is e:
+            raise e  # already ended (e.g. a callback called advance() and that failed)
+
+        def make() -> StestError:
+            exc = StestError(f"CAN device {device!r} {what} callback raised: {type(e).__name__}: {e}")
+            exc.__cause__ = e
+            return exc
+
+        self._fail(make)
 
     def _can_schedule(self, t: int, cls: int, k1: int, k2: int, payload) -> None:
         heapq.heappush(self._can_queue, (t, cls, k1, k2, payload))
 
-    def _can_every(self, period_ns: int, fn: Callable[[], None]) -> None:
+    def _can_every(self, period_ns: int, fn: Callable[[], None], device: str) -> None:
         self._can_timers += 1
-        heapq.heappush(self._can_queue, (self._can_now() + period_ns, 1, self._can_timers, 0, (period_ns, fn)))
+        heapq.heappush(
+            self._can_queue, (self._can_now() + period_ns, 1, self._can_timers, 0, (period_ns, fn, device))
+        )
 
     def _can_now(self) -> int:
         """Virtual time for device sends: the running callback's time, else now_ns."""

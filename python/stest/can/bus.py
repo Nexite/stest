@@ -6,14 +6,15 @@ and device callbacks due by T have run):
     while requests are pending:
         t_idle = max(bus_free_at, earliest t_req)       # bus free = previous EOF + IFS
         if t_idle >= T: break                           # later requests (stamped <= that instant) may still join
-        aborts with t_abort <= t_idle withdraw their request (the frame had not started)
+        aborts with t_abort <= t_idle withdraw their request (no attempt on the wire) and report
+            "aborted" at max(t_abort + lookahead, EOF of its previous attempt)
         contenders = each sender's top request with t_req <= t_idle
                      (node TXFP=0: lowest arbitration key, then lowest key; TXFP=1: lowest seq;
                       devices: lowest arbitration key, then request order)
         winner = min(arbitration key, sender order); bit-identical frames from several senders all win
         eof = t_idle + duration; bus_free_at = eof + IFS
         ACK = a non-winning node whose mode at SOF (t_idle) is "normal", or a non-winning device with ack=True
-        ACK:    winners: tx_result ok at eof (request done); every other node: rx at eof;
+        ACK:    winners: tx_result ok at eof (request done); non-winning nodes in normal mode at SOF: rx at eof;
                 devices' on_frame + log append at eof (run at the first quantum end >= eof)
         no ACK: winners: tx_result error "ack" at eof; request stays pending (dropped if NART)
         losers: tx_result arb_lost at eof; request stays pending (dropped if NART)
@@ -40,11 +41,12 @@ from __future__ import annotations
 
 import bisect
 import functools
+import heapq
 from typing import TYPE_CHECKING, Any, Callable
 
 from ..errors import StestError
 from .device import CanDevice
-from .frame import IFS_BITS, CanFrame
+from .frame import IFS_BITS, CanFrame, lookahead_ns
 from .log import LoggedFrame, format_asc, format_candump
 
 if TYPE_CHECKING:
@@ -53,17 +55,22 @@ if TYPE_CHECKING:
 MODES = ("sleep", "init", "normal")
 
 
-# tx_result payloads (fresh dicts per call: receivers may keep or extend them)
-def _ok() -> dict:
-    return {"ok": True, "arb_lost": False, "error": None}
+# tx_result payloads (fresh dicts per call: receivers may keep or extend them); "seq" is the
+# request's seq, so a late result for an aborted request is never taken for its successor's
+def _ok(req: _Req) -> dict:
+    return {"ok": True, "arb_lost": False, "error": None, "seq": req.seq}
 
 
-def _arb_lost() -> dict:
-    return {"ok": False, "arb_lost": True, "error": None}
+def _arb_lost(req: _Req) -> dict:
+    return {"ok": False, "arb_lost": True, "error": None, "seq": req.seq}
 
 
-def _no_ack() -> dict:
-    return {"ok": False, "arb_lost": False, "error": "ack"}
+def _no_ack(req: _Req) -> dict:
+    return {"ok": False, "arb_lost": False, "error": "ack", "seq": req.seq}
+
+
+def _aborted(req: _Req) -> dict:
+    return {"ok": False, "arb_lost": False, "error": None, "aborted": True, "seq": req.seq}
 
 
 @functools.lru_cache(maxsize=4096)
@@ -72,23 +79,92 @@ def _frame_ns(frame: CanFrame, bitrate: int) -> int:
 
 
 class _Req:
-    __slots__ = ("key", "frame", "t_req", "txfp", "seq", "nart", "akey")
+    __slots__ = ("key", "frame", "t_req", "txfp", "seq", "nart", "akey", "abort_t", "last_eof")
 
     def __init__(self, key: Any, frame: CanFrame, t_req: int, txfp: int, seq: int, nart: bool):
         self.key, self.frame, self.t_req, self.txfp, self.seq, self.nart = key, frame, t_req, txfp, seq, nart
         self.akey = frame.arbitration_key()
+        self.abort_t: int | None = None  # time of the abort bound to this request
+        self.last_eof = 0  # EOF of its latest attempt
+
+
+class _DevQueue:
+    """A device's / plain sender's requests: a heap by request time, and the ready ones
+    (t_req <= the latest idle instant) in a heap by (arbitration key, request order), so a
+    decision is O(log n) however long the backlog. Only the ready top is ever removed."""
+
+    __slots__ = ("waiting", "ready", "n")
+
+    def __init__(self) -> None:
+        self.waiting: list[tuple] = []
+        self.ready: list[tuple] = []
+        self.n = 0
+
+    def add(self, req: _Req) -> None:
+        heapq.heappush(self.waiting, (req.t_req, req.seq, req))
+        self.n += 1
+
+    def earliest(self) -> int:
+        # a ready request's t_req is <= the previous idle instant <= bus_free_at, which is
+        # all t_idle = max(bus_free_at, earliest) needs
+        return self.ready[0][2].t_req if self.ready else self.waiting[0][0]
+
+    def top(self, t_idle: int) -> _Req | None:
+        w = self.waiting
+        while w and w[0][0] <= t_idle:
+            r = heapq.heappop(w)[2]
+            heapq.heappush(self.ready, (r.akey, r.key, r))
+        return self.ready[0][2] if self.ready else None
+
+    def remove(self, req: _Req) -> None:
+        assert self.ready and self.ready[0][2] is req
+        heapq.heappop(self.ready)
+        self.n -= 1
+
+
+class _NodeQueue:
+    """A node's pending mailbox requests (a handful): scanned per decision."""
+
+    __slots__ = ("reqs",)
+
+    def __init__(self) -> None:
+        self.reqs: list[_Req] = []
+
+    @property
+    def n(self) -> int:
+        return len(self.reqs)
+
+    def add(self, req: _Req) -> None:
+        self.reqs.append(req)
+
+    def earliest(self) -> int:
+        return min(r.t_req for r in self.reqs)
+
+    def top(self, t_idle: int) -> _Req | None:
+        ready = [r for r in self.reqs if r.t_req <= t_idle]
+        if not ready:
+            return None
+        # the TXFP in force at SOF: that of the latest request made by then (never a
+        # later-stamped one the engine happens to know already: that would depend on T)
+        if max(ready, key=lambda r: r.seq).txfp == 1:
+            return min(ready, key=lambda r: (r.seq, r.key))
+        return min(ready, key=lambda r: (r.akey, r.key))
+
+    def remove(self, req: _Req) -> None:
+        self.reqs.remove(req)
 
 
 class _NodePort:
     """A firmware node's controller on this bus (see CanBus._attach_node)."""
 
-    __slots__ = ("name", "on_rx", "on_tx_result", "mode_t", "mode_v", "bitrate")
+    __slots__ = ("name", "on_rx", "on_tx_result", "mode_t", "mode_v", "bitrate", "q")
 
     def __init__(self, name: str, on_rx: Callable, on_tx_result: Callable):
         self.name, self.on_rx, self.on_tx_result = name, on_rx, on_tx_result
         self.mode_t: list[int] = []
         self.mode_v: list[str] = []
         self.bitrate: int | None = None
+        self.q = _NodeQueue()
 
     def mode_at(self, t: int) -> str:
         i = bisect.bisect_right(self.mode_t, t) - 1
@@ -108,8 +184,9 @@ class CanBus:
         self._order: dict[str, int] = {}  # sender name -> sender order (registration order)
         self._nodes: dict[str, _NodePort] = {}
         self._devices: dict[str, CanDevice] = {}
-        self._pending: dict[str, list[_Req]] = {}
+        self._queues: dict[str, _DevQueue | _NodeQueue] = {}  # sender -> its pending requests
         self._npending = 0
+        self.lookahead_ns = lookahead_ns(bitrate)
         self._aborts: list[tuple[int, int, str, _Req]] = []  # (t, n, sender, request), sorted
         self._nabort = 0
         self._free_at = 0
@@ -127,7 +204,9 @@ class CanBus:
         self._register(device.name, "device")
         device.bus = self
         device._attach_t = self._sim._can_now()
+        device._ack = bool(device.ack)  # fixed from attach on (CanDevice refuses later changes)
         self._devices[device.name] = device
+        self._queues[device.name] = _DevQueue()
         return device
 
     def send(self, frame: CanFrame, sender: str = "python") -> None:
@@ -137,6 +216,7 @@ class CanBus:
             raise StestError(f"bus {self.name!r}: {sender!r} is a firmware node; it cannot send from Python")
         if sender not in self._devices and sender not in self._order:
             self._register(sender, "plain")
+            self._queues[sender] = _DevQueue()
         self._device_send(sender, frame)
 
     def wait_for_frame(
@@ -184,13 +264,19 @@ class CanBus:
         on_rx: Callable[[LoggedFrame, int], None],
         on_tx_result: Callable[[Any, dict, int], None],
     ) -> None:
-        """Register firmware-node controller ``sender``. The engine calls
-        ``on_rx(lf, t)`` for every frame this node did not win (t = EOF) and
-        ``on_tx_result(key, {"ok", "arb_lost", "error"}, t)`` for each attempt of one of its
-        requests (t = EOF; error is None or "ack"). Every t is > the quantum end at which
-        the engine runs, so callbacks may Node.post at t. The node starts in mode "sleep"."""
+        """Register firmware-node controller ``sender`` (it starts in mode "sleep"). The
+        engine calls, with every t >= the quantum end at which it runs (so callbacks may
+        ``Node.post`` at t):
+
+        - ``on_rx(lf, t)``: a frame this node did not send, whose SOF found it in mode
+          normal; t = EOF (after any arb_lost result for the same frame).
+        - ``on_tx_result(key, result, t)`` for each attempt of a request, t = EOF:
+          ``{"ok": bool, "arb_lost": bool, "error": None | "ack", "seq": int}``;
+          and once for an effective abort: ``{"ok": False, "arb_lost": False, "error": None,
+          "aborted": True, "seq": int}`` (see ``_abort``). ``seq`` is the request's."""
         self._register(sender, "node")
-        self._nodes[sender] = _NodePort(sender, on_rx, on_tx_result)
+        port = self._nodes[sender] = _NodePort(sender, on_rx, on_tx_result)
+        self._queues[sender] = port.q
 
     def _request(
         self, sender: str, key: Any, frame: CanFrame, t_req: int, txfp: int, seq: int, *, nart: bool = False
@@ -199,28 +285,36 @@ class CanBus:
         ``txfp`` 0 = the node's mailboxes contend by identifier (then lowest key), 1 = by
         request order (lowest ``seq``); the latest request's txfp applies. ``nart``: one
         attempt only (dropped after a lost arbitration or missing ACK). Requests are only
-        made while the node is in normal mode (the engine does not gate on mode)."""
+        made while the node is in normal mode (the engine does not gate on mode). A mailbox
+        may be reloaded once its pending request has an abort at or before ``t_req``."""
         port = self._port(sender)
         if not isinstance(frame, CanFrame):
             raise TypeError(f"_request: expected a CanFrame (got {type(frame).__name__})")
         if txfp not in (0, 1):
             raise ValueError(f"_request: txfp must be 0 or 1 (got {txfp!r})")
-        reqs = self._pending.setdefault(port.name, [])
-        if any(r.key == key for r in reqs):
+        t_req = int(t_req)
+        if any(r.key == key and (r.abort_t is None or r.abort_t > t_req) for r in port.q.reqs):
             raise StestError(f"bus {self.name!r}: {sender!r} requested mailbox {key!r} while it is still pending")
-        reqs.append(_Req(key, frame, int(t_req), txfp, int(seq), bool(nart)))
+        port.q.add(_Req(key, frame, t_req, txfp, int(seq), bool(nart)))
         self._npending += 1
 
     def _abort(self, sender: str, key: Any, t: int) -> None:
-        """Abort ``sender``'s pending request ``key`` at ``t`` (calls arrive in the node's
-        event order, so this is the request made before the abort; with none pending it has
-        no effect, as ABRQ on an empty mailbox). Effective (the request is withdrawn, with no
-        result) only if its next attempt has not started by ``t`` (t <= its SOF); otherwise
-        the attempt in progress completes and reports its result as usual."""
-        self._port(sender)
-        req = next((r for r in self._pending.get(sender, ()) if r.key == key), None)
+        """Abort ``sender``'s pending request ``key`` at ``t``. Calls arrive in the node's
+        event order, so this binds to the request made before the abort (with none pending,
+        or only an already-aborted one, it has no effect, like ABRQ on an empty mailbox).
+
+        If no attempt of the request is on the wire at ``t`` (t <= the next SOF), the abort
+        takes effect: the request is withdrawn and ``on_tx_result(key, {..., "aborted": True,
+        "seq": seq}, max(t + lookahead_ns, EOF of its previous attempt))`` is posted.
+        Hardware acknowledges the abort at once; it is reported up to 44 bit times late
+        (the lookahead) because only then is the decision causal and quantum-independent.
+        An attempt already on the wire at ``t`` is not affected: its result arrives at EOF as
+        usual (and if it failed, the abort takes effect before the retry)."""
+        port = self._port(sender)
+        req = next((r for r in port.q.reqs if r.key == key and r.abort_t is None), None)
         if req is None:
             return
+        req.abort_t = int(t)
         self._nabort += 1
         bisect.insort(self._aborts, (int(t), self._nabort, sender, req), key=lambda a: a[:2])
 
@@ -255,51 +349,48 @@ class CanBus:
         if not isinstance(frame, CanFrame):
             raise TypeError(f"send: expected a CanFrame (got {type(frame).__name__})")
         self._dseq += 1
-        req = _Req(self._dseq, frame, self._sim._can_now(), 0, self._dseq, False)
-        self._pending.setdefault(sender, []).append(req)
+        self._queues[sender].add(_Req(self._dseq, frame, self._sim._can_now(), 0, self._dseq, False))
         self._npending += 1
 
-    def _remove(self, sender: str, req: _Req) -> None:
-        reqs = self._pending[sender]
-        reqs.remove(req)
-        if not reqs:
-            del self._pending[sender]
-        self._npending -= 1
-
-    def _apply_aborts(self, limit: int) -> None:
+    def _apply_aborts(self, limit: int, T: int) -> None:
         aborts = self._aborts
         while aborts and aborts[0][0] <= limit:
-            _, _, sender, req = aborts.pop(0)
-            if any(r is req for r in self._pending.get(sender, ())):
-                self._remove(sender, req)
+            t_abort, _, sender, req = aborts.pop(0)
+            port = self._nodes[sender]
+            if not any(r is req for r in port.q.reqs):
+                continue  # completed (or dropped) before the abort: no effect
+            port.q.remove(req)
+            self._npending -= 1
+            t_post = max(t_abort + self.lookahead_ns, req.last_eof)
+            if t_post < T:
+                raise StestError(
+                    f"CAN bus {self.name!r}: engine bug: abort of {sender!r} mailbox {req.key!r} at t={t_abort} ns "
+                    f"would be reported at {t_post} ns, before the quantum end {T} ns (into the past)"
+                )
+            port.on_tx_result(req.key, _aborted(req), t_post)
 
     def _run(self, T: int) -> None:
-        """Decide every bus-idle instant before quantum end ``T`` (see the module doc)."""
-        pending = self._pending
+        """Decide every bus-idle instant before quantum end ``T`` (see the module doc).
+        Cost per decision: O(senders + log(backlog))."""
+        queues = self._queues
         while self._npending:
-            t_idle = max(self._free_at, min(r.t_req for reqs in pending.values() for r in reqs))
+            t_idle = max(self._free_at, min(q.earliest() for q in queues.values() if q.n))
             if t_idle >= T:
                 break
             if self._aborts and self._aborts[0][0] <= t_idle:
-                self._apply_aborts(t_idle)
+                self._apply_aborts(t_idle, T)
                 continue
             self._decide(t_idle, T)
         if self._aborts:
-            self._apply_aborts(T)  # any frame not started yet starts at >= T
+            self._apply_aborts(T, T)  # any request not on the wire now starts at >= T
 
     def _decide(self, t_idle: int, T: int) -> None:
-        tops = []  # (arbitration key, sender order, sender, request)
-        for sender, reqs in self._pending.items():
-            ready = [r for r in reqs if r.t_req <= t_idle]
-            if not ready:
-                continue
-            # the TXFP in force at SOF: that of the latest request made by then (never a
-            # later-stamped one the engine happens to know already: that would depend on T)
-            if max(ready, key=lambda r: r.seq).txfp == 1:
-                top = min(ready, key=lambda r: (r.seq, r.key))
-            else:
-                top = min(ready, key=lambda r: (r.akey, r.key))
-            tops.append((top.akey, self._order[sender], sender, top))
+        tops = []  # (arbitration key, sender order, sender, request, queue)
+        for sender, q in self._queues.items():
+            if q.n:
+                top = q.top(t_idle)
+                if top is not None:
+                    tops.append((top.akey, self._order[sender], sender, top, q))
         tops.sort(key=lambda c: c[:2])
         frame = tops[0][3].frame
         winners = [c for c in tops if c[3].frame == frame]
@@ -312,33 +403,43 @@ class CanBus:
                 f"(quantum {self._sim.quantum_ns} ns, lookahead {self._sim._can_lookahead_ns()} ns)"
             )
         won = {c[2] for c in winners}
-        ack = any(p.mode_at(t_idle) == "normal" for n, p in self._nodes.items() if n not in won) or any(
-            d.ack and d._attach_t <= t_idle for n, d in self._devices.items() if n not in won
+        listening = [n for n, p in self._nodes.items() if n not in won and p.mode_at(t_idle) == "normal"]
+        ack = bool(listening) or any(
+            d._ack and d._attach_t <= t_idle for n, d in self._devices.items() if n not in won
         )
-        lost = {c[2]: c[3] for c in losers}
-        mine = {c[2]: c[3] for c in winners}
+        for c in tops:
+            c[3].last_eof = eof
         for c in winners:
             if ack or c[3].nart:
-                self._remove(c[2], c[3])
+                c[4].remove(c[3])
+                self._npending -= 1
         for c in losers:
             if c[3].nart:
-                self._remove(c[2], c[3])
+                c[4].remove(c[3])
+                self._npending -= 1
         self._free_at = eof + self.ifs_ns
+        lost = {c[2]: c[3] for c in losers}
+        mine = {c[2]: c[3] for c in winners}
         lf = LoggedFrame(eof, self.name, frame, winners[0][2]) if ack else None
+        rx = set(listening) if lf is not None else ()
         for name, port in self._nodes.items():
             if name in mine:
-                port.on_tx_result(mine[name].key, _ok() if ack else _no_ack(), eof)
+                port.on_tx_result(mine[name].key, _ok(mine[name]) if ack else _no_ack(mine[name]), eof)
             elif name in lost:
-                port.on_tx_result(lost[name].key, _arb_lost(), eof)
-            if lf is not None and name not in won:
+                port.on_tx_result(lost[name].key, _arb_lost(lost[name]), eof)
+            if name in rx:
                 port.on_rx(lf, eof)
         if lf is not None:
             self._nframes += 1
             self._sim._can_schedule(eof, 0, self._index, self._nframes, lambda: self._deliver(lf, won, t_idle))
 
     def _deliver(self, lf: LoggedFrame, won: set[str], sof: int) -> None:
-        """At EOF (run at the first quantum end >= EOF): log the frame, call devices."""
+        """At EOF (run at the first quantum end >= EOF): log the frame, call devices. A
+        raising on_frame ends the simulation (Sim._device_failed)."""
         self.log.append(lf)
         for name, d in list(self._devices.items()):
             if name not in won and d._attach_t <= sof:
-                d.on_frame(lf)
+                try:
+                    d.on_frame(lf)
+                except Exception as e:
+                    self._sim._device_failed(d.name, "on_frame", e)

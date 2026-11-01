@@ -270,7 +270,7 @@ def test_fake_node_api_rx_and_tx_results():
     sim.advance(ms=1)
     eof = 30_000 - 10 + dur(f)
     lf = LoggedFrame(eof, "bus0", f, "n1")
-    assert n1.calls == [("tx_result", eof, 0, {"ok": True, "arb_lost": False, "error": None})]
+    assert n1.calls == [("tx_result", eof, 0, {"ok": True, "arb_lost": False, "error": None, "seq": 0})]
     assert n2.calls == [("rx", eof, lf)]
     assert bus.log == [lf] and dev.got == [(eof, lf)]
     sim.close()
@@ -297,13 +297,13 @@ def test_fake_node_arbitration_txfp_and_identical_frames():
     e2 = e1 + IFS + dur(mid)
     e3 = e2 + IFS + dur(hi)
     assert [lf.t_ns for lf in bus.log] == [e1, e2, e3]
-    assert ("tx_result", e1, 2, {"ok": False, "arb_lost": True, "error": None}) in n2.calls
-    assert n2.calls.index(("tx_result", e1, 2, {"ok": False, "arb_lost": True, "error": None})) < n2.calls.index(
+    assert ("tx_result", e1, 2, {"ok": False, "arb_lost": True, "error": None, "seq": 0}) in n2.calls
+    assert n2.calls.index(("tx_result", e1, 2, {"ok": False, "arb_lost": True, "error": None, "seq": 0})) < n2.calls.index(
         ("rx", e1, bus.log[0])
     )
     # n1 loses to n2's 0x250 at e1 + IFS with its 0x300
-    assert ("tx_result", e2, 0, {"ok": False, "arb_lost": True, "error": None}) in n1.calls
-    assert ("tx_result", e3, 0, {"ok": True, "arb_lost": False, "error": None}) in n1.calls
+    assert ("tx_result", e2, 0, {"ok": False, "arb_lost": True, "error": None, "seq": 0}) in n1.calls
+    assert ("tx_result", e3, 0, {"ok": True, "arb_lost": False, "error": None, "seq": 0}) in n1.calls
 
     # TXFP=1: request order (seq) regardless of id
     t = sim.now_ns + 1_000
@@ -319,8 +319,8 @@ def test_fake_node_arbitration_txfp_and_identical_frames():
     assert [lf.frame for lf in bus.log[n0:]] == [hi, lo, same]
     e_same = bus.log[-1].t_ns
     assert bus.log[-1].sender == "n1"
-    assert ("tx_result", e_same, 2, {"ok": True, "arb_lost": False, "error": None}) in n1.calls[c1:]
-    assert ("tx_result", e_same, 0, {"ok": True, "arb_lost": False, "error": None}) in n2.calls[c2:]
+    assert ("tx_result", e_same, 2, {"ok": True, "arb_lost": False, "error": None, "seq": 12}) in n1.calls[c1:]
+    assert ("tx_result", e_same, 0, {"ok": True, "arb_lost": False, "error": None, "seq": 1}) in n2.calls[c2:]
     assert not any(c[0] == "rx" and c[2].frame == same for c in n1.calls[c1:] + n2.calls[c2:])
     sim.close()
 
@@ -338,7 +338,7 @@ def test_ack_only_from_normal_nodes_and_ack_devices():
     sim.advance(us=500)
     assert bus.log == []
     errs = [c for c in n1.calls if c[0] == "tx_result"]
-    assert errs[0] == ("tx_result", dur(f), 0, {"ok": False, "arb_lost": False, "error": "ack"})
+    assert errs[0] == ("tx_result", dur(f), 0, {"ok": False, "arb_lost": False, "error": "ack", "seq": 0})
     period = dur(f) + IFS
     assert [c[1] for c in errs] == [dur(f) + k * period for k in range(len(errs))]  # automatic retransmission
     # n2 goes normal: the next attempt starting at or after that instant is acknowledged
@@ -378,7 +378,11 @@ def test_abort_before_and_after_start():
     sim.advance(ms=2)
     assert [lf.frame for lf in bus.log] == [busy, a]
     assert [c for c in n1.calls if c[0] == "tx_result"] == [
-        ("tx_result", dur(busy) + IFS + dur(a), 0, {"ok": True, "arb_lost": False, "error": None})
+        # effective: reported one lookahead (44 bit times) after the abort
+        ("tx_result", dur(busy) - 1 + lookahead_ns(BR), 1,
+         {"ok": False, "arb_lost": False, "error": None, "aborted": True, "seq": 0}),
+        # too late (mailbox 0 was on the wire): no effect, normal result at EOF
+        ("tx_result", dur(busy) + IFS + dur(a), 0, {"ok": True, "arb_lost": False, "error": None, "seq": 0}),
     ]
     sim.close()
 
@@ -530,3 +534,136 @@ def test_node_can_wiring(blinky_exe):
         (5_000, {"model": "CAN2", "op": "rx", "args": {"id": 0x123, "ext": False, "rtr": False, "dlc": 2, "data": "0102"}}),
         (6_000, {"model": "CAN2", "op": "tx_result", "args": {"mailbox": 2, "ok": True, "arb_lost": False, "error": None}}),
     ]
+
+
+# ---------------------------------------------------------------- review fixes
+
+
+def abort_reload_calls(quantum_us: int) -> tuple[list, list]:
+    sim, bus = device_sim(quantum_us)
+    bus.attach(CanDevice("r"))
+    blk = bus.attach(CanDevice("blk"))
+    n = FakeNode(sim, bus, "n")
+    n.mode(0, "normal")
+    blk.send(CanFrame(0x001, bytes(8)))  # t=0: bus busy for ~230 us
+    n.request(5_000, 0, CanFrame(0x300), seq=1)
+    n.abort(30_000, 0)  # not on the wire yet: effective
+    n.request(30_010, 0, CanFrame(0x301), seq=2)  # firmware reloads mailbox 0 right after ABRQ
+    # an abort while the attempt is on the wire has no effect on it
+    n.request(400_000, 1, CanFrame(0x302), seq=3)
+    n.abort(400_000 + 2 * BIT, 1)
+    sim.start()
+    sim.advance(ms=1)
+    out = (list(bus.log), list(n.calls))
+    sim.close()
+    return out
+
+
+@pytest.mark.parametrize("q", [1, 7, 20, 88])
+def test_abort_then_reload_same_mailbox(q):
+    log, calls = abort_reload_calls(q)
+    assert [lf.frame.id for lf in log] == [0x001, 0x301, 0x302]
+    results = [(c[1], c[2], c[3]) for c in calls if c[0] == "tx_result"]
+    assert results == [
+        (30_000 + lookahead_ns(BR), 0, {"ok": False, "arb_lost": False, "error": None, "aborted": True, "seq": 1}),
+        (log[1].t_ns, 0, {"ok": True, "arb_lost": False, "error": None, "seq": 2}),
+        (log[2].t_ns, 1, {"ok": True, "arb_lost": False, "error": None, "seq": 3}),
+    ]
+    assert (log, calls) == abort_reload_calls(88)
+
+
+def test_reload_without_abort_is_refused():
+    sim, bus = device_sim()
+    FakeNode(sim, bus, "n")
+    bus._request("n", 0, CanFrame(0x1), 0, 0, 0)
+    bus._abort("n", 0, 500)
+    with pytest.raises(StestError, match="still pending"):
+        bus._request("n", 0, CanFrame(0x2), 400, 0, 1)  # before the abort
+    bus._request("n", 0, CanFrame(0x2), 500, 0, 1)  # at the abort: fine
+
+
+def test_abort_during_failed_attempt_takes_effect_before_retry():
+    sim, bus = device_sim(quantum_us=20)
+    n = FakeNode(sim, bus, "n")  # alone: never ACKed
+    n.mode(0, "normal")
+    f = CanFrame(0x100)
+    n.request(0, 0, f, seq=7)
+    n.abort(10_000, 0)  # mid-flight of the first attempt (SOF 0, EOF ~ 100 us)
+    sim.start()
+    sim.advance(ms=1)
+    assert [(c[1], c[3]) for c in n.calls] == [
+        (dur(f), {"ok": False, "arb_lost": False, "error": "ack", "seq": 7}),
+        (max(10_000 + lookahead_ns(BR), dur(f)), {"ok": False, "arb_lost": False, "error": None, "aborted": True, "seq": 7}),
+    ]
+    sim.close()
+
+
+def test_rx_only_to_nodes_in_normal_mode():
+    sim, bus = device_sim(quantum_us=20)
+    a = bus.attach(Recorder("A"))
+    n_init = FakeNode(sim, bus, "init")
+    n_norm = FakeNode(sim, bus, "norm")
+    n_init.mode(0, "init", None)
+    n_norm.mode(0, "normal")
+    sim.start()
+    a.send(CanFrame(0x10))
+    sim.advance(ms=1)
+    assert n_init.calls == []
+    assert [c[0] for c in n_norm.calls] == ["rx"]
+    sim.close()
+
+
+@pytest.mark.parametrize("where", ["on_frame", "every"])
+def test_device_callback_exception_ends_the_sim(where):
+    sim, bus = device_sim()
+
+    class Boom(CanDevice):
+        def on_frame(self, lf):
+            if where == "on_frame":
+                raise RuntimeError("user bug")
+
+    a = bus.attach(CanDevice("a"))
+    bus.attach(Boom("boom"))
+
+    def tick():
+        a.send(CanFrame(0x100))
+        if where == "every" and a.now_ns >= 300_000:
+            raise RuntimeError("user bug")
+
+    a.every(0.1, tick)
+    sim.start()
+    with pytest.raises(StestError, match=f"CAN device '(boom|a)' {where} callback raised: RuntimeError: user bug") as ei:
+        sim.advance(ms=2)
+    assert isinstance(ei.value.__cause__, RuntimeError)
+    with pytest.raises(StestError, match="no longer usable"):
+        sim.advance(ms=1)
+    sim.close()
+
+
+def test_ack_is_fixed_after_attach_and_quantum_is_read_only():
+    sim, bus = device_sim()
+    d = CanDevice("d", ack=False)
+    d.ack = True  # fine before attach
+    bus.attach(d)
+    with pytest.raises(StestError, match="ack cannot change"):
+        d.ack = False
+    with pytest.raises(AttributeError):
+        sim.quantum_ns = 1_000_000
+
+
+def test_engine_cost_is_not_quadratic_in_backlog():
+    """A lone sender (nobody ACKs) queueing 1 frame/ms: the backlog grows to 4000 requests
+    while the head is retransmitted ~9 times per ms. Quadratic engines took ~6 s."""
+    import time
+
+    sim, bus = device_sim()
+    a = bus.attach(CanDevice("a"))
+    bus.attach(CanDevice("r", ack=False))
+    a.every(1, lambda: a.send(CanFrame(0x100, bytes(8))))
+    sim.start()
+    t0 = time.perf_counter()
+    sim.advance(ms=4000)
+    wall = time.perf_counter() - t0
+    assert bus.log == [] and bus._npending == 4000
+    assert wall < 2.5, f"4 virtual s took {wall:.2f} s of wall time"
+    sim.close()

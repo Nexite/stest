@@ -26,7 +26,10 @@ class CanDevice:
 
     ``ack`` (default True): the device acknowledges frames, like a real controller in normal
     mode. With ``ack=False`` it only listens; a frame nobody else acknowledges is retried
-    forever, as on a real bus.
+    forever, as on a real bus. ``ack`` is fixed once the device is attached.
+
+    An exception raised by :meth:`on_frame` or an :meth:`every` callback ends the
+    simulation with a StestError naming the device (the original exception chained).
     """
 
     ack: bool = True
@@ -61,7 +64,15 @@ class CanDevice:
         period = round(period_ms * 1_000_000)
         if period <= 0:
             raise ValueError("every: period_ms must be positive (at least 1 ns)")
-        bus._sim._can_every(period, fn)
+        bus._sim._can_every(period, fn, self.name)
+
+    def __setattr__(self, name: str, value) -> None:
+        if name == "ack" and getattr(self, "bus", None) is not None:
+            raise StestError(
+                f"CAN device {self.name!r}: ack cannot change after attach (the engine would see the "
+                "change at a quantum-dependent time)"
+            )
+        object.__setattr__(self, name, value)
 
     def _require_bus(self) -> CanBus:
         bus = getattr(self, "bus", None)
