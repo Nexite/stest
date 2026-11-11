@@ -22,6 +22,8 @@ foreach(needle
     [[  bus.map(0x50040000u, 0x400u, &m_ADC);]]
     [[  bus.set_gate(&m_ADC, ctx.clocks().enable_word(0x4Cu), 1u << 13, "RCC AHB2ENR bit 13");]]
     [[  bus.set_gate(&m_DAC1, ctx.clocks().enable_word(0x58u), 1u << 29, "RCC APB1ENR1 bit 29");]]
+    [[  bus.map(0x40006400u, 0x400u, &m_CAN1);]]
+    [[  bus.set_gate(&m_CAN2, ctx.clocks().enable_word(0x58u), 1u << 26, "RCC APB1ENR1 bit 26");]]
     [[{"adc":[1,2],"channel":16,"pin":"PB1"}]]
     [[{"adc":[1,2,3],"channel":1,"pin":"PC0"}]])
   string(FIND "${text}" "${needle}" pos)

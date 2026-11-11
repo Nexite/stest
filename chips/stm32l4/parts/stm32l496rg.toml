@@ -265,6 +265,25 @@ size = 0x400
 rcc_enable = { reg = "APB1ENR1", bit = 15 }
 params = { bus = "apb1", irq = 51 }
 
+# bxCAN (RM0351 55): CAN1 is the master and holds the 28 filter banks shared with CAN2
+# (FMR.CAN2SB); CAN2's filter registers are reserved. IRQs: CAN1_TX/RX0/RX1/SCE = 19-22,
+# CAN2_TX/RX0/RX1/SCE = 86-89. Bit timing from BTR and PCLK1.
+[[peripheral]]
+name = "CAN1"
+model = "stm32l4.bxcan"
+base = 0x40006400
+size = 0x400
+rcc_enable = { reg = "APB1ENR1", bit = 25 }
+params = { role = "master", irq = { tx = 19, rx0 = 20, rx1 = 21, sce = 22 } }
+
+[[peripheral]]
+name = "CAN2"
+model = "stm32l4.bxcan"
+base = 0x40006800
+size = 0x400
+rcc_enable = { reg = "APB1ENR1", bit = 26 }
+params = { role = "slave", master = "CAN1", irq = { tx = 86, rx0 = 87, rx1 = 88, sce = 89 } }
+
 # Analog pins of the LQFP64 package: pin -> the ADCs that convert it and its channel number.
 # Source: DS11585 Rev 20 (STM32L496xx datasheet), table "STM32L496xx pin definitions",
 # LQFP64 column (ADC123_INPx = ADC1/2/3 channel x, ADC12_INPx = ADC1/2 channel x),
