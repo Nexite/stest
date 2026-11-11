@@ -77,6 +77,7 @@
 //   aborted:  for an ABRQ: RQCPx = TMEx = 1, TXOKx = 0 (ALST/TERR keep the last attempt's);
 //             for a withdrawal on leaving normal: back to held (see above).
 //   TEC/REC are not updated (fault confinement: Task 7); ESR.EWGF/EPVF/BOFF stay 0.
+// Setting TXRQx clears RQCPx (and so TXOKx/ALSTx/TERRx), as on hardware (RM0351 TSR).
 // Completion clears TIxR.TXRQ and TSR.ABRQx. Writing 1 to RQCPx clears RQCPx, TXOKx, ALSTx,
 // TERRx. TSR.CODE = lowest-numbered empty mailbox, else the lowest-priority pending one;
 // LOWx = mailbox x is the lowest-priority pending one while more than one is pending.
@@ -110,6 +111,17 @@
 //   rx0 = FMPIE0 & FMP0 != 0 | FFIE0 & FULL0 | FOVIE0 & FOVR0      (rx1 likewise)
 //   sce = ERRIE & ERRI | WKUIE & WKUI | SLKIE & SLAKI
 // SLAKI is set on entering sleep while SLKIE = 1 (rc_w1, like ERRI/WKUI).
+//
+// Known deviations / interpretations:
+//  (a) INRQ/SLEEP during a reception: hardware finishes the in-flight frame before setting
+//      INAK/SLAK and still receives it; here init/sleep is entered at once and that frame is
+//      dropped (INAK/SLAK may rise up to one frame time early).
+//  (b) ABRQ on a mailbox withdrawn by a mode exit completes when the engine's result arrives
+//      (up to the lookahead + one frame later), not immediately.
+//  (c) MCR.RESET also resets BTR/IER/ESR and the mailboxes: an interpretation beyond RM0351's
+//      wording ("FMP bits and CAN_MCR initialized"); ST's HAL re-initialises them anyway.
+//  (d) Unconfirmed filter readings: CAN2's FMI counts from 0 at bank CAN2SB; no frame is
+//      received while FMR.FINIT = 1.
 //
 // Not modelled (strict NotModelled abort at the configuring write): MCR.TTCM (time-triggered
 // mode), MCR.AWUM and IER.WKUIE (wake-up on bus activity: a sleeping controller does not

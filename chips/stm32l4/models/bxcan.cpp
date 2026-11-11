@@ -303,6 +303,7 @@ void Bxcan::write_mailbox(unsigned m, uint32_t off, unsigned width, uint32_t v) 
   if (!(regs_.get(base) & TXRQ)) return;
   b.order = ++order_;
   b.abort = b.withdraw = false;
+  b.rqcp = b.txok = b.alst = b.terr = false;  // RQCPx "cleared by hardware on TXRQx set" (TSR)
   if (mode_ == Mode::Normal) request(m);
   else b.st = Tx::Held;
   sync();

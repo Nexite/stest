@@ -763,3 +763,34 @@ TEST_CASE("bxcan state call, MCR.RESET, clock change re-reports the bitrate") {
   r.fire_next();
   CHECK(r.rd(CAN1 + TSR) == 0x1C000000u);
 }
+
+TEST_CASE("bxcan TX: TXRQ clears RQCP/TXOK/ALST/TERR of its mailbox") {
+  Rig r;
+  r.up(CAN1);
+  r.send(CAN1, 0, std_tir(0x10), 0);
+  r.can1.deliver("tx_result", ok(0, 1), r.clock.now_ns() + 10);
+  r.fire_next();
+  CHECK((r.rd(CAN1 + TSR) & 0xFF) == (RQCP | TXOK));  // never acknowledged
+  r.send(CAN1, 0, std_tir(0x11), 0);
+  CHECK((r.rd(CAN1 + TSR) & 0xFF) == 0);
+  CHECK((r.rd(CAN1 + TSR) & TME0) == 0);
+  r.set(CAN1 + IER, TMEIE);  // no stale RQCP: no spurious TX IRQ
+  CHECK_FALSE(r.irq_high(IRQ_TX));
+  // failed attempt then a new request on the same mailbox (NART: completes on failure)
+  r.can1.deliver("tx_result", {{"mailbox", 0}, {"seq", 2}, {"ok", false}, {"arb_lost", true}, {"error", nullptr}}, r.clock.now_ns() + 10);
+  r.fire_next();
+  CHECK((r.rd(CAN1 + TSR) & 0xFF) == ALST);
+  r.can1.deliver("tx_result", ok(0, 2), r.clock.now_ns() + 10);
+  r.fire_next();
+  CHECK(r.irq_high(IRQ_TX));
+  r.set(CAN1 + MCR, INRQ);
+  r.set(CAN1 + MCR, NART);
+  r.start(CAN1);
+  r.send(CAN1, 0, std_tir(0x12), 0);
+  r.can1.deliver("tx_result", {{"mailbox", 0}, {"seq", 3}, {"ok", false}, {"error", "ack"}}, r.clock.now_ns() + 10);
+  r.fire_next();
+  CHECK((r.rd(CAN1 + TSR) & 0xFF) == (RQCP | TERR));
+  r.send(CAN1, 0, std_tir(0x13), 0);
+  CHECK((r.rd(CAN1 + TSR) & 0xFF) == 0);
+  CHECK_FALSE(r.irq_high(IRQ_TX));
+}
