@@ -10,7 +10,7 @@ import time
 import pytest
 
 from stest import CanDevice, CanFrame, Sim
-from stest.errors import NodeCrashed
+from stest.errors import NodeCrashed, StestError
 
 BITRATE = 500_000
 IFS_NS = 3 * 2_000
@@ -191,6 +191,40 @@ def test_bitrate_mismatch_aborts(can_exe):
         with pytest.raises(NodeCrashed, match=r"bit rate 250000 does not match bus 'drive' \(500000\)") as e:
             s.advance(ms=5)
         assert "'n'" in str(e.value) and "CAN2" in str(e.value)
+
+
+def test_unwired_controller_transmitting_aborts(can_exe):
+    """A can_tx from a controller not wired to a bus is a harness/test bug: strict abort."""
+    with Sim() as s:
+        s.node("n", can_exe(1))  # no can= at all
+        s.start()
+        with pytest.raises(
+            NodeCrashed,
+            match=r"node 'n' CAN2 requested a transmission but is not wired to a bus: "
+            r"Sim\.node\('n', \.\.\., can=\{'CAN2': bus\}\)",
+        ):
+            s.advance(ms=15)
+    with Sim() as s:  # wired, but the wrong controller (firmware uses CAN2)
+        bus = s.can_bus("drive", BITRATE)
+        s.node("n", can_exe(1), can={"CAN1": bus})
+        s.start()
+        s.advance(ms=5)  # mode events of the unwired CAN2 are fine
+        with pytest.raises(NodeCrashed, match=r"node 'n' CAN2 requested a transmission but is not wired"):
+            s.advance(ms=10)
+        assert bus.log == []
+
+
+@pytest.mark.parametrize("periph", ["CAN9", "GPIOA"])
+def test_can_wiring_names_are_validated(can_exe, periph):
+    with Sim() as s:
+        bus = s.can_bus("drive", BITRATE)
+        s.node("n", can_exe(1), can={periph: bus})
+        with pytest.raises(
+            StestError,
+            match=rf"node 'n': can={{'{periph}': \.\.\.}}: {periph} is not a CAN controller of this "
+            r"firmware's chip \(CAN controllers: CAN1, CAN2\)",
+        ):
+            s.start()
 
 
 # ---- determinism across quanta, with traffic landing just before quantum boundaries ----

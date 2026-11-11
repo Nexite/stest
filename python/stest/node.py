@@ -77,6 +77,8 @@ class Node:
         # can_mode / can_tx / can_tx_abort events of wired controllers, (t, event), not yet
         # handed to their bus (Node._can_flush, run by the Sim at each quantum end)
         self._can_pending: list[tuple[int, dict]] = []
+        # first can_tx of a controller not wired to a bus (t, periph): a strict abort (Sim._step)
+        self._can_unwired: tuple[int, str] | None = None
 
     # ---- public API ----
     @property
@@ -480,8 +482,9 @@ class Node:
         - ``can_tx_abort`` (firmware ABRQ, and the withdrawals the model makes when it leaves
           normal mode or is reset) -> ``bus._abort(mailbox, t)``.
 
-        Events of controllers not wired to a bus are ignored: such a controller transmits
-        into nothing (its requests stay pending, as on a board without a transceiver)."""
+        Mode and abort events of controllers not wired to a bus are ignored; a ``can_tx`` from
+        one ends the simulation (NodeCrashed, ``Sim._can_unwired_tx``): the firmware transmits
+        on a controller the test did not connect, almost always a wiring mistake."""
         from .can.frame import CanFrame
 
         pending, self._can_pending = self._can_pending, []
@@ -521,8 +524,11 @@ class Node:
             elif data.get("kind") == "stdout":
                 self._stdout_log.append(data["text"])
                 self._output.append(("stdout", data["text"]))
-            elif data.get("kind") in _CAN_KINDS and data.get("periph") in self.can:
-                self._can_pending.append((t, data))
+            elif data.get("kind") in _CAN_KINDS:
+                if data.get("periph") in self.can:
+                    self._can_pending.append((t, data))
+                elif data["kind"] == "can_tx" and self._can_unwired is None:
+                    self._can_unwired = (t, str(data.get("periph")))  # Sim._step fails the run
             out.append((t, self.index, self._seq, self.name, js))
             self._seq += 1
         return out

@@ -742,6 +742,8 @@ TEST_CASE("bxcan state call, MCR.RESET, clock change re-reports the bitrate") {
   CHECK(s["tx"][0] == json{{"state", "pending"}, {"seq", 1}, {"abort", false}});
   CHECK(s["tx"][1] == json{{"state", "empty"}, {"seq", nullptr}, {"abort", false}});
   CHECK_THROWS_AS(r.can1.call("nope", json::object()), UnknownOp);
+  CHECK(r.can1.call("can_info", json::object()) == json{{"type", "bxcan"}, {"role", "master"}});
+  CHECK(r.can2.call("can_info", json::object()) == json{{"type", "bxcan"}, {"role", "slave"}});
   (void)can_events();
   // APB1 prescaler /2 -> PCLK1 = 40 MHz -> 250 kbit/s
   r.wr(RCC + 0x08, r.rd(RCC + 0x08) | (4u << 8));

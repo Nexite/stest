@@ -130,6 +130,11 @@
 // call(): "state" -> {"mode", "bitrate" (null unless normal), "tec", "rec",
 //   "tx": [{"state": "empty"|"held"|"pending", "seq": k|null, "abort": bool} x3],
 //   "fifo": [n0, n1]}.
+//   "can_info" -> {"type": "bxcan", "role": "master" | "slave"}: identifies a CAN controller
+//   (Python's Sim.start() checks every name wired with Sim.node(..., can={...}) with it).
+// The Python harness compares the bitrate of a can_mode "normal" event with its bus's bit
+// rate exactly (this integer division result vs CanBus.bitrate; no tolerance): any
+// difference ends the simulation (NodeCrashed "bit rate X does not match bus ...").
 #include <array>
 #include <cstdint>
 #include <string>

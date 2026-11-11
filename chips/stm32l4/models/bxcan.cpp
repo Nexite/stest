@@ -611,6 +611,7 @@ nlohmann::json Bxcan::call(std::string_view op, const nlohmann::json&) {
             {"tx", tx},
             {"fifo", {fifo_[0].n, fifo_[1].n}}};
   }
+  if (op == "can_info") return {{"type", "bxcan"}, {"role", master_ ? "master" : "slave"}};
   throw UnknownOp(op);
 }
 

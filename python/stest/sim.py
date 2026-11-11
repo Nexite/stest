@@ -217,6 +217,8 @@ class Sim:
                 )
             n.proto_version, n.anchor_addr = version, anchor
             n._load_symbols()
+            if n.can:
+                self._can_check_wiring(n)
 
     # ---- time ----
     @property
@@ -278,6 +280,9 @@ class Sim:
             n.now_ns = node_t
             merged.extend(n._record_events(events))
         self._flush_events()
+        for n in self.nodes:
+            if n._can_unwired is not None:
+                self._can_unwired_tx(n, *n._can_unwired)
         self._now = t
         if self._buses:
             self._can_boundary(t)
@@ -312,12 +317,52 @@ class Sim:
             finally:
                 self._can_cb_t = None
 
+    def _can_unwired_tx(self, n: Node, t: int, periph: str) -> NoReturn:
+        """Node ``n``'s controller ``periph`` requested a transmission (can_tx) but the test did
+        not wire it to a bus: strict, like any other unmodelled use (NodeCrashed, all nodes
+        killed). Mode changes of unwired controllers are fine (firmware may initialise a
+        controller the test does not use)."""
+        at = fmt_ms(t)
+        self._fail(
+            lambda: NodeCrashed(
+                f"node {n.name!r} {periph} requested a transmission but is not wired to a bus: "
+                f"Sim.node({n.name!r}, ..., can={{{periph!r}: bus}}) (at virtual t={at})"
+            )
+        )
+
+    def _can_check_wiring(self, n: Node) -> None:
+        """After HELLO: every controller name in ``n.can`` must be a CAN controller model of
+        the node (its ``can_info`` model op). Else StestError naming the valid ones."""
+        bad = []
+        for periph in n.can:
+            try:
+                n.call(periph, "can_info")
+            except StestError:
+                bad.append(periph)
+        if not bad:
+            return
+        valid = []
+        for name in [f"{p}{i}" for p in ("CAN", "FDCAN") for i in range(1, 4)]:
+            try:
+                n.call(name, "can_info")
+                valid.append(name)
+            except StestError:
+                pass
+        periph = bad[0]
+        msg = (
+            f"node {n.name!r}: can={{{periph!r}: ...}}: {periph} is not a CAN controller of this firmware's chip "
+            f"(CAN controllers: {', '.join(valid) or 'none'})"
+        )
+        self._fail(lambda: StestError(msg))
+
     def _can_bitrate_mismatch(self, n: Node, periph: str, bus: CanBus, bitrate, t: int) -> NoReturn:
         """Node ``n``'s controller entered normal mode at ``t`` with a bit rate other than its
         bus's. On hardware such a node only sees error frames (and drives them onto the bus);
         stest treats it as a configuration error and ends the simulation like a strict abort:
         every node killed, NodeCrashed (the same type as a node's own strict abort, so tests
-        handle every "this firmware cannot run here" failure alike)."""
+        handle every "this firmware cannot run here" failure alike). The comparison is exact:
+        the model's integer bit rate (PCLK1 // (BRP+1)(1+TS1+1+TS2+1)) against
+        ``CanBus.bitrate``, with no tolerance."""
         at = fmt_ms(t)
 
         def make() -> StestError:
