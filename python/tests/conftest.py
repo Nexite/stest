@@ -118,3 +118,14 @@ def exti_gpio_hal_exe() -> Path:
 @pytest.fixture
 def hal_direct_gpio_hal_exe() -> Path:
     return _exe("hal_direct_gpio_hal")
+
+
+@pytest.fixture
+def can_exe():
+    """Factory: can_exe(1 | 2 | "badrate") -> the CAN2 node firmware (can_node1, can_node2,
+    can_badrate: node 1 at 250 kbit/s)."""
+
+    def get(variant) -> Path:
+        return _exe(f"can_node{variant}" if isinstance(variant, int) else f"can_{variant}")
+
+    return get

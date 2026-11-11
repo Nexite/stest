@@ -104,6 +104,26 @@ foreach(variant TXRX TX)
     DEFINES SPI_VARIANT=SPI_${variant})
 endforeach()
 
+# CAN: CubeMX-style CAN2 node at 500 kbit/s (CAN1 clock for the shared filters; 16-bit list +
+# 32-bit mask banks; FIFO0 interrupt; id 0x100 + NODE_ID every 10 ms). One exe per node id
+# (can_node1, can_node2) plus can_badrate (node 1 with Prescaler 20: 250 kbit/s). CAN HAL
+# module enabled in can/Inc; handlers from blinky.
+set(_can ${CMAKE_CURRENT_SOURCE_DIR}/firmware/can)
+foreach(variant node1 node2 badrate)
+  if(variant STREQUAL "node2")
+    set(_defs NODE_ID=2)
+  elseif(variant STREQUAL "badrate")
+    set(_defs NODE_ID=1 CAN_PRESCALER=20)
+  else()
+    set(_defs NODE_ID=1)
+  endif()
+  stest_add_firmware(can_${variant}
+    CHIP STM32L496RG
+    SOURCES ${_can}/main.c ${_bl}/Src/stm32l4xx_it.c ${_bl}/Src/stm32l4xx_hal_msp.c
+    INCLUDE_DIRS ${_can}/Inc ${_bl}/Inc
+    DEFINES ${_defs})
+endforeach()
+
 # ITM/DWT: CMSIS ITM_SendChar logging every 100 ms + DWT CYCCNT across HAL_Delay(9) (blinky
 # scaffolding for clocks/handlers/MSP).
 stest_add_firmware(itm

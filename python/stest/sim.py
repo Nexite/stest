@@ -109,7 +109,12 @@ class Sim:
         self, name: str, exe: str | os.PathLike, env: dict | None = None, can: dict | None = None
     ) -> Node:
         """A firmware node. ``can`` wires its CAN controllers to buses of this Sim:
-        ``{"CAN2": bus}`` (a CanBus or a bus name); one controller per bus per node."""
+        ``{"CAN2": bus}`` (a CanBus or a bus name); one controller per bus per node. On each
+        bus the node is the sender ``name`` (its frames' ``LoggedFrame.sender``); its
+        controller's mode / TX request / abort events feed the bus at every quantum end
+        (``Node._can_flush``) and the bus's results reach the model as ``rx`` / ``tx_result``
+        inbox messages at their EOF. A controller entering normal mode with a bit rate other
+        than its bus's ends the simulation with NodeCrashed."""
         if self._started:
             raise StestError("nodes must be created before sim.start()")
         if any(n.name == name for n in self.nodes):
@@ -127,6 +132,8 @@ class Sim:
         for periph, bus in wiring:
             n.can[periph] = bus
             bus._attach_node(name, *_node_can_callbacks(n, periph))
+        if wiring:
+            self._can_hooks.append(n._can_flush)  # node index order: deterministic
         return n
 
     def can_bus(self, name: str, bitrate: int = 500_000) -> CanBus:
@@ -304,6 +311,22 @@ class Sim:
                         self._device_failed(dev, "every", e)
             finally:
                 self._can_cb_t = None
+
+    def _can_bitrate_mismatch(self, n: Node, periph: str, bus: CanBus, bitrate, t: int) -> NoReturn:
+        """Node ``n``'s controller entered normal mode at ``t`` with a bit rate other than its
+        bus's. On hardware such a node only sees error frames (and drives them onto the bus);
+        stest treats it as a configuration error and ends the simulation like a strict abort:
+        every node killed, NodeCrashed (the same type as a node's own strict abort, so tests
+        handle every "this firmware cannot run here" failure alike)."""
+        at = fmt_ms(t)
+
+        def make() -> StestError:
+            return NodeCrashed(
+                f"node {n.name!r} {periph} entered normal mode at virtual t={at}: bit rate {bitrate} does not "
+                f"match bus {bus.name!r} ({bus.bitrate}) (check the CAN bit timing: Prescaler, BS1, BS2, PCLK1)"
+            )
+
+        self._fail(make)
 
     def _device_failed(self, device: str, what: str, e: Exception) -> NoReturn:
         """A device callback raised mid-boundary: the buses' state is no longer consistent

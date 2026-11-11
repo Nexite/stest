@@ -32,6 +32,7 @@ STDOUT_KEEP_LINES = 200  # retained firmware stdout lines (Node.stdout_tail)
 _ITM_PARTIAL_PREFIX = "stest: ITM unterminated "
 _STDOUT_PARTIAL_PREFIX = "stest: stdout unterminated "
 LOG_SOURCES = ("any", "itm", "stdout")
+_CAN_KINDS = frozenset(("can_mode", "can_tx", "can_tx_abort"))
 
 
 class Node:
@@ -73,6 +74,9 @@ class Node:
         self._error_received = False
         self._spi_bursts: dict[str, list[SpiBurst]] = {}
         self.can: dict[str, Any] = {}  # CAN controller model name -> CanBus (Sim.node(can=...))
+        # can_mode / can_tx / can_tx_abort events of wired controllers, (t, event), not yet
+        # handed to their bus (Node._can_flush, run by the Sim at each quantum end)
+        self._can_pending: list[tuple[int, dict]] = []
 
     # ---- public API ----
     @property
@@ -464,6 +468,40 @@ class Node:
             self.sim._node_gone(self, f"protocol error: expected {expect.name}, got message type {mtype}")
         return payload
 
+    def _can_flush(self, T: int) -> None:
+        """Hand this quantum's CAN controller events to the buses (a ``Sim._can_hooks`` entry,
+        run at quantum end ``T`` before the bus engines), in the node's event order. The node
+        is sender ``self.name`` on each bus it is wired to (one controller per bus).
+
+        - ``can_mode`` -> ``bus._set_node_mode(mode, bitrate, t)``. Entering normal with a bit
+          rate other than the bus's ends the simulation (NodeCrashed, see
+          ``Sim._can_bitrate_mismatch``).
+        - ``can_tx`` -> ``bus._request(key=mailbox, frame, t, txfp, seq, nart)``.
+        - ``can_tx_abort`` (firmware ABRQ, and the withdrawals the model makes when it leaves
+          normal mode or is reset) -> ``bus._abort(mailbox, t)``.
+
+        Events of controllers not wired to a bus are ignored: such a controller transmits
+        into nothing (its requests stay pending, as on a board without a transceiver)."""
+        from .can.frame import CanFrame
+
+        pending, self._can_pending = self._can_pending, []
+        for t, d in pending:
+            periph = d["periph"]
+            bus = self.can[periph]
+            kind = d["kind"]
+            if kind == "can_mode":
+                mode, bitrate = d["mode"], d.get("bitrate")
+                if mode == "normal" and bitrate != bus.bitrate:
+                    self.sim._can_bitrate_mismatch(self, periph, bus, bitrate, t)
+                bus._set_node_mode(self.name, mode, bitrate, t)
+            elif kind == "can_tx":
+                frame = CanFrame(int(d["id"]), bytes.fromhex(d["data"]), ext=bool(d["ext"]),
+                                 rtr=bool(d["rtr"]), dlc=int(d["dlc"]))
+                bus._request(self.name, int(d["mailbox"]), frame, t, int(d["txfp"]), int(d["seq"]),
+                             nart=bool(d["nart"]))
+            else:
+                bus._abort(self.name, int(d["mailbox"]), t)
+
     def _record_events(self, events: list[tuple[int, str]]) -> list[tuple[int, int, int, str, str]]:
         """-> merge keys (t_ns, node_index, seq, node_name, json) for the Sim's event log."""
         out = []
@@ -483,6 +521,8 @@ class Node:
             elif data.get("kind") == "stdout":
                 self._stdout_log.append(data["text"])
                 self._output.append(("stdout", data["text"]))
+            elif data.get("kind") in _CAN_KINDS and data.get("periph") in self.can:
+                self._can_pending.append((t, data))
             out.append((t, self.index, self._seq, self.name, js))
             self._seq += 1
         return out
