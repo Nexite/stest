@@ -21,10 +21,11 @@ add_test(NAME selftest_blinky_speed
           $<TARGET_FILE:blinky> 5000 2.0)
 
 # Fault-injection firmware: one executable per variant (faults_spin, faults_crash,
-# faults_unmodelled, faults_ro_write, faults_clkoff, faults_printf, faults_abort_output, faults_partial_end). Uses no HAL, so the HAL archive is a single file; the HAL config
+# faults_unmodelled, faults_ro_write, faults_clkoff, faults_printf, faults_abort_output, faults_partial_end,
+# faults_abort_events). Uses no HAL, so the HAL archive is a single file; the HAL config
 # header is borrowed from blinky.
 stest_st_family_dirs(stm32l4 _st_hal _st_dev)
-foreach(variant SPIN CRASH UNMODELLED RO_WRITE CLKOFF PRINTF ABORT_OUTPUT PARTIAL_END)
+foreach(variant SPIN CRASH UNMODELLED RO_WRITE CLKOFF PRINTF ABORT_OUTPUT PARTIAL_END ABORT_EVENTS)
   string(TOLOWER ${variant} v)
   stest_add_firmware(faults_${v}
     CHIP STM32L496RG
@@ -50,6 +51,14 @@ stest_add_firmware(exti
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/firmware/exti/main.c ${_bl}/Src/stm32l4xx_it.c
           ${_bl}/Src/stm32l4xx_hal_msp.c
   INCLUDE_DIRS ${_bl}/Inc)
+# exti_wfe: the same, sleeping through ST's HAL_PWR_EnterSLEEPMode(..., PWR_SLEEPENTRY_WFE)
+# (SEV; WFE; WFE) with SysTick suspended: one EXTI interrupt wakes it.
+stest_add_firmware(exti_wfe
+  CHIP STM32L496RG
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/firmware/exti/main.c ${_bl}/Src/stm32l4xx_it.c
+          ${_bl}/Src/stm32l4xx_hal_msp.c
+  INCLUDE_DIRS ${_bl}/Inc
+  DEFINES EXTI_SLEEP_WFE=1)
 
 # TIM: CubeMX-style TIM7 20 kHz time base driving a software PWM on PA6 (TIM module enabled
 # in its own HAL config; handlers/MSP from blinky).
@@ -103,6 +112,31 @@ foreach(variant TXRX TX)
     DEFINES SPI_VARIANT=SPI_${variant})
 endforeach()
 
+# CAN: CubeMX-style CAN2 node at 500 kbit/s (CAN1 clock for the shared filters; 16-bit list +
+# 32-bit mask banks; FIFO0 interrupt; id 0x100 + NODE_ID every 10 ms). One exe per node id
+# (can_node1, can_node2) plus can_badrate (node 1 with Prescaler 20: 250 kbit/s), can_err (node 1
+# with the error notifications and CAN2_SCE interrupt) and can_abom (can_err with AutoBusOff).
+# CAN HAL module enabled in can/Inc; handlers from blinky.
+set(_can ${CMAKE_CURRENT_SOURCE_DIR}/firmware/can)
+foreach(variant node1 node2 badrate err abom)
+  if(variant STREQUAL "node2")
+    set(_defs NODE_ID=2)
+  elseif(variant STREQUAL "badrate")
+    set(_defs NODE_ID=1 CAN_PRESCALER=20)
+  elseif(variant STREQUAL "err")
+    set(_defs NODE_ID=1 CAN_ERR_NOTIFY=1)
+  elseif(variant STREQUAL "abom")
+    set(_defs NODE_ID=1 CAN_ERR_NOTIFY=1 CAN_ABOM=1)
+  else()
+    set(_defs NODE_ID=1)
+  endif()
+  stest_add_firmware(can_${variant}
+    CHIP STM32L496RG
+    SOURCES ${_can}/main.c ${_bl}/Src/stm32l4xx_it.c ${_bl}/Src/stm32l4xx_hal_msp.c
+    INCLUDE_DIRS ${_can}/Inc ${_bl}/Inc
+    DEFINES ${_defs})
+endforeach()
+
 # ITM/DWT: CMSIS ITM_SendChar logging every 100 ms + DWT CYCCNT across HAL_Delay(9) (blinky
 # scaffolding for clocks/handlers/MSP).
 stest_add_firmware(itm
@@ -147,6 +181,25 @@ stest_add_firmware(pollcount
   INCLUDE_DIRS ${_bl}/Inc
   HAL_SOURCES ${_st_hal}/Src/stm32l4xx_hal.c)
 
+# Tight polling of PA0 driven by timestamped inbox messages (python/tests/test_protocol_v2.py).
+stest_add_firmware(pollpin
+  CHIP STM32L496RG
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/firmware/pollpin/main.c
+  INCLUDE_DIRS ${_bl}/Inc
+  HAL_SOURCES ${_st_hal}/Src/stm32l4xx_hal.c)
+
+# WFI regression firmware: naive `for (;;) { __WFI(); <toggle PA0>; }` with a SysTick IRQ.
+# WFI must not wake at quantum ends: the log is the same for any quantum size.
+stest_add_firmware(wfiloop
+  CHIP STM32L496RG
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/firmware/wfiloop/main.c
+  INCLUDE_DIRS ${_bl}/Inc
+  HAL_SOURCES ${_st_hal}/Src/stm32l4xx_hal.c)
+add_test(NAME selftest_wfiloop_quantum_determinism
+  COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:wfiloop> -DRUN_MS=20 "-DQUANTA=1000;88;20"
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/check_blinky_determinism.cmake)
+set_tests_properties(selftest_wfiloop_quantum_determinism PROPERTIES TIMEOUT 30)
+
 # Configure-time checks of stest_add_firmware (compiler identity, CMSIS include dirs,
 # MODELS= types/modes).
 foreach(case bad_include bad_compiler models_unknown models_unsupported)
@@ -164,14 +217,23 @@ endforeach()
 
 # Python harness tests (python/tests) against the self-test executables. Uses uv with a
 # per-build-dir environment so native and container builds never share a venv.
+# Wall-clock speed budgets (@pytest.mark.perf) are load-sensitive: under `ctest -j8` they share
+# the CPU with the other tests (test_can_speed, sync-bound at the 88 us CAN quantum, reached
+# 0.97 of its budget alongside the nested configures), so they run alone in python_perf_tests
+# (RUN_SERIAL) and python_tests skips them. python/tests/test_perf_isolation.py checks both.
 find_program(STEST_UV uv)
 if(STEST_UV)
+  set(_py_env "STEST_SELFTEST_BIN=${CMAKE_CURRENT_BINARY_DIR};UV_PROJECT_ENVIRONMENT=${CMAKE_BINARY_DIR}/py-venv")
   add_test(NAME python_tests
     COMMAND ${STEST_UV} run --project ${PROJECT_SOURCE_DIR} pytest ${PROJECT_SOURCE_DIR}/python/tests -q
+            -m "not perf"
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
-  set_tests_properties(python_tests PROPERTIES
-    ENVIRONMENT "STEST_SELFTEST_BIN=${CMAKE_CURRENT_BINARY_DIR};UV_PROJECT_ENVIRONMENT=${CMAKE_BINARY_DIR}/py-venv"
-    TIMEOUT 300)
+  set_tests_properties(python_tests PROPERTIES ENVIRONMENT "${_py_env}" TIMEOUT 300)
+  add_test(NAME python_perf_tests
+    COMMAND ${STEST_UV} run --project ${PROJECT_SOURCE_DIR} pytest ${PROJECT_SOURCE_DIR}/python/tests -q
+            -m perf
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+  set_tests_properties(python_perf_tests PROPERTIES ENVIRONMENT "${_py_env}" TIMEOUT 300 RUN_SERIAL TRUE)
 else()
   message(WARNING "stest: uv not found; the python_tests CTest is not registered")
 endif()
@@ -179,3 +241,5 @@ endif()
 # Every CTest that runs a firmware/node executable gets a 30 s timeout.
 set_tests_properties(selftest_blinky_standalone selftest_blinky_quantum_determinism
   selftest_blinky_speed PROPERTIES TIMEOUT 30)
+# A wall-clock budget: run it alone (see python_perf_tests).
+set_tests_properties(selftest_blinky_speed PROPERTIES RUN_SERIAL TRUE)

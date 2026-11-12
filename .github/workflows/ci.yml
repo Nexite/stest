@@ -28,11 +28,17 @@ jobs:
           docker run --rm -v "$PWD":/w -w /w stest-ci \
             bash -c 'uv run spike/run_gate.py' 2>&1 | tee out/gate-linux-x86_64.txt
           test "${PIPESTATUS[0]}" -eq 0
+      - name: Speed gate at the CAN quantum, 88 us, + CAN two-node row (non-blocking; no-ACK worst case informational)
+        continue-on-error: true
+        run: |
+          docker run --rm -v "$PWD":/w -w /w stest-ci \
+            bash -c 'uv run spike/run_gate.py --quantum-us 88 --can-two-node --can-worst-case' 2>&1 | tee out/gate-can-linux-x86_64.txt
+          test "${PIPESTATUS[0]}" -eq 0
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: gate-linux-x86_64
-          path: out/gate-linux-x86_64.txt
+          path: out/gate-*linux-x86_64.txt
           if-no-files-found: warn
 
   macos:
@@ -57,9 +63,14 @@ jobs:
           mkdir -p out
           uv run spike/run_gate.py 2>&1 | tee out/gate-macos-arm64.txt
           test "${PIPESTATUS[0]}" -eq 0
+      - name: Speed gate at the CAN quantum, 88 us, + CAN two-node row (non-blocking; no-ACK worst case informational)
+        continue-on-error: true
+        run: |
+          uv run spike/run_gate.py --quantum-us 88 --can-two-node --can-worst-case 2>&1 | tee out/gate-can-macos-arm64.txt
+          test "${PIPESTATUS[0]}" -eq 0
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: gate-macos-arm64
-          path: out/gate-macos-arm64.txt
+          path: out/gate-*macos-arm64.txt
           if-no-files-found: warn

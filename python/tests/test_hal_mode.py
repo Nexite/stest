@@ -76,7 +76,7 @@ def test_hal_mode_direct_access_warns_once(hal_direct_gpio_hal_exe):
 def test_gen_chip_hal_marks_type_hal_owned(tmp_path):
     types = subprocess.run([sys.executable, _GEN, "--types", _TOML], capture_output=True, text=True, check=True)
     assert types.stdout.strip().split(";") == [
-        "ADC", "DAC", "EXTI", "FLASH", "GPIO", "PWR", "RCC", "SPI", "SYSCFG", "TIM",
+        "ADC", "BXCAN", "DAC", "EXTI", "FLASH", "GPIO", "PWR", "RCC", "SPI", "SYSCFG", "TIM",
     ]
     out = tmp_path / "chip.cpp"
     subprocess.run([sys.executable, _GEN, _TOML, out, "--hal", "GPIO"], check=True)

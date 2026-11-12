@@ -70,6 +70,7 @@ def test_timer_helper_errors(tim_exe):
             n.timer("TIM99").state()
 
 
+@pytest.mark.perf  # wall-clock budget: CTest python_perf_tests (RUN_SERIAL)
 def test_tim_speed_two_virtual_seconds(tim_exe):
     """Speed budget: <= 0.4 s wall per virtual second with a 20 kHz timer interrupt."""
     with Sim() as s:

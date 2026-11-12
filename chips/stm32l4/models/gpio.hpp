@@ -15,6 +15,10 @@
 //          "ospeedr_reset": u32 (default 0), "pupdr_reset": u32 (default 0)}
 // Signal edges(): see PinEdge.
 // call(): "get_pin" {pin} -> 0/1; "drive_pin" {pin, level}; "release_pin" {pin}.
+// deliver() (timestamped, from the control protocol inbox / Python Node.post, Pin.drive_at):
+// "drive_pin" {pin, level: 0 | 1 | null} at t schedules a Clock event at t that drives the
+// pin (null releases it, like release_pin); the resulting gpio event and PinEdge carry t
+// itself (exact, whatever the quantum).
 //
 // Analog voltage (ADC inputs, DAC outputs), per pin, independent of the digital level
 // above (it never changes IDR): an external voltage set from outside (call "set_voltage"
@@ -64,6 +68,7 @@ class Gpio : public Peripheral {
   void write(uint32_t off, unsigned width, uint32_t v) override;
   void reset() override;
   nlohmann::json call(std::string_view op, const nlohmann::json& args) override;
+  void deliver(std::string_view op, const nlohmann::json& args, uint64_t t_ns) override;
   std::string_view reg_name(uint32_t off) const override;
 
   int pin_level(unsigned pin) const;
@@ -86,7 +91,8 @@ class Gpio : public Peripheral {
   }
   int level_of(unsigned pin, const Snapshot& s) const;
   uint16_t levels() const;
-  void update();  // recompute levels, emit change events
+  void update() { update(clock_.now_ns()); }  // recompute levels, emit change events at now
+  void update(uint64_t t);                      // ... stamped t
   std::string name_;
   std::string port_;
   ModelContext& ctx_;

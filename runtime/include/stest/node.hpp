@@ -10,7 +10,8 @@
 //
 //   loop:     run_until(t) -> sets quantum end t, passes the baton, blocks
 //   firmware: runs until (a) an MMIO charge reaches t (runtime quantum hook),
-//             (b) wfi() sleeps to t (Cortexm quantum hook), or (c) main returns;
+//             (b) wfi() sleeps to t (Cortexm quantum hook; it keeps sleeping on resume
+//             until an exception wakes it), or (c) main returns;
 //             then passes the baton back and blocks (a, b) or ends (c)
 //   loop:     run_until returns Stop::Quantum / Stop::Exited
 //
@@ -73,9 +74,13 @@ class Node {
 
   // Creates the (parked) firmware thread: chip.startup() then fw(). Once only.
   void start(FirmwareMain fw);
-  // Runs the firmware until virtual time >= t_ns or firmware exit. If now >= t_ns it
-  // returns Stop::Quantum immediately without running firmware. After an MMIO-charge
-  // yield now may exceed t_ns by less than one access cost; a wfi yield stops at t_ns.
+  // Runs the firmware until it reaches the quantum end t_ns or exits. If now >= t_ns it
+  // returns Stop::Quantum immediately without running firmware. A Stop::Quantum return
+  // is always at now == t_ns with every Clock event at <= t_ns fired: an access whose
+  // charge would cross t_ns moves the clock to t_ns, yields, and completes the charge on
+  // the next call, so accesses and events happen at the same virtual times wherever the
+  // boundaries fall. On resume, Clock events the loop scheduled at now (inbox) fire
+  // before the firmware continues.
   Stop run_until(uint64_t t_ns);
 
   bool exited() const;

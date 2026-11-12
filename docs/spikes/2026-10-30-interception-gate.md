@@ -15,9 +15,12 @@ lighting-like load (20 kHz software-PWM ISR + 1 kHz main-loop tick)?
   path. Out-of-window -> direct host access + `now_ns += 25`. In-window
   (`[0x40000000,0x60000000)`, `[0xE0000000,0xE0100000)`) -> 64-entry page table -> indirect call
   through a function pointer into an array-backed register store + `now_ns += 25`.
-- `spike/bench_sync.cpp`: parent/child over `socketpair(AF_UNIX, SOCK_STREAM)`, 10,000 round
-  trips of a 16-byte RUN_UNTIL / 16-byte STOPPED exchange (100 us quantum, the CAN worst case).
-- `spike/run_gate.py`: Release build, 5 runs each, medians. Run with `uv run spike/run_gate.py`.
+- `spike/bench_sync.cpp`: parent/child over `socketpair(AF_UNIX, SOCK_STREAM)`, one virtual second
+  of 16-byte RUN_UNTIL / 16-byte STOPPED round trips: 10,000 at the default 100 us quantum
+  (`bench_sync [quantum_us]`; 11,364 at 88 us, see "CAN quantum" below).
+- `spike/run_gate.py`: Release build, 5 runs each, medians. Run with `uv run spike/run_gate.py`
+  (`--quantum-us US` for the sync quantum, `--build-dir DIR` to keep host and container builds
+  apart, `--can-worst-case` for the informational CAN row).
 
 ## Results
 
@@ -60,3 +63,74 @@ Sync dominates by ~70-300x (~99%): MMIO interception costs 2-4 ns per access
   virtual-second per node the 0.40 budget leaves room for the 100 us quantum on several nodes,
   and shared-memory + futex / `os_sync_wait_on_address` remains the recorded remedy if needed.
 - Docker Desktop on macOS runs Linux in a VM; socket timings there include VM scheduling.
+
+## CAN quantum (Plan 3, Task 8)
+
+A CAN bus caps the lockstep quantum at the shortest frame time, `lookahead_ns(bitrate)` = 44 bit
+times: **88 us at 500 kbit/s** (`docs/can.md`). The gate now runs at that quantum too:
+`uv run spike/run_gate.py --quantum-us 88 --can-worst-case` (CI: the second, non-blocking gate
+step on both jobs; artifacts `gate-can-*.txt`). Same rule: `median(mmio_s) + median(sync_s) <= 0.40`.
+
+The `--can-worst-case` row is **informational and never gated**: one `can_err` node alone on a
+500 kbit/s bus, retrying a frame nobody acknowledges forever (ACK error, error passive after 16
+attempts, then an attempt every ~156 us: the 140 us attempt period plus 16 us of suspend
+transmission, 6,410 attempts per virtual s; an SCE interrupt per error), measured end to end through the Python
+harness over 1 virtual second per run (`spike/gate_can_noack.py`, `noack_s` = wall s per virtual
+s). It includes everything the standard gate leaves out (the Python bus engine, inbox posts,
+the model, HAL error callbacks), so it is the single-node upper bound for CAN traffic.
+
+| Host | q | mmio_s median | sync_s runs (s) | sync_s median | total | verdict | noack_s runs (s) | noack_s median |
+|---|---|---|---|---|---|---|---|---|
+| macOS arm64 (M3 Pro, native) | 100 us | 0.000413 | 0.072914 0.057875 0.058325 0.057789 0.056463 | 0.057875 | 0.058288 | PASS | | |
+| macOS arm64 (M3 Pro, native) | 88 us | 0.000438 | 0.094629 0.064536 0.096442 0.058985 0.061948 | 0.064536 | 0.064974 | PASS | 0.359556 0.376951 0.335553 0.356970 0.371616 | 0.359556 |
+| Linux arm64 (Docker Desktop VM, same Mac, `build-gate-docker`) | 100 us | 0.000453 | 0.093273 0.096210 0.089236 0.087274 0.089846 | 0.089846 | 0.090299 | PASS | | |
+| Linux arm64 (Docker Desktop VM) | 88 us, run 1 | 0.000481 | 0.143918 0.138524 0.167682 0.156502 0.150372 | 0.150372 | 0.150853 | PASS | 0.322301 0.326619 0.337259 0.341444 0.364232 | 0.337259 |
+| Linux arm64 (Docker Desktop VM) | 88 us, run 2 | 0.000405 | 0.104000 0.102804 0.103506 0.101706 0.100342 | 0.102804 | 0.103209 | PASS | | |
+| **Linux x86-64 (GitHub Actions)** | 88 us | _pending: from the CI run of this branch (artifact `gate-can-linux-x86_64`)_ | | | | | | |
+
+Reading:
+- At 88 us the sync term grows by the quantum ratio (100/88 = 1.14x more round trips): native
+  0.058 -> 0.065, Docker 0.090 -> 0.103 (run 1, 0.151, was a noisy VM run). Plan 1's x86-64 CI
+  figure of 0.197 at 100 us scales to about **0.22-0.25 expected at 88 us**: inside the budget
+  for one node, but sync is per node, so a two-node CAN test costs about twice that.
+- The no-ACK worst case is 0.34-0.36 s per virtual second on both arm64 hosts (a re-run:
+  0.349 native at 6,410 ACK-error attempts per virtual second): under the 0.40 budget here,
+  without margin. Task 7 measured 0.43 native / 0.29 Docker for the same scenario (6,350
+  attempts/s, 1 virtual s, same Python 3.12.7); the difference is not explained. x86-64 CI,
+  slower on sync, may exceed 0.40. That row is informational: the budget applies to the
+  standard gate, and endless retries against a missing ACK are a fault scenario, not normal
+  traffic.
+- **Decision pending (user):** if the x86-64 standard gate at 88 us exceeds 0.40, sync cost
+  reduction (shared memory + futex / `os_sync_wait_on_address` instead of the socket round trip)
+  becomes a decision for the user, as recorded in the caveats above.
+
+### CAN two-node row (gated) and the WFI change (Plan 3 final fix wave)
+
+`--can-two-node` adds a **gated** row: `can_node1` and `can_node2` exchanging a frame each every
+10 ms on one 500 kbit/s bus (q = 88 us), measured end to end through the Python harness over
+1 virtual second per run after a 20 ms init (`spike/gate_can_two_node.py`, `two_node_s` = wall s
+per virtual s for the pair). Budget: 0.40 per node, **0.80** for the pair; the gate fails if the
+median is over it. CI runs it in the non-blocking 88 us step
+(`run_gate.py --quantum-us 88 --can-two-node --can-worst-case`). It replaces the tight wall
+assert of `test_can_speed` (now opt-in, `STEST_PERF_STRICT=1`).
+
+Measured after the WFI change (WFI sleeps across quantum ends instead of returning at each),
+5 runs each:
+
+| Host | q | mmio_s median | sync_s median | total | two_node_s runs (s) | two_node_s median | noack_s median |
+|---|---|---|---|---|---|---|---|
+| macOS arm64 (M3 Pro, native), before the WFI change | 100 us | 0.000427 | 0.059263 | 0.059690 | | | 0.337925 |
+| macOS arm64 (M3 Pro, native), before the WFI change | 88 us | 0.000421 | 0.063399 | 0.063820 | | | 0.343832 |
+| macOS arm64 (M3 Pro, native) | 100 us | 0.000399 | 0.059774 | 0.060173 | | | 0.348281 |
+| macOS arm64 (M3 Pro, native) | 88 us | 0.000398 | 0.064074 | 0.064472 | 0.355213 0.345693 0.352747 0.359714 0.341585 | **0.352747** (PASS) | 0.351227 |
+| Linux arm64 (Docker Desktop VM, `build-gate-docker`) | 100 us | 0.000447 | 0.097242 | 0.097689 | | | 0.317106 |
+| Linux arm64 (Docker Desktop VM, `build-gate-docker`) | 88 us | 0.000464 | 0.107897 | 0.108361 | 0.411289 0.442860 0.443022 0.515940 0.436516 | **0.442860** (PASS) | 0.313119 |
+| **Linux x86-64 (GitHub Actions)** | 88 us | _pending: CI artifact `gate-can-linux-x86_64`_ | | | | | |
+
+Reading: the standard gate and the no-ACK row do not change measurably with the WFI change
+(the sync benchmark and the no-ACK node are bound by the per-quantum handoff, which WFI still
+makes; what goes away is the firmware loop iteration after each handoff). The two-node CAN
+load costs 0.18 (native) to 0.22 (Docker) per node per virtual second, half the budget. On
+x86-64, where Plan 1 measured sync about 2x the arm64 Docker figure, expect about 0.6-0.9 for
+the pair: near the 0.80 budget, which is why the row is gated in CI's non-blocking step; above
+it, the plan's stop-and-ask rule applies (see the follow-ups file).

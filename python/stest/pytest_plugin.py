@@ -16,17 +16,29 @@ Registered through the ``pytest11`` entry point (installed with the package).
 * on failure each node's last 200 stderr lines, ITM port-0 log, last 200 firmware output lines
   (``Node.output``: ITM port 0 + stdout in virtual-time order), last 200 raw stdout lines and
   the merged event log are attached to the report as ``stest node <name> stderr`` / ``log`` /
-  ``output`` / ``stdout`` and ``stest events`` sections.
+  ``output`` / ``stdout`` and ``stest events`` sections, plus one ``stest can <bus>`` section per
+  CAN bus with its last 200 delivered frames in candump format (``CanBus.log``).
+* option ``--stest-can-log DIR``: after every test whose ``sim`` has CAN buses (passed or failed),
+  write each bus's full log as ``DIR/<test>-<bus>.log`` in candump format (the same text as
+  ``CanBus.export_candump``); ``<test>`` is the test's name (with parameters) and ``<bus>`` the bus
+  name, each with characters other than letters, digits, ``_``, ``.`` and ``-`` replaced by ``_``.
+  ``DIR`` is created if needed; existing files are overwritten (so are those of same-named tests
+  in different modules).
 """
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 
+from .can.log import format_candump
 from .sim import Sim
 
 EVENT_LOG_LINES = 500
 ITM_LOG_LINES = 200
+CAN_LOG_FRAMES = 200
 _SIM_KEY = pytest.StashKey[Sim]()
 
 
@@ -45,6 +57,9 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     g.addoption("--stest-no-debugger", action="store_true", default=None,
                 help="start without an attached debugger: ITM/DWT trace and DHCSR.C_DEBUGEN off, "
                      "so CMSIS ITM_SendChar drops output (default: debugger attached)")
+    g.addoption("--stest-can-log", default=None, metavar="DIR",
+                help="write every CAN bus's frames as candump files DIR/<test>-<bus>.log after each "
+                     "test that uses the sim fixture with CAN buses (passed or failed)")
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -84,7 +99,24 @@ def sim(request: pytest.FixtureRequest):
     try:
         yield s
     finally:
-        s.close()
+        try:
+            log_dir = cfg.getoption("--stest-can-log")
+            if log_dir is not None:
+                _write_can_logs(Path(log_dir), request.node.name, s)
+        finally:
+            s.close()
+
+
+def _safe(name: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", name)
+
+
+def _write_can_logs(log_dir: Path, test: str, s: Sim) -> None:
+    if not s._buses:
+        return
+    log_dir.mkdir(parents=True, exist_ok=True)
+    for bus in s._buses:
+        (log_dir / f"{_safe(test)}-{_safe(bus.name)}.log").write_text(format_candump(bus.log, bus.name))
 
 
 @pytest.hookimpl(wrapper=True)
@@ -117,4 +149,10 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
             if len(s.event_log) > len(log):
                 text = f"... ({len(s.event_log) - len(log)} earlier events omitted)\n" + text
             item.add_report_section(call.when, "stest events", text)
+        for bus in s._buses:
+            frames = bus.log[-CAN_LOG_FRAMES:]
+            text = format_candump(frames, bus.name).rstrip("\n") or "(no frames)"
+            if len(bus.log) > len(frames):
+                text = f"... ({len(bus.log) - len(frames)} earlier frames omitted)\n" + text
+            item.add_report_section(call.when, f"stest can {bus.name}", text)
     return (yield)

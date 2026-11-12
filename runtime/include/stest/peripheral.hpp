@@ -57,6 +57,16 @@ struct Peripheral {  // one instance per mapped block
   // (generated init, see model_context.hpp): look up peers, subscribe to their Signals.
   virtual void connect(ModelContext&) {}
   virtual nlohmann::json call(std::string_view op, const nlohmann::json& args);  // throws UnknownOp
+  // Timestamped message from outside the node (the inbox of the control protocol's RUN_UNTIL,
+  // Python's Node.post), e.g. a frame arriving from a bus another node is on. Called on the
+  // loop thread with the firmware parked, in posting order, before the node runs the next
+  // quantum; t_ns >= the node's current time (the control channel checks that). It must not
+  // change state now: schedule every effect as a Clock event at t_ns (model contract above),
+  // so the firmware sees it at exactly t_ns whatever the quantum. Throw UnknownOp for an
+  // unsupported op and std::invalid_argument (or any std::exception) for bad args: either is a
+  // strict abort naming the model, op and t (a harness bug, not firmware behaviour).
+  // Default: throws UnknownOp.
+  virtual void deliver(std::string_view op, const nlohmann::json& args, uint64_t t_ns);
   // Reference-manual name of the register at word offset `off` ("ODR"), or empty if the
   // model does not name it. Used in diagnostics only (e.g. the hal-mode warning, Bus).
   virtual std::string_view reg_name(uint32_t /*off*/) const { return {}; }

@@ -9,11 +9,15 @@ dependencies = [
     "pyelftools>=0.33",
 ]
 
+[project.optional-dependencies]
+# DBC support (stest.Dbc / DbcDevice): cantools, which depends on python-can (LGPL-3.0).
+dbc = ["cantools>=41"]
+
 [project.entry-points.pytest11]
 stest = "stest.pytest_plugin"
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "cantools>=41"]
 
 [build-system]
 requires = ["hatchling"]
@@ -24,3 +28,6 @@ packages = ["python/stest"]
 
 [tool.pytest.ini_options]
 testpaths = ["python/tests"]
+markers = [
+    "perf: wall-clock speed budget (load-sensitive; CTest runs these alone in python_perf_tests, RUN_SERIAL)",
+]

@@ -96,16 +96,30 @@ class Cortexm {
   bool faultmask() const;
   uint32_t ipsr() const;  // exception number being handled, 0 in thread mode
 
-  // If an exception is pending and eligible, deliver it and return. Otherwise advance
-  // the Clock to min(next_event, quantum_end), fire due events, then deliver().
-  // "Pending and eligible" ignores PRIMASK, as on hardware: with interrupts disabled
-  // wfi returns immediately without running the handler. Throws std::runtime_error
-  // if nothing could ever wake the core (no event and no quantum end).
-  // If the clock is at/after the quantum end once wfi has slept, the quantum hook (if
-  // set) is called before returning: the node yields its baton there, so a firmware
-  // `while (!x) __WFI();` loop runs exactly one iteration per quantum instead of
-  // spinning at the quantum end.
+  // Wait for interrupt (ARMv7-M WFI). Returns once an exception is pending that would
+  // preempt if PRIMASK were clear (then deliver() runs it, unless PRIMASK is set: as on
+  // hardware wfi then returns without running the handler), or one was taken while asleep.
+  // Otherwise it sleeps: the Clock advances to min(next_event, quantum_end), firing events
+  // at their own times; events that pend no exception (or a disabled / masked one) do not
+  // wake the core. At the quantum end the quantum hook (if set) is called and wfi keeps
+  // sleeping once it returns: the node yields its baton there, so a sleeping core costs one
+  // handoff per quantum and the firmware sees no wake-up that depends on the quantum size.
+  // On resume, events the loop thread scheduled at the current time (inbox) fire and an
+  // exception it pended (MODEL_CALL) wakes the core. wfi returns without waking if there is
+  // no hook or the hook came back without moving the quantum end (unit tests). Throws
+  // std::runtime_error if nothing could ever wake the core (no event and no quantum end).
+  // So `while (!x) __WFI();` with x written from Python sees x at the next interrupt.
   void wfi();
+  // WFE (ARMv7-M): if the event register is set, clear it and return at once (after the
+  // delivery point before the instruction). Otherwise sleep like wfi, also waking when the
+  // event register gets set; the register is cleared on waking. The event register is set by
+  // sev() (__SEV), by every exception entry and return, and, with SCB->SCR.SEVONPEND, by any
+  // interrupt that becomes pending (even a disabled or masked one). So ST's
+  // `__SEV(); __WFE(); __WFE();` (HAL_PWR_EnterSLEEPMode / STOP entry with WFE) sleeps until
+  // exactly one wake-up. No other event sources (no external event input, no multi-core SEV).
+  void wfe();
+  void sev();
+  bool event_register() const;
   void set_quantum_end(uint64_t t_ns);
   uint64_t quantum_end() const;
   void set_quantum_hook(QuantumHook h);  // null by default

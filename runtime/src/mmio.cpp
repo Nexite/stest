@@ -38,23 +38,42 @@ using stest::kPeriphSize;
 
 inline bool in_window(uint64_t a) { return stest::in_mmio_window(a); }
 
+// Moves the clock to `t`, firing every event up to it at its own time (Clock::advance_to).
 // Clock event callbacks (e.g. SysTick wraps) fire here; nothing may escape into
 // instrumented C.
-void run_due_events() {
-  try { g_clock.run_due(); }
+[[gnu::noinline]] void clock_to_slow(uint64_t t) {
+  try { g_clock.advance_to(t); }
   catch (const stest::NotModelled& e) { stest_rt_abort("%s", e.what()); }
   catch (const std::exception& e) { stest_rt_abort("exception in clock event: %s", e.what()); }
   catch (...) { stest_rt_abort("unknown exception in clock event"); }
 }
-// After the clock moved: fire due events, then yield at the quantum end.
-inline void settle() {
-  if (__builtin_expect(g_clock.next_event_ns() <= g_clock.now_ns(), 0)) run_due_events();
-  // Quantum end: events due at <= now have fired; hand control back (blocks).
-  if (__builtin_expect(g_clock.now_ns() >= g_quantum_end, 0) && g_qhook) g_qhook();
+inline void clock_to(uint64_t t) {
+  if (__builtin_expect(g_clock.next_event_ns() > t, 1)) g_clock.advance_to(t);  // no event: cannot throw
+  else clock_to_slow(t);
 }
+inline void run_due_now() { clock_to(g_clock.now_ns()); }
+// Hand the baton back at the quantum end (blocks). On resume the loop thread may have
+// scheduled events at the current time (inbox, protocol v2): they fire before the caller
+// continues, exactly as if they had been scheduled before the yield.
+inline void boundary_yield() {
+  g_qhook();
+  run_due_now();
+}
+// Move the clock to t (<= the quantum end), firing events up to it; yield if that is the
+// quantum end.
+inline void settle_at(uint64_t t) {
+  clock_to(t);
+  if (__builtin_expect(g_clock.now_ns() >= g_quantum_end, 0) && g_qhook) boundary_yield();
+}
+// The clock never moves past the quantum end: a charge that would cross it moves the clock
+// to exactly the quantum end (firing every event up to it), yields, and on resume completes
+// the charge. Events fire at their own times either way, so each access and each event
+// callback happens at the same virtual time wherever the quantum boundaries fall, and the
+// node always stops at exactly the quantum end.
 inline void charge() {
-  g_clock.advance(g_cost_ns);
-  settle();
+  const uint64_t target = g_clock.now_ns() + g_cost_ns;
+  while (__builtin_expect(target > g_quantum_end, 0) && g_qhook) settle_at(g_quantum_end);
+  settle_at(target);
 }
 void deliver() {
   if (!g_hook) return;
@@ -95,8 +114,7 @@ void fast_forward() {
   uint64_t target = std::min(g_clock.next_event_ns(), g_quantum_end);
   uint64_t now = g_clock.now_ns();
   if (target == UINT64_MAX || target <= now) return;
-  g_clock.advance(target - now);
-  settle();
+  settle_at(target);
   deliver();
 }
 

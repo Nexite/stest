@@ -32,6 +32,7 @@ STDOUT_KEEP_LINES = 200  # retained firmware stdout lines (Node.stdout_tail)
 _ITM_PARTIAL_PREFIX = "stest: ITM unterminated "
 _STDOUT_PARTIAL_PREFIX = "stest: stdout unterminated "
 LOG_SOURCES = ("any", "itm", "stdout")
+_CAN_KINDS = frozenset(("can_mode", "can_tx", "can_tx_abort"))
 
 
 class Node:
@@ -64,7 +65,20 @@ class Node:
         self._symbols_error: Exception | None = None
         self._resolved: dict[str, Any] = {}  # expr -> Resolved (static; valid for the node's lifetime)
         self._pin_history: dict[tuple[str, int], list[tuple[int, int]]] = {}
+        self._inbox: list[tuple[int, bytes]] = []  # Node.post messages for the next RUN_UNTIL
+        self._inbox_bytes = 0  # their encoded size in RUN_UNTIL
+        # Unterminated ITM/stdout lines the runtime reported on stderr at exit, as
+        # ("itm", port, text) / ("stdout", 0, text); folded into the logs by _join_stderr()
+        # (after any ERROR events, so they stay last) unless an ERROR frame carried them.
+        self._stderr_partials: list[tuple[str, int, str]] = []
+        self._error_received = False
         self._spi_bursts: dict[str, list[SpiBurst]] = {}
+        self.can: dict[str, Any] = {}  # CAN controller model name -> CanBus (Sim.node(can=...))
+        # can_mode / can_tx / can_tx_abort events of wired controllers, (t, event), not yet
+        # handed to their bus (Node._can_flush, run by the Sim at each quantum end)
+        self._can_pending: list[tuple[int, dict]] = []
+        # first can_tx of a controller not wired to a bus (t, periph): a strict abort (Sim._step)
+        self._can_unwired: tuple[int, str] | None = None
 
     # ---- public API ----
     @property
@@ -165,6 +179,33 @@ class Node:
     def spi(self, name: str) -> SpiBus:
         """SPI model ``name`` (e.g. "SPI1"): ``.bursts``, ``.queue_miso(data)``, ``.wait_for_bytes(n, timeout_ms)``."""
         return SpiBus(self, name)
+
+    def post(self, model: str, op: str, args: dict[str, Any], t_ns: int) -> None:
+        """Queue a timestamped message for peripheral model ``model``: it is sent with the
+        next quantum's RUN_UNTIL and applied, in posting order, before the node runs that
+        quantum, by the model's ``deliver(op, args, t_ns)`` (e.g. GPIO ``"drive_pin"``
+        ``{"pin": n, "level": 0 | 1 | None}``; see :meth:`Pin.drive_at`), which schedules its
+        effect at exactly ``t_ns`` of virtual time. ``t_ns`` must not be before the node's
+        time when the message arrives (``t_ns >= node.now_ns`` after the current quantum;
+        equal is fine). A message the node cannot apply (unknown model or op, bad args, a
+        past ``t_ns``) aborts the node with an ``stest: inbox message for ...`` message
+        (NodeCrashed on the next advance): it is a harness bug, not firmware behaviour."""
+        self.sim._check_usable()
+        if isinstance(t_ns, bool) or not isinstance(t_ns, int):
+            raise TypeError(f"post: t_ns must be an int number of ns (got {t_ns!r})")
+        if not 0 <= t_ns < 1 << 64:
+            raise ValueError(f"post: t_ns out of range: {t_ns}")
+        if not isinstance(args, dict):
+            raise TypeError(f"post: args must be a dict (got {type(args).__name__})")
+        js = proto.inbox_message(model, op, args)
+        size = self._inbox_bytes + proto.INBOX_ENTRY_OVERHEAD + len(js)
+        if proto.RUN_UNTIL_FIXED + size > proto.MAX_PAYLOAD:
+            raise StestError(
+                f"node {self.name!r}: post: the next quantum's inbox would exceed the protocol maximum of "
+                f"{proto.MAX_PAYLOAD} bytes (advance the simulation to flush it first)"
+            )
+        self._inbox.append((t_ns, js))
+        self._inbox_bytes = size
 
     def call(self, model: str, op: str, **args: Any) -> Any:
         """Call ``op`` on peripheral model ``model`` (e.g. "GPIOA"); returns its JSON result."""
@@ -276,17 +317,13 @@ class Node:
             if line.startswith(_ITM_PARTIAL_PREFIX):  # runtime flushed an unterminated ITM line
                 try:
                     d = json.loads(line[len(_ITM_PARTIAL_PREFIX):])
-                    port, text = int(d["port"]), str(d["text"])
-                    self._itm.setdefault(port, []).append(text)
-                    if port == 0:
-                        self._output.append(("itm", text))
+                    self._stderr_partials.append(("itm", int(d["port"]), str(d["text"])))
                 except (ValueError, KeyError, TypeError):
                     pass
             elif line.startswith(_STDOUT_PARTIAL_PREFIX):  # ... or an unterminated stdout line
                 try:
                     text = str(json.loads(line[len(_STDOUT_PARTIAL_PREFIX):])["text"])
-                    self._stdout_log.append(text)
-                    self._output.append(("stdout", text))
+                    self._stderr_partials.append(("stdout", 0, text))
                 except (ValueError, KeyError, TypeError):
                     pass
 
@@ -342,6 +379,22 @@ class Node:
             self._stderr_thread.join(timeout)
         if self._stdout_thread:
             self._stdout_thread.join(timeout)
+        self._fold_stderr_partials()
+
+    def _fold_stderr_partials(self) -> None:
+        """Final unterminated lines from stderr become the last log/output entries; after an
+        ERROR frame they are duplicates of its "partial" events and are dropped."""
+        parts, self._stderr_partials = self._stderr_partials, []
+        if self._error_received:
+            return
+        for source, port, text in parts:
+            if source == "itm":
+                self._itm.setdefault(port, []).append(text)
+                if port == 0:
+                    self._output.append(("itm", text))
+            else:
+                self._stdout_log.append(text)
+                self._output.append(("stdout", text))
 
     @property
     def _alive(self) -> bool:
@@ -394,7 +447,15 @@ class Node:
         except proto.ProtocolError as e:
             self.sim._node_gone(self, f"protocol error: {e}")
         if mtype == proto.Msg.ERROR:
-            self.sim._node_gone(self, payload.decode("utf-8", "replace"))
+            try:
+                msg, events = proto.parse_error(payload)
+            except proto.ProtocolError as e:
+                self.sim._node_gone(self, f"protocol error: {e}")
+            # The aborting quantum's events (and final partial lines) reach the logs, pin
+            # history and Sim.event_log before NodeCrashed is raised.
+            self._error_received = True
+            self.sim._flush_events(self._record_events(events))
+            self.sim._node_gone(self, msg)
         return mtype, payload
 
     def _request(self, msg: bytes, expect: proto.Msg, what: str) -> bytes:
@@ -408,6 +469,42 @@ class Node:
         if mtype != expect:
             self.sim._node_gone(self, f"protocol error: expected {expect.name}, got message type {mtype}")
         return payload
+
+    def _can_flush(self, T: int) -> None:
+        """Hand this quantum's CAN controller events to the buses (a ``Sim._can_hooks`` entry,
+        run at quantum end ``T`` before the bus engines), in the node's event order. The node
+        is sender ``self.name`` on each bus it is wired to (one controller per bus).
+
+        - ``can_mode`` -> ``bus._set_node_mode(mode, bitrate, t, abom=, reset=)`` (MCR.ABOM, and
+          MCR.RESET: the bus engine owns the error counters). Entering normal with a bit
+          rate other than the bus's ends the simulation (NodeCrashed, see
+          ``Sim._can_bitrate_mismatch``).
+        - ``can_tx`` -> ``bus._request(key=mailbox, frame, t, txfp, seq, nart)``.
+        - ``can_tx_abort`` (firmware ABRQ, and the withdrawals the model makes when it leaves
+          normal mode or is reset) -> ``bus._abort(mailbox, t)``.
+
+        Mode and abort events of controllers not wired to a bus are ignored; a ``can_tx`` from
+        one ends the simulation (NodeCrashed, ``Sim._can_unwired_tx``): the firmware transmits
+        on a controller the test did not connect, almost always a wiring mistake."""
+        from .can.frame import CanFrame
+
+        pending, self._can_pending = self._can_pending, []
+        for t, d in pending:
+            periph = d["periph"]
+            bus = self.can[periph]
+            kind = d["kind"]
+            if kind == "can_mode":
+                mode, bitrate = d["mode"], d.get("bitrate")
+                if mode == "normal" and bitrate != bus.bitrate:
+                    self.sim._can_bitrate_mismatch(self, periph, bus, bitrate, t)
+                bus._set_node_mode(self.name, mode, bitrate, t, abom=d.get("abom"), reset=bool(d.get("reset", False)))
+            elif kind == "can_tx":
+                frame = CanFrame(int(d["id"]), bytes.fromhex(d["data"]), ext=bool(d["ext"]),
+                                 rtr=bool(d["rtr"]), dlc=int(d["dlc"]))
+                bus._request(self.name, int(d["mailbox"]), frame, t, int(d["txfp"]), int(d["seq"]),
+                             nart=bool(d["nart"]))
+            else:
+                bus._abort(self.name, int(d["mailbox"]), t)
 
     def _record_events(self, events: list[tuple[int, str]]) -> list[tuple[int, int, int, str, str]]:
         """-> merge keys (t_ns, node_index, seq, node_name, json) for the Sim's event log."""
@@ -428,6 +525,11 @@ class Node:
             elif data.get("kind") == "stdout":
                 self._stdout_log.append(data["text"])
                 self._output.append(("stdout", data["text"]))
+            elif data.get("kind") in _CAN_KINDS:
+                if data.get("periph") in self.can:
+                    self._can_pending.append((t, data))
+                elif data["kind"] == "can_tx" and self._can_unwired is None:
+                    self._can_unwired = (t, str(data.get("periph")))  # Sim._step fails the run
             out.append((t, self.index, self._seq, self.name, js))
             self._seq += 1
         return out
