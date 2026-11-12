@@ -28,4 +28,7 @@ BO_ 2566853172 ExtInfo: 4 Ecu
  SG_ Level : 0|16@1+ (1,0) [0|65535] "" Tester
  SG_ Flags : 16|8@1+ (1,0) [0|255] "" Tester
 
+BO_ 2147483904 LowExt: 2 Ecu
+ SG_ X : 0|16@1+ (1,0) [0|65535] "" Tester
+
 VAL_ 256 Mode 0 "Off" 1 "Standby" 2 "Run" 3 "Fault" ;

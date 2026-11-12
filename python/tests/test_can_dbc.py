@@ -40,7 +40,7 @@ def test_extended_and_unknown_ids(dbc):
     assert dbc.decode(f) == ("ExtInfo", {"Level": 513, "Flags": 5})
     assert dbc.decode(CanFrame(0x18FF1234 & 0x7FF, b"\x00" * 4)) is None  # unrelated std id
     assert dbc.decode(CanFrame(0x7FF, b"\x00")) is None
-    assert dbc.decode(CanFrame(0x100, ext=True, data=b"\x00" * 8)) is None  # ext/std mismatch
+    assert dbc.decode(CanFrame(0x7F0, ext=True, data=b"\x00" * 8)) is None  # ext/std mismatch
     assert dbc.decode(CanFrame(0x100, rtr=True, dlc=8)) is None
 
 
@@ -168,3 +168,28 @@ def test_firmware_echo_wait_for_message(can_exe, dbc, quantum_us):
         assert tester.received["Reply"][0] == t
         # exact: the 4th request goes out at 1 ms + 4 x 5 ms
         assert req[3][0] == 1_000_000 + 20_000_000 + dbc.encode("Request", {"Cmd": 4}).duration_ns(BR)
+
+
+def test_low_id_extended_shares_id_with_standard(dbc):
+    f = dbc.encode("LowExt", {"X": 5})
+    assert f.ext and f.id == 0x100
+    assert dbc.decode(f) == ("LowExt", {"X": 5})
+    std = dbc.encode("Status", {"Speed": 0, "Torque": 0, "Temp": -40, "Mode": 0, "Counter": 0})
+    assert not std.ext and dbc.decode(std)[0] == "Status"
+    # a standard frame never matches the extended message, nor vice versa
+    assert dbc.decode(CanFrame(0x101, b"\x05\x00")) is None
+    assert dbc.decode(CanFrame(0x101, b"\x05\x00", ext=True)) is None
+
+
+def test_wait_for_message_low_id_extended(dbc):
+    sim = Sim()
+    bus = sim.can_bus("b", BR)
+    a = bus.attach(DbcDevice("a", dbc))
+    b = bus.attach(DbcDevice("b", dbc))
+    a.send_message("LowExt", X=77)
+    sim.start()
+    t, sig = bus.wait_for_message(dbc, "LowExt", timeout_ms=10)
+    assert sig == {"X": 77}
+    assert [m for _, m, _ in bus.messages(dbc)] == ["LowExt"]
+    assert b.received["LowExt"] == (t, {"X": 77})
+    sim.close()

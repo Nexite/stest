@@ -58,7 +58,7 @@ class Dbc:
         if frame.rtr:
             return None
         try:
-            msg = self.db.get_message_by_frame_id(frame.id)
+            msg = self.db.get_message_by_frame_id(frame.id, force_extended_id=frame.ext)
         except KeyError:
             return None
         if msg.is_extended_frame != frame.ext:
