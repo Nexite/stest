@@ -5,7 +5,6 @@ injection, bus-off and recovery: the bus engine with scripted fake nodes, and fi
 from __future__ import annotations
 
 import json
-import time
 
 import pytest
 
@@ -473,6 +472,7 @@ def first_tx(sim: Sim, node: str) -> int:
 
 
 def test_no_ack_alone(can_exe):
+    # Its wall-time cost (the CAN worst case) is measured by spike/run_gate.py --can-worst-case.
     with Sim() as s:
         bus = s.can_bus("drive", BR)
         n = s.node("n", can_exe("err"), can={"CAN2": bus})
@@ -482,9 +482,7 @@ def test_no_ack_alone(can_exe):
         f = CanFrame(0x101, b"\x00")
         bits = f.bit_length()
         period = (bits + 12) * BIT + IFS
-        t0 = time.perf_counter()
         s.advance(ns=t_req + 16 * period + 1_000_000 - s.now_ns)  # 16 attempts, then 1 ms passive
-        wall = time.perf_counter() - t0
         assert s.now_ns == t_req + 16 * period + 1_000_000  # the simulation progresses
         assert bus.log == []
         acks = [e for e in bus.errors if e["kind"] == "ack"]
@@ -501,7 +499,6 @@ def test_no_ack_alone(can_exe):
         assert tsr & 0xFF == 0x08 and not tsr & (1 << 26)  # TERR0, mailbox 0 still pending
         assert n.var("err_code_or") & (HAL_ACK | HAL_EWG | HAL_EPV) == HAL_ACK | HAL_EWG | HAL_EPV
         assert n.var("sce_count") >= len(acks) - 1  # one SCE interrupt per error (LECIE)
-        print(f"test_no_ack_alone: {wall:.3f} s wall for {(s.now_ns - 10_100_000) / 1e6:.2f} virtual ms")
 
 
 def inject_scenario(can_exe, q_us: int):

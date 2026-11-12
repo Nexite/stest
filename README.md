@@ -1,6 +1,6 @@
 # stest
 
-stest is an open-source (Apache-2.0) software-in-the-loop simulator for STM32 firmware. Firmware is compiled natively with upstream LLVM clang plus the stest pass plugin, which rewrites volatile (memory-mapped I/O) accesses into calls to a simulated peripheral runtime, so unmodified firmware sources (HAL included) run on a host machine in deterministic virtual time (nanoseconds). A Python harness (a pytest plugin) drives one or more firmware nodes in lockstep, reads and writes pins and firmware variables, and reports failures with the nodes' stderr and a merged event log. Plan 1 ships the STM32L496 chip package and a blinky self-test firmware.
+stest is an open-source (Apache-2.0) software-in-the-loop simulator for STM32 firmware. Firmware is compiled natively with upstream LLVM clang plus the stest pass plugin, which rewrites volatile (memory-mapped I/O) accesses into calls to a simulated peripheral runtime, so unmodified firmware sources (HAL included) run on a host machine in deterministic virtual time (nanoseconds). A Python harness (a pytest plugin) drives one or more firmware nodes in lockstep, reads and writes pins and firmware variables, and reports failures with the nodes' stderr and a merged event log. It ships the STM32L496 chip package (RCC, PWR, FLASH, GPIO, EXTI/SYSCFG, TIM, ADC, DAC, SPI, bxCAN, plus the Cortex-M core, ITM and DWT) with self-test firmware for each, and simulated CAN buses that connect firmware nodes and Python devices.
 
 ## Requirements
 
@@ -56,7 +56,7 @@ def test_blinky_toggles_pa5(sim):
     assert node.var("uwTick") > 0          # firmware variables by name
 ```
 
-Options: `--stest-quantum-us` (lockstep quantum, default 1000) and `--stest-wall-timeout` (wall-clock seconds for any blocking wait, default 30). Override per test with `@pytest.mark.stest(quantum_us=100, wall_timeout_s=5)`. When a test fails, the report includes each node's last 200 stderr lines and the merged event log.
+Options: `--stest-quantum-us` (lockstep quantum, default 1000) and `--stest-wall-timeout` (wall-clock seconds for any blocking wait, default 30). Override per test with `@pytest.mark.stest(quantum_us=100, wall_timeout_s=5)`. When a test fails, the report includes each node's last 200 stderr lines, its firmware output, the merged event log and, per CAN bus, the last 200 frames in candump format; `--stest-can-log DIR` also writes every bus's frames to `DIR/<test>-<bus>.log`.
 
 Analog inputs: `node.pin("PB1").set_voltage(1.65)` (or `node.adc(1).set(16, 1.65)`, resolved through the part TOML's `[[analog]]` pin table) applies a voltage the ADC converts (only analog-capable pins accept one: ADC inputs from the `[[analog]]` table and DAC outputs; any other pin raises `StestError`); `node.pin("PA4").voltage` and `node.dac(1).channel(1).volts` read a DAC output. Converting a channel with no voltage set reads 0 V and prints one warning per channel; make it abort instead with `Sim(strict_analog=True)`, `--stest-strict-analog`, `@pytest.mark.stest(strict_analog=True)`, or the node env var `STEST_STRICT_ANALOG=1`.
 
@@ -65,6 +65,8 @@ Firmware logging: **use `node.output` and `node.wait_for_log(...)` (default `sou
 Poll fast-forward: after 64 store-free loads that re-read already-seen (address, width, value) tuples, a node jumps its clock to the next scheduled event or the quantum end. For loops that poll a hardware value this is exact. A loop that counts iterations in a non-volatile local while reading constant volatile values (`while (--n && !(REG & FLAG));`, flag never set) is time-dilated by it (potentially hundreds of times longer than on hardware, and quantum-dependent when no event is pending). Control the threshold with `Sim(..., poll_skip=N)`, `--stest-poll-skip N`, `@pytest.mark.stest(poll_skip=N)`, or the node env var `STEST_POLL_SKIP=N`; `0` disables it, the default is 64.
 
 HAL mode: by default every peripheral is simulated at the register level (ST's HAL compiles unchanged and its register accesses reach the models). `stest_add_firmware(<name> CHIP ... SOURCES ... MODELS GPIO=hal)` instead replaces ST's `stm32l4xx_hal_gpio.c` with stest's shim (`chips/stm32l4/hal/`), which drives the GPIO model directly while keeping its registers, pins, EXTI setup, event times and IRQs identical to register mode. Firmware that still writes a hal-mode block directly works but gets one stderr warning per register (`stest: warning: firmware accessed GPIOA ODR directly while GPIO is in hal mode`). `MODELS <TYPE>=register` is the default; unknown types and types without a shim (only GPIO has one so far) fail at configure time.
+
+CAN: `bus = sim.can_bus("drive", 500_000)` creates a simulated bus and `sim.node("n1", exe, can={"CAN2": bus})` wires a firmware node's bxCAN controller to it; Python devices (`CanDevice`, DBC-aware `DbcDevice`), `bus.wait_for_frame` / `wait_for_message`, error injection and fault confinement (TEC/REC, error passive, bus-off and recovery) are covered in [docs/can.md](docs/can.md). A bus caps the quantum at the shortest frame time (88 us at 500 kbit/s). DBC support uses cantools, which depends on python-can (LGPL-3.0).
 
 ## Design
 
