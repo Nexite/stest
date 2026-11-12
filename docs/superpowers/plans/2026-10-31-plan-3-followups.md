@@ -23,7 +23,7 @@ Decisions made during Plan 3 (CAN) execution and deferred findings, for Plan 4+.
 - Task 6 tests: "contend ... arbitration by id" wording (it is one sender's queue order); a duplicate assert; `test.dbc` has 5 messages where the text says 3; no true cross-match negative test (a standard-only id queried as extended).
 - Task 7: no test of a bus-off node as the only possible ACKer; `_inject` entries whose target never sends never expire (document).
 - Task 8: the perf-isolation AST guard misses from-imports, helpers, class and async tests; the CTest check errors instead of skipping outside a CTest build; a relative `--stest-can-log DIR` is resolved at teardown cwd (resolve in `pytest_configure`); no two-bus failure-section order test; `--stest-can-log` file names collide across modules (use nodeid-derived names); no tests for the gate scripts.
-- Final fix wave: `__WFE` maps to the same runtime call as `__WFI`, so it has WFI semantics (no event register, SEV or SCR.SEVONPEND wake-ups). Model WFE if firmware relies on it.
+- WFE models the ARMv7-M event register (`__SEV`, exception entry/return, SCR.SEVONPEND) but no other event sources (external event input, multi-core SEV, debug events).
 
 ## Rulings (final review; all judged to hold)
 - Engine <-> node API: `_request` / `_abort` / `_set_node_mode`, `on_rx` / `on_tx_result`, results bound to a request sequence number.
@@ -42,6 +42,6 @@ Decisions made during Plan 3 (CAN) execution and deferred findings, for Plan 4+.
 - REC resets to 120 per RM0351 (overrides the plan's 127).
 - ESR TEC shows the low byte of the 9-bit counter.
 - x86 gate numbers come from CI (the Linux box has no toolchain and is not to be modified).
-- WFI sleeps across quantum ends until an exception is pending or taken (final fix wave).
+- WFI sleeps across quantum ends until an exception is pending or taken (final fix wave); WFE models the event register so ST's `__SEV(); __WFE(); __WFE();` sleep entry wakes on one interrupt (re-review fix).
 - `docs/superpowers/RESUME.md` removed from the branch (stale, named first-user-project paths).
 - `test_can_speed`'s 1.6 s wall budget is opt-in (`STEST_PERF_STRICT=1`); the gated CAN speed figure is `spike/run_gate.py --can-two-node` (final fix wave).

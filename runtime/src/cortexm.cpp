@@ -234,6 +234,8 @@ struct Cortexm::Impl {
   bool ext_ref = false;
   QuantumHook quantum_hook = nullptr;
   uint64_t n_taken = 0;  // exceptions taken so far (wfi wake condition)
+  bool event_reg = false;  // ARMv7-M event register (SEV, exception entry/return, SEVONPEND)
+  static constexpr uint32_t kScrSevOnPend = 1u << 4;
   uint32_t st_ctrl = 0, st_load = 0;
   bool st_countflag = false;
   // Counter state: running -> value st_val at tick boundary st_t0, counting at st_freq;
@@ -280,6 +282,7 @@ struct Cortexm::Impl {
     if (pend[exc] == on) return;
     pend[exc] = on;
     if (on) ++n_pend; else --n_pend;
+    if (on && (scr & kScrSevOnPend)) event_reg = true;  // SEVONPEND: any new pending is a WFE event
   }
   // Software clear (NVIC ICPR, Cortexm::clear_pending). On ARMv7-M a level-sensitive
   // input that is still asserted re-pends immediately, so clearing only sticks once the
@@ -316,6 +319,7 @@ struct Cortexm::Impl {
   uint32_t ipsr() const { return stack.empty() ? 0u : uint32_t(stack.back()); }
   void run(int exc) {
     ++n_taken;
+    event_reg = true;  // exception entry (and, below, return) set the event register
     if (act[exc]) throw std::logic_error("exception " + std::to_string(exc) + " already active");
     IrqHandler h = table[exc];
     if (!h) throw std::runtime_error("no handler for exception " + std::to_string(exc));
@@ -326,10 +330,57 @@ struct Cortexm::Impl {
     h();
     stack.pop_back();
     act[exc] = 0;
+    event_reg = true;
     if (lvl[exc]) set_pend(exc, true);  // input still asserted on exception return: re-pend
   }
   void deliver() {
     for (int e; (e = select()) >= 0;) run(e);
+  }
+
+  // WFI / WFE (see Cortexm::wfi). WFE first: a set event register is cleared and WFE
+  // returns at once; asleep, WFE also wakes when the event register gets set (SEVONPEND).
+  // Wake-ups are checked at the top of the loop, before delivery, so an exception taken on
+  // waking sets the event register after WFE cleared it, as on hardware.
+  void sleep(bool wfe) {
+    if (wfe) {
+      clock.run_due();
+      deliver();  // instruction boundary before WFE executes
+      if (event_reg) {
+        event_reg = false;
+        return;
+      }
+    }
+    const uint64_t taken0 = n_taken;
+    bool slept = false;
+    for (;;) {
+      clock.run_due();
+      // Wake: an exception was taken while asleep, or one is pending that would preempt if
+      // PRIMASK were clear (ARMv7-M WFI ignores PRIMASK: it returns without running it), or
+      // (WFE) the event register was set.
+      if (n_taken != taken0 || select(/*with_primask=*/false) >= 0 || (wfe && event_reg)) {
+        if (slept) poll_streak_break();
+        if (wfe) event_reg = false;
+        deliver();
+        return;
+      }
+      if (clock.now_ns() >= quantum_end) {
+        if (!quantum_hook) return;
+        // Still asleep at the quantum end: hand the baton back and keep sleeping once the
+        // loop has set a later quantum end. Events the loop thread scheduled at the current
+        // time (inbox) fire, and IRQs it raised (MODEL_CALL) wake the core, at the loop top.
+        quantum_hook();
+        slept = true;
+        if (clock.now_ns() >= quantum_end) return;  // the hook did not move the quantum end
+        continue;
+      }
+      uint64_t target = std::min(clock.next_event_ns(), quantum_end);
+      if (target == UINT64_MAX)
+        throw std::runtime_error(std::string(wfe ? "wfe" : "wfi") +
+                                 ": nothing can wake the core (no pending exception, "
+                                 "no clock event, no quantum end)");
+      clock.advance_to(target);  // fires every event up to target at its own time
+      slept = true;
+    }
   }
 
   // ---- SysTick ----
@@ -510,38 +561,10 @@ void Cortexm::set_faultmask(bool on) {
 bool Cortexm::faultmask() const { return impl_->faultmask; }
 uint32_t Cortexm::ipsr() const { return impl_->ipsr(); }
 
-void Cortexm::wfi() {
-  Impl& c = *impl_;
-  const uint64_t taken0 = c.n_taken;
-  bool slept = false;
-  for (;;) {
-    c.clock.run_due();
-    // Wake: an exception was taken while asleep, or one is pending that would preempt if
-    // PRIMASK were clear (ARMv7-M WFI ignores PRIMASK: it returns without running it).
-    if (c.n_taken != taken0 || c.select(/*with_primask=*/false) >= 0) {
-      if (slept) poll_streak_break();
-      c.deliver();
-      return;
-    }
-    if (c.clock.now_ns() >= c.quantum_end) {
-      if (!c.quantum_hook) return;
-      // Still asleep at the quantum end: hand the baton back and keep sleeping once the loop
-      // has set a later quantum end. Events the loop thread scheduled at the current time
-      // (inbox) fire, and IRQs it raised (MODEL_CALL) wake the core, at the top of the loop.
-      c.quantum_hook();
-      slept = true;
-      if (c.clock.now_ns() >= c.quantum_end) return;  // the hook did not move the quantum end
-      continue;
-    }
-    uint64_t target = std::min(c.clock.next_event_ns(), c.quantum_end);
-    if (target == UINT64_MAX)
-      throw std::runtime_error("wfi: nothing can wake the core (no pending exception, "
-                               "no clock event, no quantum end)");
-    c.clock.advance_to(target);  // fires every event up to target at its own time
-    slept = true;
-    c.deliver();  // exceptions the events pended (counted in n_taken)
-  }
-}
+void Cortexm::wfi() { impl_->sleep(/*wfe=*/false); }
+void Cortexm::wfe() { impl_->sleep(/*wfe=*/true); }
+void Cortexm::sev() { impl_->event_reg = true; }
+bool Cortexm::event_register() const { return impl_->event_reg; }
 void Cortexm::set_quantum_hook(QuantumHook h) { impl_->quantum_hook = h; }
 void Cortexm::set_quantum_end(uint64_t t_ns) { impl_->quantum_end = t_ns; }
 uint64_t Cortexm::quantum_end() const { return impl_->quantum_end; }
@@ -585,6 +608,8 @@ template <class F> auto guarded(const char* what, F f) -> decltype(f(*stest::Cor
 
 extern "C" {
 void stest_rt_wfi(void) { guarded("stest_rt_wfi", [](stest::Cortexm& c) { c.wfi(); }); }
+void stest_rt_wfe(void) { guarded("stest_rt_wfe", [](stest::Cortexm& c) { c.wfe(); }); }
+void stest_rt_sev(void) { guarded("stest_rt_sev", [](stest::Cortexm& c) { c.sev(); }); }
 void stest_rt_enable_irq(void) {
   guarded("stest_rt_enable_irq", [](stest::Cortexm& c) { c.set_primask(false); });
 }

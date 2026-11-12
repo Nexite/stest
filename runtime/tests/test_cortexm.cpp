@@ -234,6 +234,85 @@ TEST_CASE("cortexm: wfi keeps sleeping across quantum ends until an exception wa
   g_hclock = nullptr;
 }
 
+// ---- WFE and the event register ----
+
+TEST_CASE("cortexm: SEV; WFE; WFE returns after exactly one interrupt (HAL WFE sleep entry)") {
+  Rig r;
+  r.enable(3);
+  r.core->set_quantum_end(10 * MS);
+  r.clock.schedule_at(3 * MS, [&] { r.core->set_pending(3); });
+  r.clock.schedule_at(6 * MS, [&] { r.core->set_pending(3); });
+  r.core->sev();
+  CHECK(r.core->event_register());
+  r.core->wfe();  // consumes the event set by SEV: returns at once
+  CHECK(r.clock.now_ns() == 0);
+  CHECK_FALSE(r.core->event_register());
+  r.core->wfe();  // sleeps until the 3 ms interrupt
+  CHECK(r.clock.now_ns() == 3 * MS);
+  CHECK(r.count_irq(3) == 1);
+  // exception entry/return set the event register: the next WFE returns at once (ARMv7-M)
+  CHECK(r.core->event_register());
+  r.core->wfe();
+  CHECK(r.clock.now_ns() == 3 * MS);
+  r.core->wfe();
+  CHECK(r.clock.now_ns() == 6 * MS);
+  CHECK(r.count_irq(3) == 2);
+}
+
+TEST_CASE("cortexm: WFE without an event sleeps through events that pend nothing; WFI ignores the event register") {
+  Rig r;
+  r.core->set_quantum_end(5 * MS);
+  r.clock.schedule_at(2 * MS, [] {});
+  r.core->wfe();
+  CHECK(r.clock.now_ns() == 5 * MS);
+  Rig r2;
+  r2.enable(3);
+  r2.core->set_quantum_end(5 * MS);
+  r2.clock.schedule_at(2 * MS, [&] { r2.core->set_pending(3); });
+  r2.core->sev();
+  r2.core->wfi();  // WFI does not consume or wake on the event register
+  CHECK(r2.clock.now_ns() == 2 * MS);
+  CHECK(r2.count_irq(3) == 1);
+}
+
+TEST_CASE("cortexm: SCR.SEVONPEND: a newly pending disabled IRQ wakes WFE, not WFI") {
+  Rig r;
+  r.core->set_quantum_end(10 * MS);
+  r.clock.schedule_at(2 * MS, [&] { r.core->set_pending(4); });  // IRQ 4 disabled
+  SUBCASE("SEVONPEND = 0: no wake") {
+    r.core->wfe();
+    CHECK(r.clock.now_ns() == 10 * MS);
+  }
+  SUBCASE("SEVONPEND = 1: WFE wakes at the pend, the IRQ stays pending") {
+    r.w32(0xE000ED10, 1u << 4);
+    CHECK(r.r32(0xE000ED10) == (1u << 4));
+    r.core->wfe();
+    CHECK(r.clock.now_ns() == 2 * MS);
+    CHECK(r.core->pending(4));
+    CHECK_FALSE(r.core->event_register());  // consumed by the wake
+    r.core->set_pending(4);  // already pending: not a new pend, no event
+    CHECK_FALSE(r.core->event_register());
+  }
+  SUBCASE("SEVONPEND = 1: WFI still ignores a disabled IRQ") {
+    r.w32(0xE000ED10, 1u << 4);
+    r.core->wfi();
+    CHECK(r.clock.now_ns() == 10 * MS);
+  }
+}
+
+TEST_CASE("cortexm: WFE with PRIMASK set wakes on a pending enabled IRQ without running it") {
+  Rig r;
+  r.enable(3);
+  r.core->set_quantum_end(10 * MS);
+  r.clock.schedule_at(2 * MS, [&] { r.core->set_pending(3); });
+  r.core->set_primask(true);
+  r.core->wfe();
+  CHECK(r.clock.now_ns() == 2 * MS);
+  CHECK(r.count_irq(3) == 0);
+  r.core->set_primask(false);
+  CHECK(r.count_irq(3) == 1);
+}
+
 // ---- dispatcher ----
 
 TEST_CASE("cortexm: equal priority does not preempt; it tail-chains") {

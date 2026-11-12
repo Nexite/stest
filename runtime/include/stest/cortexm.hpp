@@ -110,6 +110,16 @@ class Cortexm {
   // std::runtime_error if nothing could ever wake the core (no event and no quantum end).
   // So `while (!x) __WFI();` with x written from Python sees x at the next interrupt.
   void wfi();
+  // WFE (ARMv7-M): if the event register is set, clear it and return at once (after the
+  // delivery point before the instruction). Otherwise sleep like wfi, also waking when the
+  // event register gets set; the register is cleared on waking. The event register is set by
+  // sev() (__SEV), by every exception entry and return, and, with SCB->SCR.SEVONPEND, by any
+  // interrupt that becomes pending (even a disabled or masked one). So ST's
+  // `__SEV(); __WFE(); __WFE();` (HAL_PWR_EnterSLEEPMode / STOP entry with WFE) sleeps until
+  // exactly one wake-up. No other event sources (no external event input, no multi-core SEV).
+  void wfe();
+  void sev();
+  bool event_register() const;
   void set_quantum_end(uint64_t t_ns);
   uint64_t quantum_end() const;
   void set_quantum_hook(QuantumHook h);  // null by default

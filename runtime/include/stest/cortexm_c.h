@@ -9,7 +9,9 @@
 extern "C" {
 #endif
 
-void stest_rt_wfi(void);                 /* __WFI / __WFE */
+void stest_rt_wfi(void);                 /* __WFI */
+void stest_rt_wfe(void);                 /* __WFE */
+void stest_rt_sev(void);                 /* __SEV: set the event register */
 void stest_rt_enable_irq(void);          /* PRIMASK = 0 (delivery point) */
 void stest_rt_disable_irq(void);         /* PRIMASK = 1 */
 uint32_t stest_rt_get_primask(void);

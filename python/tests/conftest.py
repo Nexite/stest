@@ -66,6 +66,11 @@ def exti_exe() -> Path:
 
 
 @pytest.fixture
+def exti_wfe_exe() -> Path:
+    return _exe("exti_wfe")
+
+
+@pytest.fixture
 def tim_exe() -> Path:
     return _exe("tim")
 

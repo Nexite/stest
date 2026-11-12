@@ -7,7 +7,7 @@
  * stest_cmsis_core_include() (cmake/StestFetchST.cmake) stages a copy without them. Firmware is compiled
  * for the host (x86-64 / arm64), so no ARM assembly appears here:
  *  - barriers (__NOP/__DSB/__DMB/__ISB) are compiler barriers;
- *  - __WFI/__WFE and the PRIMASK/BASEPRI/FAULTMASK/IPSR intrinsics call the stest
+ *  - __WFI/__WFE/__SEV and the PRIMASK/BASEPRI/FAULTMASK/IPSR intrinsics call the stest
  *    runtime C API (stest/cortexm_c.h, runtime/include must be on the include path);
  *  - __REV/__REV16/__REVSH/__RBIT/__CLZ/__ROR/__SSAT/__USAT are portable C;
  *  - exclusive accesses (__LDREX* / __STREX*) are plain accesses that always succeed
@@ -124,9 +124,9 @@ __PACKED_STRUCT T_UINT32_READ { uint32_t v; };
 #define __DSB() __COMPILER_BARRIER()
 #define __DMB() __COMPILER_BARRIER()
 #define __ISB() __COMPILER_BARRIER()
-#define __SEV() __COMPILER_BARRIER()
+#define __SEV() stest_rt_sev()
 #define __WFI() stest_rt_wfi()
-#define __WFE() stest_rt_wfi()
+#define __WFE() stest_rt_wfe()
 #define __BKPT(value) stest_rt_abort("__BKPT(%d) reached", (int)(value))
 
 /* ---- core registers (runtime C API) ---- */

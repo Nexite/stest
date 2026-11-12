@@ -152,7 +152,7 @@ Models live per family (`stest::<family>::...`). Registers that look the same of
 
 `chips/cmsis_host/cmsis_compiler.h` replaces CMSIS's `cmsis_compiler.h`/`cmsis_gcc.h` for every family:
 - barriers become compiler barriers
-- `__WFI` and PRIMASK/BASEPRI/FAULTMASK call the runtime
+- `__WFI`/`__WFE`/`__SEV` and PRIMASK/BASEPRI/FAULTMASK call the runtime
 - the bit intrinsics are portable C
 - exclusives always succeed
 

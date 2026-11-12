@@ -51,6 +51,14 @@ stest_add_firmware(exti
   SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/firmware/exti/main.c ${_bl}/Src/stm32l4xx_it.c
           ${_bl}/Src/stm32l4xx_hal_msp.c
   INCLUDE_DIRS ${_bl}/Inc)
+# exti_wfe: the same, sleeping through ST's HAL_PWR_EnterSLEEPMode(..., PWR_SLEEPENTRY_WFE)
+# (SEV; WFE; WFE) with SysTick suspended: one EXTI interrupt wakes it.
+stest_add_firmware(exti_wfe
+  CHIP STM32L496RG
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/firmware/exti/main.c ${_bl}/Src/stm32l4xx_it.c
+          ${_bl}/Src/stm32l4xx_hal_msp.c
+  INCLUDE_DIRS ${_bl}/Inc
+  DEFINES EXTI_SLEEP_WFE=1)
 
 # TIM: CubeMX-style TIM7 20 kHz time base driving a software PWM on PA6 (TIM module enabled
 # in its own HAL config; handlers/MSP from blinky).
