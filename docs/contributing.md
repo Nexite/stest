@@ -1,6 +1,6 @@
 # Contributing
 
-stest is Apache-2.0 and developed in the open at [github.com/Nexite/stest](https://github.com/Nexite/stest).
+stest is Apache-2.0 and developed in the open at [github.com/Nexite/stest](https://github.com/Nexite/stest). See [LICENSE](https://github.com/Nexite/stest/blob/main/LICENSE) and [NOTICE](https://github.com/Nexite/stest/blob/main/NOTICE). ST's HAL and CMSIS sources are not in the repository: they are downloaded at configure time and keep their own licenses.
 
 Start with these:
 
