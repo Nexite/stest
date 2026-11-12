@@ -33,8 +33,8 @@ flowchart LR
 Your sources and ST's HAL are compiled for the host (x86-64 or arm64) by upstream clang, at
 `-O0` with debug info, with stest's LLVM pass loaded. The pass rewrites every **volatile** load
 and store, which is how CMSIS declares peripheral registers, into a call to the stest runtime
-(`__stest_mmio_read32(addr)` and friends). Ordinary memory accesses stay native code. Nothing in
-the sources changes: `GPIOA->ODR |= 1` compiles as written, and its access reaches the GPIO
+(`__stest_mmio_load32(addr)`, `__stest_mmio_store32(addr, value)` and friends). Ordinary memory
+accesses stay native code. Nothing in the sources changes: `GPIOA->ODR |= 1` compiles as written, and its access reaches the GPIO
 model.
 
 Your sources are compiled with `-Dmain=stest_firmware_main`; the runtime provides the real

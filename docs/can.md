@@ -200,13 +200,17 @@ time of 44 bits, which is shorter than any real frame. At 500 kbit/s the cap is 
 - `Sim(quantum_us=1000)`, `--stest-quantum-us` and the `stest` marker request a quantum.
   `sim.quantum_ns` shows the capped value, and the cap is logged at `start()`.
 - The cap costs host time, because each quantum is one socket round trip per node. Measured
-  on an M3 Pro ([gate results](https://github.com/Nexite/stest/blob/main/docs/spikes/2026-10-30-interception-gate.md), "CAN quantum"):
+  natively on an M3 Pro and on x86-64 CI
+  ([gate results](https://github.com/Nexite/stest/blob/main/docs/spikes/2026-10-30-interception-gate.md),
+  "CAN quantum" and "x86-64 result"):
   - The round trips alone cost about 0.065 s of wall time per virtual second per node
-    natively and 0.10 s in a Linux VM. x86-64 CI figures are pending.
+    natively, 0.10 s in a Linux VM and 0.22 s on x86-64 CI (GitHub Actions).
   - With firmware and the bus engine, two nodes exchanging frames take about 0.18 s per node
-    per virtual second natively (`test_can_speed`).
-  - The worst case is a lone node retrying a frame nobody ACKs, at about 0.35 s. It is
-    measured by `uv run spike/run_gate.py --quantum-us 88 --can-worst-case`.
+    per virtual second natively (`test_can_speed`). On x86-64 CI the pair takes 1.13 s per
+    virtual second, which is slower than real time.
+  - The worst case is a lone node retrying a frame nobody ACKs, at about 0.35 s natively and
+    1.18 s on x86-64 CI. It is measured by
+    `uv run spike/run_gate.py --quantum-us 88 --can-worst-case`.
 - Results do not depend on the quantum: every frame, result and callback happens at the same
   virtual time for any quantum at or below the cap. The tests check this at quanta of 88, 37,
   13, 7 and 1 µs.

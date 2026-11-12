@@ -53,10 +53,15 @@ The toolchain needs upstream LLVM 18 or newer; see [Install](../install.md).
 | SPI | SPI1-3 | Full-duplex master with software NSS, 4-16 bit frames, the TX/RX FIFOs, timing from the baud-rate prescaler, interrupts; MOSI capture and queued MISO bytes. | Slave mode, hardware NSS, bidirectional and receive-only modes, CRC, TI mode and DMA abort. CPOL, CPHA and bit order are reported, not simulated on a wire. | [`SpiBus`][stest.SpiBus] | [`spi.hpp`](https://github.com/Nexite/stest/blob/main/chips/stm32l4/models/spi.hpp) |
 | bxCAN | CAN1, CAN2 | Init, sleep and normal modes, bit timing, TX mailboxes and priorities, filters (CAN2 uses CAN1's banks), RX FIFOs, interrupts, error counters, error passive, bus-off and automatic recovery; frames on simulated buses. | Time-triggered mode, automatic wake-up, loop-back and silent modes, DLC > 8 abort. Strict where hardware ignores a write (BTR outside init, a busy mailbox). More in [CAN, Deviations and limits](../can.md#deviations-and-limits). | [`CanBus`][stest.CanBus] | [`bxcan.hpp`](https://github.com/Nexite/stest/blob/main/chips/stm32l4/models/bxcan.hpp) |
 
-**Not modelled** (any access aborts as `unmodelled`): among others USART/UART and LPUART, I2C,
+## Not modelled
+
+Peripherals (any access aborts as `unmodelled`): among others USART/UART and LPUART, I2C,
 DMA and DMAMUX, RTC, the watchdogs (IWDG, WWDG), LPTIM, CRC, RNG, USB, QUADSPI, SDMMC,
 comparators, op-amps, DFSDM, SAI and the MPU. Memory is the host's: flash and SRAM contents are
 the firmware's ordinary variables, and there is no memory map below the peripherals.
+
+Firmware is bare metal with the HAL. RTOS ports for Cortex-M (such as FreeRTOS's `ARM_CM4F`
+port) contain Cortex-M assembly and do not compile for the host, and stest has no host port.
 
 ## Python access
 

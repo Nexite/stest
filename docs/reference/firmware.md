@@ -176,7 +176,8 @@ stest: unmodelled write32 0x40013800
 
 No model covers the address: usually a peripheral stest does not model (here USART1). Check the
 address in the reference manual and the [support matrix](support.md). Keep the peripheral's
-code out of the simulated build (a `DEFINES` switch in your code) or
+code out of the simulated build (a `DEFINES` switch in your code,
+[CubeMX-safe recipe](../troubleshooting.md#keep-an-unmodelled-peripheral-out)) or
 [add a model](../adding-a-peripheral.md).
 
 #### Unimplemented register
@@ -260,7 +261,7 @@ or after `sim.now_ns`, and the model names and ops from the model's header.
 
 ```text
 stest: unhandled IRQ TIM7 (55)
-stest: unhandled exception HardFault (-13)
+stest: unhandled exception PendSV (-2)
 ```
 
 An interrupt or exception was taken, but the firmware defines no handler for it, so the weak

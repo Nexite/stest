@@ -14,9 +14,40 @@ which: look it up in the device header (`stm32l496xx.h`) or the reference manual
 `main()` that a test does not need.
 
 - Keep that initialisation out of the simulated build with a switch in **your** code, set
-  through `DEFINES` in `stest_add_firmware` (`#ifndef SIL_BUILD` around `MX_USART2_UART_Init()`,
-  for example). ST's code stays unchanged.
+  through `DEFINES` in `stest_add_firmware`. ST's code stays unchanged. In a CubeMX project, put
+  the switch where regeneration keeps it:
+  [Keep an unmodelled peripheral out](#keep-an-unmodelled-peripheral-out).
 - Or [add a model](adding-a-peripheral.md).
+
+### Keep an unmodelled peripheral out
+
+CubeMX rewrites `main.c` when it regenerates code, but keeps everything between its
+`/* USER CODE BEGIN ... */` and `/* USER CODE END ... */` comments. An `#ifndef` around a
+generated `MX_USART2_UART_Init();` call is lost on the next regeneration; one inside a USER CODE
+block is not. This recipe is not tested by CI.
+
+1. Stop CubeMX from calling the init function itself: in Project Manager, Advanced Settings,
+   tick "Do Not Generate Function Call" for the peripheral (USART2 here). CubeMX still
+   generates `MX_USART2_UART_Init()` but no longer calls it from `main()`. Confirm the option's
+   name and place in your CubeMX version.
+2. Call it from a USER CODE block after the generated init calls, under your switch:
+
+    ```c
+      /* USER CODE BEGIN 2 */
+    #ifndef SIL_BUILD
+      MX_USART2_UART_Init();
+    #endif
+      /* USER CODE END 2 */
+    ```
+
+3. Define the switch for the simulated build only: `DEFINES SIL_BUILD` in `stest_add_firmware`
+   ([options](reference/firmware.md#stest_add_firmware)).
+
+Other code that uses the peripheral (a `HAL_UART_Transmit` call, say) needs the same switch,
+also inside USER CODE blocks. `printf` needs none: with `syscalls.c` left out of `SOURCES`,
+`printf` goes to the host C library and stest captures it as firmware output
+([Firmware output](guide/writing-tests/output.md)). A `__io_putchar` that retargets `printf` to
+the UART is never called.
 
 ### `... not modelled` for a feature you use
 
@@ -151,8 +182,8 @@ the HAL is in the directory that the CMake function `stest_st_family_dirs(stm32l
 
 ### RTOS
 
-RTOS ports for Cortex-M (such as FreeRTOS's `ARM_CM4F` port) contain Cortex-M assembly and do
-not compile for the host. stest runs bare-metal firmware with the HAL.
+stest runs bare-metal firmware only: RTOS ports do not compile for the host
+([support matrix](reference/support.md#not-modelled)).
 
 ## Processes
 
@@ -165,7 +196,12 @@ exits; they use no CPU.
 ### A test is slow
 
 - A small quantum (`quantum_us`) or a CAN bus (which caps the quantum at its shortest frame time)
-  means more round trips per virtual second.
+  means more round trips per virtual second. CAN tests cost the most: two nodes on one
+  500 kbit/s bus (an 88 µs quantum) run slower than real time on x86-64 CI today
+  ([Quantum cap](can.md#quantum-cap) has the measurements). Reducing the per-quantum cost is
+  planned work, not yet scheduled
+  ([follow-ups](https://github.com/Nexite/stest/blob/main/docs/superpowers/plans/2026-10-31-plan-3-followups.md),
+  "CAN sync speed").
 - `poll_skip=0` makes polling loops run every iteration.
 - Long `advance` spans with busy firmware cost host time; idle firmware in `__WFI()` costs
   almost none.

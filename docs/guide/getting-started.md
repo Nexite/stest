@@ -78,6 +78,8 @@ stest_add_firmware(sensor
       HAL for every firmware.
     - `startup_stm32l4*.s` (assembly for the real core) or `syscalls.c` / `sysmem.c` (newlib
       stubs; the firmware uses the host's C library).
+    - RTOS sources: stest runs bare-metal firmware only
+      ([support matrix](../reference/support.md#not-modelled)).
     - `system_stm32l4xx.c` is optional: stest links ST's from the pinned CMSIS device files,
       and a copy in `SOURCES` takes its place.
 - `INCLUDE_DIRS`: `Core/Inc` (it holds `stm32l4xx_hal_conf.h`, which selects the HAL modules) and
@@ -236,8 +238,9 @@ peripheral names the peripheral, as `stest: unmodelled read32 <address> (<PERIPH
 
 Look the address up in the reference manual or the device header, then check the
 [support matrix](../reference/support.md). Common fixes: leave the unmodelled peripheral's
-initialisation out of the simulated build (for example with a `DEFINES` switch in your own code,
-not in ST's), or add a model ([Adding a peripheral](../adding-a-peripheral.md)).
+initialisation out of the simulated build with a `DEFINES` switch in your own code, not in ST's
+([recipe that survives CubeMX regeneration](../troubleshooting.md#keep-an-unmodelled-peripheral-out)),
+or add a model ([Adding a peripheral](../adding-a-peripheral.md)).
 
 ### Peripheral clock disabled
 
