@@ -2,10 +2,42 @@
 
 Decisions made during Plan 3 (CAN) execution and deferred findings, for Plan 4+.
 
+## CAN sync speed (x86 gate failed; planned fix, not scheduled yet)
+
+PR #3's CI (run 43167244660) measured the 88 us CAN quantum on x86-64 (numbers in
+`docs/spikes/2026-10-30-interception-gate.md`, "x86-64 result"): single node 0.22 (PASS, budget
+0.40), **two nodes on one bus 1.13 for the pair (FAIL, budget 0.80)**, no-ACK worst case 1.18.
+A two-board CAN test therefore runs slower than real time on x86, which misses the requirement
+that the first user project's SIL suite run at least as fast as real time. The user deferred
+the fix (decide before or inside Plan 4).
+
+Planned fix, in order:
+1. **Profile first.** The socket round-trip benchmark (`sync_s`, 0.22 per node per virtual s
+   at 88 us) explains less than half of the two-node figure (~0.56 per node). Profile the
+   two-node gate (`spike/gate_can_two_node.py`) on x86 (CI or a Linux x86 box) with py-spy or
+   cProfile and split the time into: socket send/recv and wakeups, protocol encode/decode
+   (`protocol.py`), `Sim` lockstep loop and `Node` bookkeeping (`sim.py`, `node.py`), bus
+   engine work per quantum (`can/bus.py`), and native firmware time.
+2. **Shared-memory handoff (the fallback the plan names).** Replace the per-quantum socket
+   round trip (RUN_UNTIL -> STOPPED) with a shared-memory control block per node plus a futex
+   (Linux) / `os_sync_wait_on_address` or `__ulock_wait` (macOS) wake-up; keep the socket for
+   HELLO, READ_MEM/WRITE_MEM, MODEL_CALL and errors. Inbox and events move through a
+   shared-memory ring. Protocol version bump; byte-identical event logs required
+   (determinism tests at several quanta must stay green).
+3. **Cut per-quantum Python work.** Skip the engine and inbox processing for quanta with no
+   bus activity (fast path when no node reported a CAN event and no device is due), avoid
+   per-quantum allocations in `Sim`/`Node`, and issue RUN_UNTIL to all nodes before waiting on
+   any (check the loop already overlaps nodes).
+4. **If still over budget:** move the lockstep loop and the bus engine's hot path to C++
+   (a `_stest` extension or a coordinator process), keeping the Python API.
+
+Acceptance: `spike/run_gate.py --quantum-us 88 --can-two-node` <= 0.80 on CI x86-64, standard
+gate unchanged or better, all determinism tests green, and `test_can_speed` with
+`STEST_PERF_STRICT=1` passing on x86.
+
 ## Carry into Plan 4
 - Valid-controller hint: the "no such CAN controller" message probes fixed names (CAN1-3, FDCAN1-3); replace with an enumeration of the node's models that answer `can_info`.
 - The FDCAN model must implement the `can_info` call (`{"type": ..., "role": ...}`) so the bus wiring and the hint find it.
-- Speed gate: the Linux x86-64 row for the CAN quantum (88 us, plus the gated `--can-two-node` row) is pending the first CI run of this branch (artifact `gate-can-linux-x86_64`); record it in `docs/spikes/2026-10-30-interception-gate.md` and apply the plan's rule: above 0.40 (0.80 for the two-node row), stop and ask the user (sync cost reduction: shared memory + futex / `os_sync_wait_on_address`).
 
 ## High priority
 - No e2e test of one node on two buses (spec section 4.6: dual-controller boards, gateways); needs a firmware variant with CAN1 and CAN2 both wired.
