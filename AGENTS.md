@@ -140,5 +140,5 @@ Note the Docker build writes into the host `build/`; if you share the tree with 
 
 ## Workflow
 
-- Specs and plans live in `docs/superpowers/` (`specs/`, `plans/`, one plan per milestone, plus `...-followups.md`). One branch per plan (`plan-1-core`, `plan-2-peripherals`, `plan-3-can`); the current work follows `docs/superpowers/plans/2026-10-31-stest-plan-3-can.md`. Record decisions and deferred findings in the plan's follow-ups file.
+- Specs and plans live in `docs/superpowers/` (`specs/`, `plans/`, one plan per milestone, plus `...-followups.md`). One branch per plan (`plan-1-core`, `plan-2-peripherals`, `plan-3-can`); the current work follows `docs/superpowers/plans/2026-10-31-stest-plan-3-can.md`. Record decisions and deferred findings in the plan's follow-ups file (`docs/superpowers/plans/2026-10-30-plan-1-followups.md`, `2026-10-31-plan-2-followups.md`, `2026-10-31-plan-3-followups.md`; check them before assuming a behaviour is a regression).
 - Commits use a conventional prefix (`feat`, `fix`, `fix(runtime):`, `docs:`, `docs(plan-N):`) and a body explaining why. Every commit in history ends with a `Co-Authored-By: <model name> <noreply@anthropic.com>` trailer naming the model that did the work; use the attribution line your harness instructs.
