@@ -711,6 +711,7 @@ void Bxcan::deliver(std::string_view op, const nlohmann::json& a, uint64_t t_ns)
     clock_.schedule_at(t_ns, [this, apply_fc, m, seq, outcome, lec] {
       apply_fc();  // even for a stale result: the engine's counters are authoritative
       on_tx_result(m, seq, outcome, lec);
+      sync();  // on_tx_result returns early on a stale result: ERRI / SCE from the counters
     });
     return;
   }
@@ -735,6 +736,7 @@ void Bxcan::deliver(std::string_view op, const nlohmann::json& a, uint64_t t_ns)
     clock_.schedule_at(t_ns, [this, apply_fc, f] {
       apply_fc();  // also when the frame is dropped (mode, filters): it was received on the bus
       on_rx(f);
+      sync();  // on_rx returns early outside normal mode: ERRI / SCE from the counters
     });
     return;
   }

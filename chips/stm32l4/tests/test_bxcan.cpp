@@ -920,6 +920,30 @@ TEST_CASE("bxcan fault confinement: ack/ok results update TEC; validation") {
   CHECK(r.clock.next_event_ns() == kNone);
 }
 
+TEST_CASE("bxcan fault confinement: counters on a stale result / a dropped rx still raise ERRI") {
+  Rig r;
+  r.up(CAN1);
+  r.wr(CAN1 + IER, ERRIE | EWGIE | EPVIE);
+  r.send(CAN1, 0, std_tir(0x10), 0);
+  uint64_t t = r.clock.now_ns() + 100;
+  r.can1.deliver("tx_result", fc(ok(0, 1), 0, 0), t);
+  r.to(t);
+  CHECK((r.rd(CAN1 + TSR) & TME0) != 0);  // mailbox complete: a later result for it is stale
+  r.can1.deliver("tx_result", fc(ok(0, 1), 96, 0), t + 100);  // stale, but TEC reaches warning
+  r.to(t + 100);
+  CHECK((r.rd(CAN1 + ESR) & EWGF) != 0);
+  CHECK((r.rd(CAN1 + MSR) & ERRI) != 0);
+  CHECK(r.irq_high(IRQ_SCE));
+  r.wr(CAN1 + MSR, ERRI);
+  CHECK_FALSE(r.irq_high(IRQ_SCE));
+  r.init(CAN1);  // outside normal mode on_rx drops the frame; its counters still apply
+  r.can1.deliver("rx", fc(rx(0x1, "aa"), 96, 128), t + 200);
+  r.to(t + 200);
+  CHECK((r.rd(CAN1 + ESR) & EPVF) != 0);
+  CHECK((r.rd(CAN1 + MSR) & ERRI) != 0);
+  CHECK(r.irq_high(IRQ_SCE));
+}
+
 TEST_CASE("bxcan fault confinement: MCR.RESET starts a new counter epoch; can_mode carries abom/reset") {
   Rig r;
   r.init(CAN1, ABOM);
