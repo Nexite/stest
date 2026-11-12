@@ -1,0 +1,93 @@
+site_name: stest
+site_description: STM32 software-in-the-loop simulator. Test real firmware with pytest in deterministic virtual time.
+site_url: https://nexite.github.io/stest/
+repo_url: https://github.com/Nexite/stest
+repo_name: Nexite/stest
+edit_uri: edit/main/docs/
+docs_dir: docs
+exclude_docs: |
+  superpowers/
+  spikes/
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.snippets:
+      base_path: ["."]
+      check_paths: true
+  - tables
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [python]
+          options:
+            docstring_style: google
+            show_source: false
+            members_order: source
+            filters: ["!^_"]
+
+nav:
+  - Home: index.md
+  - Get started:
+    - Install: install.md
+    - Quickstart: quickstart.md
+    - Your own project: guide/getting-started.md
+    - Concepts: concepts.md
+  - Guide:
+    - Writing tests:
+      - guide/writing-tests/index.md
+      - Pins: guide/writing-tests/pins.md
+      - Firmware variables: guide/writing-tests/variables.md
+      - Firmware output: guide/writing-tests/output.md
+      - Peripherals: guide/writing-tests/peripherals.md
+      - Multiple nodes: guide/writing-tests/multi-node.md
+      - CAN: can.md
+      - Fault scenarios: guide/writing-tests/faults.md
+      - pytest integration: guide/writing-tests/pytest.md
+  - Reference:
+    - Python API:
+      - reference/python/index.md
+      - Sim, Node, Pin: reference/python/sim.md
+      - Peripheral helpers: reference/python/peripherals.md
+      - stest.can: reference/python/can.md
+      - Errors: reference/python/errors.md
+    - pytest plugin: reference/pytest.md
+    - Firmware: reference/firmware.md
+    - Support matrix: reference/support.md
+  - Troubleshooting: troubleshooting.md
+  - Contributing:
+    - contributing.md
+    - Adding a peripheral: adding-a-peripheral.md
+    - Adding a chip: adding-a-chip.md

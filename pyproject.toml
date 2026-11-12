@@ -18,6 +18,7 @@ stest = "stest.pytest_plugin"
 
 [dependency-groups]
 dev = ["pytest>=8", "cantools>=41"]
+docs = ["mkdocs>=1.6", "mkdocs-material>=9.5", "mkdocstrings[python]>=0.26", "pymdown-extensions>=10"]
 
 [build-system]
 requires = ["hatchling"]

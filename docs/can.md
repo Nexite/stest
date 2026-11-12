@@ -200,7 +200,7 @@ time of 44 bits, which is shorter than any real frame. At 500 kbit/s the cap is 
 - `Sim(quantum_us=1000)`, `--stest-quantum-us` and the `stest` marker request a quantum.
   `sim.quantum_ns` shows the capped value, and the cap is logged at `start()`.
 - The cap costs host time, because each quantum is one socket round trip per node. Measured
-  on an M3 Pro (`docs/spikes/2026-10-30-interception-gate.md`, "CAN quantum"):
+  on an M3 Pro ([gate results](https://github.com/Nexite/stest/blob/main/docs/spikes/2026-10-30-interception-gate.md), "CAN quantum"):
   - The round trips alone cost about 0.065 s of wall time per virtual second per node
     natively and 0.10 s in a Linux VM. x86-64 CI figures are pending.
   - With firmware and the bus engine, two nodes exchanging frames take about 0.18 s per node
@@ -269,5 +269,5 @@ To add another controller model (for example FDCAN), implement the same contract
 - the `deliver` ops `tx_result`, `rx`, `error` and `counters`
 
 `Node._can_flush` (`python/stest/node.py`) and `_node_can_callbacks` (`python/stest/sim.py`)
-then wire the model to a bus unchanged. See `docs/adding-a-peripheral.md`, section 8, for the
+then wire the model to a bus unchanged. See [Adding a peripheral](adding-a-peripheral.md), section 8, for the
 inbox `deliver()` pattern.

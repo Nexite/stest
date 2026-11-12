@@ -6,7 +6,7 @@ This guide covers writing a register-level peripheral model for stest. The worke
 - `exti` subscribes to GPIO edges and drives level-sensitive IRQs.
 - `tim` is the most complete. It derives its counter from virtual time, schedules Clock events, shares IRQ sources, aborts on features it does not model and exposes `call("state")`.
 
-Read `AGENTS.md` first. Where this guide and the design spec (`docs/superpowers/specs/2026-10-30-stest-sil-design.md`, sections 4.2 and 4.3) disagree, the spec wins.
+Read [AGENTS.md](https://github.com/Nexite/stest/blob/main/AGENTS.md) first. Where this guide and the design spec ([design spec](https://github.com/Nexite/stest/blob/main/docs/superpowers/specs/2026-10-30-stest-sil-design.md), sections 4.2 and 4.3) disagree, the spec wins.
 
 Sections 1-10 are about `register` mode, the default. Section 11 covers `hal` mode (`stest_add_firmware(... MODELS <TYPE>=hal)`), where a shim replaces ST's `stm32xx_hal_<ppp>.c` at link time.
 

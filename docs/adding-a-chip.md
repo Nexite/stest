@@ -173,7 +173,7 @@ None of the following exists yet. These are the known places that assume Cortex-
   An M33 needs its own identification, any SCB/NVIC differences the HAL touches, and a decision on how to treat the security extension. The likely shape is a `core` value mapped to core options in the generated `ChipDesc`, but that design is not settled.
 - **Address windows** (`mmio_windows.hpp`) cover `0x40000000-0x5FFFFFFF`, which includes the secure peripheral aliases at `0x5xxxxxxx`. Decide whether the secure alias of a block maps to the same model.
 
-Record decisions about these in the relevant plan (`docs/superpowers/plans/`) before implementing them.
+Record decisions about these in the relevant plan ([`docs/superpowers/plans/`](https://github.com/Nexite/stest/blob/main/docs/superpowers/plans/)) before implementing them.
 
 ### 3.6 Python
 
