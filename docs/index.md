@@ -17,19 +17,29 @@ Your real firmware and ST's unmodified HAL are compiled natively with upstream c
 
 ```mermaid
 flowchart LR
-  subgraph build [Build time]
-    F[Your firmware + ST HAL] --> P[clang + MMIO pass]
+  subgraph buildtime [Build time]
+    FW[Your firmware + ST HAL]
+    PASS[clang + MMIO pass]
   end
-  subgraph node [One node = one process]
-    P --> R[stest runtime]
-    R --> M[Peripheral models<br/>GPIO, TIM, ADC, CAN ...]
-    R --> C[Virtual clock + Cortex-M core]
+  subgraph nodeproc [One node = one process]
+    RT[stest runtime]
+    MODELS[Peripheral models<br/>GPIO, TIM, ADC, CAN ...]
+    CORE[Virtual clock + Cortex-M core]
   end
-  subgraph py [Python]
-    S[pytest + Sim] <--> node
-    S <--> B[CAN buses]
-    B <--> node2[Other nodes / CanDevice]
+  subgraph pyside [Python]
+    SIM[pytest + Sim]
+    BUS[CAN buses]
   end
+  subgraph others [Other nodes]
+    PEERS[Other nodes / CanDevice]
+  end
+  FW --> PASS
+  PASS --> RT
+  RT --> MODELS
+  RT --> CORE
+  SIM <--> RT
+  SIM <--> BUS
+  BUS <--> PEERS
 ```
 
 Each firmware node is its own process. Python's `Sim` advances all nodes in lockstep quanta of virtual time, applies inputs you drive (pin levels, analog voltages, CAN frames), and reads back outputs, events and firmware variables.
