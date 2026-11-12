@@ -75,3 +75,69 @@ what the code does today, and these are left for later plans.
   CubeMX-style project; the `firmware` fixture in `python/tests/conftest.py` mirrors the Getting
   started fixture's shape but not its code.
 - `pytest-xdist` parallel runs are neither documented nor tested.
+
+## From the final whole-branch review
+
+### Example project (`examples/sensor-node`) and consumer test
+- The out-of-tree consumer test covers one register-mode firmware only; add a second target
+  built with `MODELS GPIO=hal`.
+- An ADC conversion timeout still sends a frame with 0 mV (`sensor/main.c`, the
+  `HAL_ADC_PollForConversion` branch leaves `raw` at 0).
+- The button counter has no debounce and no comment saying it is deliberately absent.
+- The display's `g_last_millivolts` is not `volatile`. Safe in stest (volatile RAM accesses also
+  charge time), but a reader may copy the pattern.
+- `test_button_count_in_frame` leaves PC0 unset; set it to 0.0 V in `start_sensor`.
+- The `g_sample_count` assert is weak.
+- A run where every test skips passes; under CI it should fail instead of skip.
+
+### CI and the docs workflow
+- `docs.yml` uses `uv run` without `--locked`.
+- `docs.yml` has no `workflow_dispatch` trigger (useful for the first deploy).
+- `actions/upload-pages-artifact@v3` / `actions/deploy-pages@v4` (latest major is v5) are first
+  exercised on `main`.
+- The CI blinky step checks the exit status only; the EVT lines shown in the README and
+  Quickstart are not pinned.
+
+### Python API docstrings
+- `format_candump` prints a bare `R` for an RTR frame with DLC 0.
+- `TimerChannel.mode` does not list `"unsupported"`.
+- `set_var`'s Raises section omits `StestError` before `start()`.
+- `CanBus.send`'s Raises section omits `ValueError` for a bad sender.
+- `Pin.drive_at`'s Raises section is incomplete.
+- `set_high` / `set_low` say "end of last quantum"; it is `node.now_ns`.
+- The pytest options are described both in the plugin docstring and in `pytest.md`; keep them
+  in sync or generate one from the other.
+
+### Docs content
+- `adding-a-peripheral.md:135` says "design spec" twice.
+- The reason given for leaving out `syscalls.c` / `sysmem.c` is understated: `_sbrk` needs
+  linker-script symbols, and a strong `_exit` spins, so the node hangs.
+- Concepts repeats the poll-skip knobs listed elsewhere.
+- The exit-status 2 row omits a bad `--quantum-us`.
+- The `vars.c` line-range snippet is fragile; use section markers.
+- LL-driver guidance is in two places (Troubleshooting and `firmware.md:32`, which lacks the
+  "not tested by CI" label).
+- HSE wording: name `params.hse_hz` (default 8 MHz).
+- The `wall_timeout_s` default is restated on three pages.
+- `firmware.md` says it lists "every" message but omits: exception in a delivery hook, event
+  JSON too long, the two GPIO HAL shim aborts, no Cortex-M core installed, a bad
+  `STEST_ACCESS_COST_NS`, a bad `STEST_PARENT_PID`, and `MODELS` duplicate/format errors.
+- That volatile RAM accesses charge virtual time and deliver interrupts (`mmio.cpp:158-183`) is
+  undocumented.
+- "The linker dropped it" (`variables.md:59`, `troubleshooting.md:103`) is unverified; more
+  likely the compiler drops an unused `static`.
+- `getting-started.md:118`'s inline `./build/<board> --run-ms 1000` is neither CI-run nor
+  labelled.
+- `getting-started.md:57,66-70`: the hand-written CMake is not tied to a tested snippet.
+- Trim the README's peripheral list (link the support matrix).
+- Version floors (LLVM, CMake, Python) are duplicated across pages.
+
+### Docs tests
+- `test_every_abort_message_documented` uses a hand-typed table that over-claims; derive it
+  from the `stest_rt_abort` literals with an allow-list.
+- The host-crash coverage row pins `node.py` only.
+- The docstring test skips `staticmethod`, `classmethod` and `cached_property`.
+- The CI parity test ignores context (`continue-on-error`, `cd` pairing, YAML comments).
+- The README Python-snippet test is vacuous when the README has no Python block.
+- The README link test checks that files exist, not that they are in the nav.
+- `test_opt_outs_are_visible` checks per page, not per block.
