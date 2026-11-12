@@ -5,6 +5,8 @@ repo_url: https://github.com/Nexite/stest
 repo_name: Nexite/stest
 edit_uri: edit/main/docs/
 docs_dir: docs
+validation:
+  anchors: warn
 exclude_docs: |
   superpowers/
   spikes/

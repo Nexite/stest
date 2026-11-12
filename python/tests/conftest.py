@@ -35,6 +35,19 @@ def _exe(name: str) -> Path:
 
 
 @pytest.fixture
+def firmware():
+    """``firmware("blinky")`` -> path of a self-test executable (as str).
+
+    Same shape as the ``firmware`` fixture of the Getting started guide; the documentation
+    recipes (test_recipes.py) use it."""
+
+    def path(name: str) -> str:
+        return str(_exe(name))
+
+    return path
+
+
+@pytest.fixture
 def blinky_exe() -> Path:
     return _exe("blinky")
 
