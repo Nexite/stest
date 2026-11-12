@@ -94,7 +94,7 @@ tick.every(10, lambda: tick.send(CanFrame(0x300, b"\x01")))   # every 10 virtual
 - A device's pending frames contend in identifier order, and its queue is unbounded.
 - Devices are always error active and keep no error counters. An error on their frame is
   retried at once, forever: two devices whose frames collide with the same identifier and
-  different data retry against each other forever, as on a real bus.
+  different data retry against each other forever (real controllers would eventually go bus-off).
 - An exception in `on_frame` or an `every` callback ends the simulation with a `StestError`
   naming the device, with the original exception chained.
 

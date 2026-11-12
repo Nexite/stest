@@ -92,11 +92,13 @@ Reading:
   0.058 -> 0.065, Docker 0.090 -> 0.103 (run 1, 0.151, was a noisy VM run). Plan 1's x86-64 CI
   figure of 0.197 at 100 us scales to about **0.22-0.25 expected at 88 us**: inside the budget
   for one node, but sync is per node, so a two-node CAN test costs about twice that.
-- The no-ACK worst case is 0.34-0.36 s per virtual second on both arm64 hosts: under the 0.40
-  budget here, without margin. Task 7 measured ~0.43 natively for the same scenario (on a
-  shorter run that included engine warm-up); x86-64 CI, slower on sync, may exceed 0.40. That
-  row is informational: the budget applies to the standard gate, and endless retries against
-  a missing ACK are a fault scenario, not normal traffic.
+- The no-ACK worst case is 0.34-0.36 s per virtual second on both arm64 hosts (a re-run:
+  0.349 native at 6,410 ACK-error attempts per virtual second): under the 0.40 budget here,
+  without margin. Task 7 measured 0.43 native / 0.29 Docker for the same scenario (6,350
+  attempts/s, 1 virtual s, same Python 3.12.7); the difference is not explained. x86-64 CI,
+  slower on sync, may exceed 0.40. That row is informational: the budget applies to the
+  standard gate, and endless retries against a missing ACK are a fault scenario, not normal
+  traffic.
 - **Decision pending (user):** if the x86-64 standard gate at 88 us exceeds 0.40, sync cost
   reduction (shared memory + futex / `os_sync_wait_on_address` instead of the socket round trip)
   becomes a decision for the user, as recorded in the caveats above.

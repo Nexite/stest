@@ -76,6 +76,12 @@ def main():
 
 def can_worst_case(bd, runs):
     """Informational: never changes the verdict or the exit status."""
+    try:
+        _can_worst_case(bd, runs)
+    except Exception as e:  # e.g. uv not on PATH
+        print(f"noack_s: not measured ({type(e).__name__}: {e})")
+
+def _can_worst_case(bd, runs):
     print("-- informational (not gated): CAN worst case, lone node, endless no-ACK retries, q = 88 us --")
     sys.stdout.flush()
     b = subprocess.run(["cmake", "--build", str(bd), "--target", "can_err"], capture_output=True, text=True)
@@ -96,6 +102,8 @@ def can_worst_case(bd, runs):
         print(f"noack_s: not measured (exit {r.returncode})")
         return
     print("noack_s runs: " + " ".join(f"{x:.6f}" for x in vals))
+    att = re.findall(r"attempts_per_virtual_s=([0-9]+)", r.stdout)
+    print("attempts per virtual s: " + " ".join(att))
     print(f"noack_s median = {statistics.median(vals):.6f} (worst case, wall s per virtual s; "
           f"informational, budget {BUDGET:.2f} not enforced)")
 

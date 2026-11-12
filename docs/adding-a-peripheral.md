@@ -322,7 +322,7 @@ docker run --rm -v "$PWD":/w -w /w stest-ci bash -euxo pipefail -c '
 '
 ```
 
-That command writes into the host `build/`. If you also build natively in the same tree, use a separate directory such as `build-docker`, and run pytest with `STEST_SELFTEST_BIN=build-docker/selftest`. Run the full suite **both natively and in Docker** before calling a model done. Linux and macOS paths differ.
+That command writes into the host `build/`. If you also build natively in the same tree, use a separate directory such as `build-docker`, and run pytest with an absolute `STEST_SELFTEST_BIN=/w/build-docker/selftest` (the pytester-based plugin tests change directory, so a relative path breaks them). Run the full suite **both natively and in Docker** before calling a model done. Linux and macOS paths differ.
 
 ## 10. Checklist
 

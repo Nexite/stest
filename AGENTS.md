@@ -72,6 +72,7 @@ docker run --rm -v "$PWD":/w -w /w stest-ci bash -euxo pipefail -c '
   uv run pytest python/tests -q
 '
 docker run --rm -v "$PWD":/w -w /w stest-ci bash -c 'uv run spike/run_gate.py --build-dir build-gate-docker'
+docker run --rm -v "$PWD":/w -w /w stest-ci bash -c 'uv run spike/run_gate.py --build-dir build-gate-docker --quantum-us 88 --can-worst-case'
 ```
 
 Note the Docker build writes into the host `build/`; if you share the tree with a native build, use a separate dir (e.g. `build-docker`, as the README does, and `--build-dir build-gate-docker` for the gate). `build*/` is gitignored.
