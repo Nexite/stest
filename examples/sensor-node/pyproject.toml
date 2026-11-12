@@ -1,0 +1,17 @@
+# Test project for the sensor-node example. Not a package: `uv run pytest` installs stest
+# (with its `dbc` extra, for cantools) from the checkout two levels up. In your own repo,
+# point the path at your stest submodule.
+[project]
+name = "sensor-node-tests"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["stest[dbc]"]
+
+[tool.uv.sources]
+stest = { path = "../..", editable = true }
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
