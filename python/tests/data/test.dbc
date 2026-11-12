@@ -1,0 +1,31 @@
+VERSION "1"
+
+NS_ :
+
+BS_:
+
+BU_: Ecu Tester
+
+BO_ 256 Status: 8 Ecu
+ SG_ Speed : 0|16@1+ (0.25,0) [0|16000] "rpm" Tester
+ SG_ Torque : 16|12@1- (1,0) [-2048|2047] "Nm" Tester
+ SG_ Temp : 28|8@1+ (0.5,-40) [-40|87.5] "degC" Tester
+ SG_ Mode : 36|3@1+ (1,0) [0|7] "" Tester
+ SG_ Counter : 40|8@1+ (1,0) [0|255] "" Tester
+
+BO_ 496 Request: 1 Tester
+ SG_ Cmd : 0|8@1+ (1,0) [0|255] "" Ecu
+
+BO_ 385 Reply: 1 Ecu
+ SG_ Echo : 0|8@1+ (1,0) [0|255] "" Tester
+
+BO_ 512 Mux: 8 Ecu
+ SG_ Sel M : 0|8@1+ (1,0) [0|1] "" Tester
+ SG_ Voltage m0 : 8|16@1+ (0.01,0) [0|655.35] "V" Tester
+ SG_ Current m1 : 8|16@1- (0.1,0) [-3276.8|3276.7] "A" Tester
+
+BO_ 2566853172 ExtInfo: 4 Ecu
+ SG_ Level : 0|16@1+ (1,0) [0|65535] "" Tester
+ SG_ Flags : 16|8@1+ (1,0) [0|255] "" Tester
+
+VAL_ 256 Mode 0 "Off" 1 "Standby" 2 "Run" 3 "Fault" ;

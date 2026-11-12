@@ -51,6 +51,7 @@ from .log import LoggedFrame, format_asc, format_candump
 
 if TYPE_CHECKING:
     from ..sim import Sim
+    from .dbc import Dbc
 
 MODES = ("sleep", "init", "normal")
 
@@ -244,6 +245,42 @@ class CanBus:
         what = f"CAN frame{'' if id is None else f' id {id:#x}'}{' matching predicate' if match else ''} on bus {self.name!r}"
         self._sim.wait_for(cond, timeout_ms, what=what)
         return found[0]
+
+    def messages(self, dbc: Dbc) -> list[tuple[int, str, dict]]:
+        """The delivered frames decoded with ``dbc``: ``(t_ns, message name, signals)`` in EOF
+        order; frames the DBC does not know are skipped."""
+        out = []
+        for lf in self.log:
+            d = dbc.decode(lf.frame)
+            if d is not None:
+                out.append((lf.t_ns, d[0], d[1]))
+        return out
+
+    def wait_for_message(
+        self,
+        dbc: Dbc,
+        message: str,
+        *,
+        timeout_ms: float,
+        where: Callable[[dict], bool] | None = None,
+    ) -> tuple[int, dict]:
+        """Like :meth:`wait_for_frame` (same consumption cursor) for the DBC message
+        ``message`` whose decoded signals satisfy ``where``; returns ``(t_ns, signals)``.
+        Raises WaitTimeout after ``timeout_ms`` of virtual time."""
+        msg = dbc.message(message)
+        decoded: list[dict] = []
+
+        def match(frame: CanFrame) -> bool:
+            if frame.id != msg.frame_id or frame.ext != msg.is_extended_frame or frame.rtr:
+                return False
+            d = dbc.decode(frame)
+            if d is None or (where is not None and not where(d[1])):
+                return False
+            decoded.append(d[1])
+            return True
+
+        lf = self.wait_for_frame(timeout_ms=timeout_ms, match=match)
+        return lf.t_ns, decoded[-1]
 
     def export_candump(self, path) -> None:
         with open(path, "w") as f:
