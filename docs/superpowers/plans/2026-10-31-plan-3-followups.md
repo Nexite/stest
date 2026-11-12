@@ -24,6 +24,8 @@ Decisions made during Plan 3 (CAN) execution and deferred findings, for Plan 4+.
 - Task 7: no test of a bus-off node as the only possible ACKer; `_inject` entries whose target never sends never expire (document).
 - Task 8: the perf-isolation AST guard misses from-imports, helpers, class and async tests; the CTest check errors instead of skipping outside a CTest build; a relative `--stest-can-log DIR` is resolved at teardown cwd (resolve in `pytest_configure`); no two-bus failure-section order test; `--stest-can-log` file names collide across modules (use nodeid-derived names); no tests for the gate scripts.
 - WFE models the ARMv7-M event register (`__SEV`, exception entry/return, SCR.SEVONPEND) but no other event sources (external event input, multi-core SEV, debug events).
+- WFE with PRIMASK set and SEVONPEND clear wakes on a pending enabled IRQ (`Impl::sleep` uses `select(false)` for WFE too). ARMv7-M's "ignoring PRIMASK" wake rule is WFI-only; hardware WFE keeps sleeping unless SEVONPEND is set. Permitted as a spurious wake and deterministic, but the test/comments present it as the architectural rule: use `select(true)` for WFE or document it as spurious.
+- `clear_pend` (ICPR write while a level line stays asserted) does `set_pend(false)` then `set_pend(true)`, so with SEVONPEND set it raises an event although the IRQ never stopped pending. Harmless edge case.
 
 ## Rulings (final review; all judged to hold)
 - Engine <-> node API: `_request` / `_abort` / `_set_node_mode`, `on_rx` / `on_tx_result`, results bound to a request sequence number.
