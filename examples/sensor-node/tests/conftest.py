@@ -12,6 +12,7 @@ from stest import Dbc
 EXAMPLE_DIR = Path(__file__).resolve().parents[1]
 
 
+# --8<-- [start:firmware]
 @pytest.fixture
 def firmware():
     """``firmware("sensor")`` -> path of a firmware executable built by CMake.
@@ -30,6 +31,7 @@ def firmware():
         return str(exe)
 
     return path
+# --8<-- [end:firmware]
 
 
 @pytest.fixture(scope="session")

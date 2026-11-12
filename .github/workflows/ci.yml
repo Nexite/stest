@@ -21,6 +21,8 @@ jobs:
             cmake --build build
             ctest --test-dir build --output-on-failure
             uv run pytest python/tests -q
+            ./build/selftest/blinky --run-ms 2100
+            uv run pytest examples/quickstart -q
           '
       - name: Speed gate (non-blocking)
         continue-on-error: true
@@ -57,6 +59,11 @@ jobs:
         run: ctest --test-dir build --output-on-failure
       - name: pytest
         run: uv run pytest python/tests -q
+      # The Quickstart page's commands (docs/quickstart.md; python/tests/test_docs_commands.py).
+      - name: Quickstart (blinky standalone and its pytest)
+        run: |
+          ./build/selftest/blinky --run-ms 2100
+          uv run pytest examples/quickstart -q
       - name: Speed gate (non-blocking)
         continue-on-error: true
         run: |

@@ -3,6 +3,7 @@
 # The pattern for your own repo: stest as a git submodule (STEST_DIR), its toolchain file
 # included before project() so firmware is compiled with upstream clang, then stest added as
 # a subdirectory, which provides stest_add_firmware().
+# --8<-- [start:consumer]
 cmake_minimum_required(VERSION 3.23)
 
 set(STEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../.." CACHE PATH "stest source root (e.g. a submodule)")
@@ -19,3 +20,4 @@ foreach(board sensor display)
     SOURCES ${_core}/Src/main.c ${_core}/Src/stm32l4xx_it.c ${_core}/Src/stm32l4xx_hal_msp.c
     INCLUDE_DIRS ${_core}/Inc)
 endforeach()
+# --8<-- [end:consumer]

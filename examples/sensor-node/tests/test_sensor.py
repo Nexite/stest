@@ -7,6 +7,7 @@ from stest import CanDevice
 BITRATE = 500_000  # must match the firmware's CAN bit timing exactly
 
 
+# --8<-- [start:start]
 def start_sensor(sim, firmware):
     """Start the sensor board on a CAN bus with one listener.
 
@@ -19,8 +20,10 @@ def start_sensor(sim, firmware):
     sensor.pin("PC13").set_high()  # button released (the input also has a pull-up)
     sim.advance(ms=10)  # let main() finish its initialisation
     return sensor, bus
+# --8<-- [end:start]
 
 
+# --8<-- [start:button]
 def press(sim, button):
     """One button press: PC13 low (the falling edge fires EXTI), then high again."""
     button.set_low()
@@ -41,6 +44,7 @@ def test_button_toggles_led(sim, firmware):
 
     press(sim, button)
     assert led.level == initial
+# --8<-- [end:button]
 
 
 def test_reading_sent_on_can(sim, firmware, dbc):
