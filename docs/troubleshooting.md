@@ -35,7 +35,7 @@ before the first access, usually in `HAL_<PPP>_MspInit` or `MX_GPIO_Init`.
 
 `main` returned, which the chip cannot do. Check the paths out of the main loop.
 
-### `NodeCrashed: node '...' crashed at virtual t=...: SIGSEGV` (or `SIGBUS`)
+### `NodeCrashed: node '...' crashed at virtual t=... ms: killed by signal SIGSEGV` (or `SIGBUS`)
 
 The firmware crashed the host process: a null or wild pointer, a stack overflow, or code that
 assumes a 32-bit address space (casting a pointer to `uint32_t` and back). On the chip this

@@ -154,7 +154,14 @@ abort raises [`NodeCrashed`][stest.NodeCrashed], whose first line is
 node '<name>' aborted at virtual t=<ms> ms: stest: <message> (exit status 70)
 ```
 
-followed by the node's last stderr lines. In the messages below, an access is written
+followed by the node's last stderr lines. A host crash of the firmware (a bad pointer, say) is
+also `NodeCrashed`, with no `stest:` message:
+
+```text
+node 'app' crashed at virtual t=10.000 ms: killed by signal SIGSEGV
+```
+
+In the messages below, an access is written
 `<read|write><bits> <address>`, e.g. `write32 0x48000414`.
 
 ### Strict aborts

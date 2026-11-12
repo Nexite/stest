@@ -194,6 +194,8 @@ MESSAGES = [
      r"stest: unhandled IRQ [A-Z][A-Z0-9_]* \(\d+\)"),
     ("unhandled exception", "tools/gen_chip.py", 'stest_rt_abort("unhandled exception {short} ({irqn})")',
      r"stest: unhandled exception [A-Za-z]+ \(-\d+\)"),
+    ("host crash", "python/stest/node.py", 'return f"killed by signal {signal.Signals(-rc).name}"',
+     r"node '\w+' crashed at virtual t=[\d.]+ ms: killed by signal SIG[A-Z]+"),
     ("breakpoint", "chips/cmsis_host/cmsis_compiler.h", '"__BKPT(%d) reached"',
      r"stest: __BKPT\(\d+\) reached"),
     ("WFI with nothing to wake it", "runtime/src/cortexm.cpp", '": nothing can wake the core (no pending exception, "',

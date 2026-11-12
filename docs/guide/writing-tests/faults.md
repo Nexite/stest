@@ -19,7 +19,7 @@ which access that is.
 - The [firmware reference](../../reference/firmware.md#messages) lists every message, what it
   means and the usual fix.
 - A host crash of the firmware (a segmentation fault, say) is also `NodeCrashed`:
-  `node '<name>' crashed at virtual t=<ms> ms: <signal>`.
+  `node '<name>' crashed at virtual t=<ms> ms: killed by signal <SIGNAME>`, e.g. `SIGSEGV`.
 - After `NodeCrashed` every node has been stopped and the `Sim` is unusable; every later call
   raises `NodeCrashed` again. Logs, `sim.event_log` and pin histories, including the events
   of the aborting quantum, stay readable for the test's assertions.
