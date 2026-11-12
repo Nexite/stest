@@ -19,8 +19,9 @@
  * Python controls (set_var): can_run = 0 stops the controller (HAL_CAN_Stop: init mode), 1
  * starts it again; rx_hold = 1 stops draining FIFO0 (the callback disables the FIFO0
  * interrupt and leaves the message), 0 drains again. fifo0_ovr samples RF0R.FOVR0 every 1 ms.
- * The main loop does its work only when the SysTick count changed, so spurious WFI wake-ups
- * (one per quantum end) make no register accesses and timing is quantum-independent.
+ * The main loop does its work only when the SysTick count changed (other wake-ups, e.g. the
+ * CAN RX interrupt, make no register accesses). WFI returns only on an exception, never at a
+ * quantum end, so timing is quantum-independent.
  *
  * Error variants (fault confinement tests): CAN_ERR_NOTIFY=1 (exes can_err, can_abom) enables
  * the error notifications (EWG, EPV, BOF, LEC, ERR: CAN2_SCE interrupt) and records them:
@@ -114,7 +115,7 @@ int main(void)
     now = HAL_GetTick();
     if (now == last)
     {
-      continue; /* not a SysTick wake-up: nothing to do (no register access) */
+      continue; /* not a SysTick wake-up (e.g. CAN RX): nothing to do (no register access) */
     }
     last = now;
 

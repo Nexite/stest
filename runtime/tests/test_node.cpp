@@ -14,7 +14,11 @@ using namespace stest;
 
 namespace {
 constexpr uint64_t MS = 1'000'000;
-IrqHandler g_table[16 + 4] = {};
+int g_pendsv = 0;
+void pendsv_h() { ++g_pendsv; }
+IrqHandler g_table[16 + 4] = {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                              nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                              &pendsv_h};  // exception 14: PendSV
 const ChipDesc kChip{"TESTCHIP", 4, g_table, 16 + 4, nullptr, nullptr};
 
 std::atomic<int> g_iters{0};
@@ -22,7 +26,7 @@ volatile uint32_t g_ram = 0;
 
 int fw_wfi_forever() {
   for (;;) {
-    stest_rt_wfi();  // nothing pending, no events: sleeps to the quantum end
+    stest_rt_wfi();  // nothing pending, no events: sleeps until an exception
     ++g_iters;
   }
 }
@@ -51,8 +55,9 @@ int fw_emit() {
 }
 }  // namespace
 
-TEST_CASE("node: wfi at the quantum end yields the baton (no spinning)") {
+TEST_CASE("node: wfi sleeps across quantum ends, yielding the baton at each") {
   g_iters = 0;
+  g_pendsv = 0;
   Node node(kChip);
   uint64_t t0 = node.now_ns();
   node.start(&fw_wfi_forever);
@@ -61,8 +66,16 @@ TEST_CASE("node: wfi at the quantum end yields the baton (no spinning)") {
   CHECK(g_iters == 0);  // first wfi slept to the quantum end and yielded inside wfi
   CHECK(node.run_until(t0 + 3 * MS) == Node::Stop::Quantum);
   CHECK(node.now_ns() == t0 + 3 * MS);
-  CHECK(g_iters == 1);  // exactly one loop iteration per quantum
+  CHECK(g_iters == 0);  // nothing woke the core: no wake-up per quantum
   CHECK(node.run_until(t0 + 3 * MS) == Node::Stop::Quantum);  // not in the future: no-op
+  CHECK(g_iters == 0);
+  // An exception pended by the loop thread between quanta (as MODEL_CALL / an inbox deliver
+  // would) wakes the core at the start of the next quantum: one loop iteration, then sleep.
+  node.core().set_pending(Cortexm::kPendSV_IRQn);
+  CHECK(node.run_until(t0 + 4 * MS) == Node::Stop::Quantum);
+  CHECK(g_iters == 1);
+  CHECK(g_pendsv == 1);
+  CHECK(node.run_until(t0 + 6 * MS) == Node::Stop::Quantum);
   CHECK(g_iters == 1);
 }
 

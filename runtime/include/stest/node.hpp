@@ -10,7 +10,8 @@
 //
 //   loop:     run_until(t) -> sets quantum end t, passes the baton, blocks
 //   firmware: runs until (a) an MMIO charge reaches t (runtime quantum hook),
-//             (b) wfi() sleeps to t (Cortexm quantum hook), or (c) main returns;
+//             (b) wfi() sleeps to t (Cortexm quantum hook; it keeps sleeping on resume
+//             until an exception wakes it), or (c) main returns;
 //             then passes the baton back and blocks (a, b) or ends (c)
 //   loop:     run_until returns Stop::Quantum / Stop::Exited
 //

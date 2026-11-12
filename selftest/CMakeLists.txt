@@ -180,6 +180,18 @@ stest_add_firmware(pollpin
   INCLUDE_DIRS ${_bl}/Inc
   HAL_SOURCES ${_st_hal}/Src/stm32l4xx_hal.c)
 
+# WFI regression firmware: naive `for (;;) { __WFI(); <toggle PA0>; }` with a SysTick IRQ.
+# WFI must not wake at quantum ends: the log is the same for any quantum size.
+stest_add_firmware(wfiloop
+  CHIP STM32L496RG
+  SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/firmware/wfiloop/main.c
+  INCLUDE_DIRS ${_bl}/Inc
+  HAL_SOURCES ${_st_hal}/Src/stm32l4xx_hal.c)
+add_test(NAME selftest_wfiloop_quantum_determinism
+  COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:wfiloop> -DRUN_MS=20 "-DQUANTA=1000;88;20"
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/check_blinky_determinism.cmake)
+set_tests_properties(selftest_wfiloop_quantum_determinism PROPERTIES TIMEOUT 30)
+
 # Configure-time checks of stest_add_firmware (compiler identity, CMSIS include dirs,
 # MODELS= types/modes).
 foreach(case bad_include bad_compiler models_unknown models_unsupported)

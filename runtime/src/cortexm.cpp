@@ -233,6 +233,7 @@ struct Cortexm::Impl {
   uint32_t ext_div = 1;
   bool ext_ref = false;
   QuantumHook quantum_hook = nullptr;
+  uint64_t n_taken = 0;  // exceptions taken so far (wfi wake condition)
   uint32_t st_ctrl = 0, st_load = 0;
   bool st_countflag = false;
   // Counter state: running -> value st_val at tick boundary st_t0, counting at st_freq;
@@ -314,6 +315,7 @@ struct Cortexm::Impl {
   }
   uint32_t ipsr() const { return stack.empty() ? 0u : uint32_t(stack.back()); }
   void run(int exc) {
+    ++n_taken;
     if (act[exc]) throw std::logic_error("exception " + std::to_string(exc) + " already active");
     IrqHandler h = table[exc];
     if (!h) throw std::runtime_error("no handler for exception " + std::to_string(exc));
@@ -510,23 +512,34 @@ uint32_t Cortexm::ipsr() const { return impl_->ipsr(); }
 
 void Cortexm::wfi() {
   Impl& c = *impl_;
-  c.clock.run_due();
-  if (c.select(/*with_primask=*/false) >= 0) {  // wake condition ignores PRIMASK
-    c.deliver();
-    return;
-  }
-  uint64_t target = std::min(c.clock.next_event_ns(), c.quantum_end);
-  if (target == UINT64_MAX)
-    throw std::runtime_error("wfi: nothing can wake the core (no pending exception, "
-                             "no clock event, no quantum end)");
-  c.clock.advance_to(target);  // fires every event up to target at its own time
-  c.deliver();
-  if (c.quantum_hook && c.clock.now_ns() >= c.quantum_end) {
-    c.quantum_hook();
-    // Resumed: events the loop thread scheduled at the current time (inbox) fire and their
-    // exceptions are taken now, as if they had been scheduled before this wfi slept.
+  const uint64_t taken0 = c.n_taken;
+  bool slept = false;
+  for (;;) {
     c.clock.run_due();
-    c.deliver();
+    // Wake: an exception was taken while asleep, or one is pending that would preempt if
+    // PRIMASK were clear (ARMv7-M WFI ignores PRIMASK: it returns without running it).
+    if (c.n_taken != taken0 || c.select(/*with_primask=*/false) >= 0) {
+      if (slept) poll_streak_break();
+      c.deliver();
+      return;
+    }
+    if (c.clock.now_ns() >= c.quantum_end) {
+      if (!c.quantum_hook) return;
+      // Still asleep at the quantum end: hand the baton back and keep sleeping once the loop
+      // has set a later quantum end. Events the loop thread scheduled at the current time
+      // (inbox) fire, and IRQs it raised (MODEL_CALL) wake the core, at the top of the loop.
+      c.quantum_hook();
+      slept = true;
+      if (c.clock.now_ns() >= c.quantum_end) return;  // the hook did not move the quantum end
+      continue;
+    }
+    uint64_t target = std::min(c.clock.next_event_ns(), c.quantum_end);
+    if (target == UINT64_MAX)
+      throw std::runtime_error("wfi: nothing can wake the core (no pending exception, "
+                               "no clock event, no quantum end)");
+    c.clock.advance_to(target);  // fires every event up to target at its own time
+    slept = true;
+    c.deliver();  // exceptions the events pended (counted in n_taken)
   }
 }
 void Cortexm::set_quantum_hook(QuantumHook h) { impl_->quantum_hook = h; }

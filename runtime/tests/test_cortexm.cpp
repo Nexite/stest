@@ -130,34 +130,93 @@ TEST_CASE("cortexm (d): disabled IRQ pended stays in ISPR and fires on later ena
   CHECK(r.r32(ISPR) == 0);
 }
 
-TEST_CASE("cortexm (e): wfi advances to the next event before the quantum end") {
+TEST_CASE("cortexm (e): wfi sleeps through events that pend no exception") {
   Rig r;
   bool fired = false;
   r.clock.schedule_at(3 * MS, [&] { fired = true; });
   r.core->set_quantum_end(5 * MS);
-  r.core->wfi();
-  CHECK(r.clock.now_ns() == 3 * MS);
+  r.core->wfi();  // the event fires at 3 ms but wakes nothing: no hook, stop at the quantum end
   CHECK(fired);
-  r.core->wfi();  // no more events: stop at the quantum end
   CHECK(r.clock.now_ns() == 5 * MS);
   r.core->wfi();  // already at the quantum end: no progress, no crash
   CHECK(r.clock.now_ns() == 5 * MS);
 }
 
+TEST_CASE("cortexm: wfi wakes at an event that pends an enabled IRQ, not a disabled one") {
+  Rig r;
+  r.core->set_quantum_end(10 * MS);
+  r.clock.schedule_at(2 * MS, [&] { r.core->set_pending(4); });  // disabled: no wake
+  r.clock.schedule_at(3 * MS, [&] { r.core->set_pending(3); });
+  r.enable(3);
+  r.core->wfi();
+  CHECK(r.clock.now_ns() == 3 * MS);
+  CHECK(r.count_irq(3) == 1);
+  CHECK(r.core->pending(4));
+}
+
 int g_qhook_calls = 0;
-TEST_CASE("cortexm: wfi calls the quantum hook once it reaches the quantum end") {
+TEST_CASE("cortexm: wfi calls the quantum hook at the quantum end; an unmoved end returns") {
   Rig r;
   g_qhook_calls = 0;
   r.core->set_quantum_hook([] { ++g_qhook_calls; });
   r.clock.schedule_at(3 * MS, [] {});
   r.core->set_quantum_end(5 * MS);
-  r.core->wfi();  // stops at the event: no hook
-  CHECK(g_qhook_calls == 0);
-  r.core->wfi();  // reaches the quantum end: hook
+  r.core->wfi();  // sleeps through the 3 ms event, hook at the quantum end, which stays put
   CHECK(r.clock.now_ns() == 5 * MS);
   CHECK(g_qhook_calls == 1);
   r.core->wfi();  // still at the quantum end: hook again (the node would have moved it)
   CHECK(g_qhook_calls == 2);
+}
+
+// A hook standing in for the node's loop thread: each call is one quantum handoff.
+Cortexm* g_hcore = nullptr;
+int g_hook_raise_at = -1;  // call index at which the "loop thread" pends IRQ 3 (MODEL_CALL)
+void moving_hook() {
+  ++g_qhook_calls;
+  if (g_qhook_calls == g_hook_raise_at) g_hcore->set_pending(3);
+  if (g_qhook_calls < 10) g_hcore->set_quantum_end(g_hcore->quantum_end() + 1 * MS);
+}
+
+TEST_CASE("cortexm: wfi keeps sleeping across quantum ends until an exception wakes it") {
+  Rig r;
+  g_qhook_calls = 0;
+  g_hcore = r.core.get();
+  r.enable(3);
+  r.core->set_quantum_hook(&moving_hook);
+  r.core->set_quantum_end(1 * MS);
+  SUBCASE("an event pending the IRQ wakes it at the event's time") {
+    g_hook_raise_at = -1;
+    r.clock.schedule_at(3 * MS + 500, [&] { r.core->set_pending(3); });
+    r.core->wfi();
+    CHECK(r.clock.now_ns() == 3 * MS + 500);
+    CHECK(g_qhook_calls == 3);  // yielded at 1, 2 and 3 ms without returning
+    CHECK(r.count_irq(3) == 1);
+  }
+  SUBCASE("an IRQ raised between quanta (MODEL_CALL) wakes it at the quantum end") {
+    g_hook_raise_at = 4;
+    r.core->wfi();
+    CHECK(r.clock.now_ns() == 4 * MS);
+    CHECK(g_qhook_calls == 4);
+    CHECK(r.count_irq(3) == 1);
+  }
+  SUBCASE("nothing wakes it: returns once the hook stops moving the quantum end") {
+    g_hook_raise_at = -1;
+    r.core->wfi();
+    CHECK(g_qhook_calls == 10);
+    CHECK(r.clock.now_ns() == 10 * MS);
+    CHECK(r.count_irq(3) == 0);
+  }
+  SUBCASE("with PRIMASK set a pending IRQ wakes it without running the handler") {
+    g_hook_raise_at = 2;
+    r.core->set_primask(true);
+    r.core->wfi();
+    CHECK(r.clock.now_ns() == 2 * MS);
+    CHECK(r.count_irq(3) == 0);
+    CHECK(r.core->pending(3));
+    r.core->set_primask(false);
+    CHECK(r.count_irq(3) == 1);
+  }
+  g_hcore = nullptr;
 }
 
 // ---- dispatcher ----
