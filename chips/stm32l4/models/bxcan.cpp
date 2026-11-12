@@ -378,7 +378,7 @@ void Bxcan::set_counters(uint32_t tec, uint32_t rec) {
   const uint32_t flags = (tec >= 96 || rec >= 96 ? EWGF : 0u) | (tec > 127 || rec > 127 ? EPVF : 0u) |
                          (tec > 255 ? BOFF : 0u);
   const uint32_t rising = flags & ~esr;
-  regs_.set(ESR, (esr & LEC) | flags | (std::min<uint32_t>(tec, 255) << 16) | (std::min<uint32_t>(rec, 255) << 24));
+  regs_.set(ESR, (esr & LEC) | flags | ((tec & 0xFFu) << 16) | (std::min<uint32_t>(rec, 255) << 24));
   const uint32_t ier = regs_.get(IER);
   if (((rising & EWGF) && (ier & EWGIE)) || ((rising & EPVF) && (ier & EPVIE)) || ((rising & BOFF) && (ier & BOFIE)))
     erri_ = true;

@@ -62,7 +62,8 @@ firmware nodes' error counters and hands the node absolute values with every del
 - Counters (per firmware node): transmit error TEC += 8, except an ACK error while error passive
   (TEC unchanged: a lone node stays at 128); receive error REC += 1 (saturating at 255, the
   register width); successful transmission TEC -= 1; successful reception REC -= 1 (min 0), or
-  REC = 127 when it was above 127 (ISO 11898-1 allows 119..127; 127 is used).
+  REC = 120 when it was above 128 (RM0351 bxCAN "Error management": "decremented by 1 or reset
+  to 120 if its value was higher than 128"; ISO 11898-1 allows 119..127).
   Error passive: TEC or REC > 127. Bus-off: TEC > 255. Counters change at the attempt (attempts
   never overlap, so this is their real order).
 - Participation at SOF: a node in normal mode and not bus-off acknowledges and receives (error
@@ -692,7 +693,7 @@ class CanBus:
         for name in listening:
             port = nodes[name]
             if kind is None:
-                port.rec = 127 if port.rec > 127 else max(0, port.rec - 1)
+                port.rec = 120 if port.rec > 128 else max(0, port.rec - 1)  # RM0351 bxCAN
             else:
                 port.rec = min(255, port.rec + 1)
         if kind is not None:

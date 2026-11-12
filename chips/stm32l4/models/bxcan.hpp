@@ -127,8 +127,10 @@
 // overwrite the reset ESR. The model never changes TEC/REC itself; nothing else resets them
 // (init/sleep mode keep them, as on hardware: only the recovery sequence and MCR.RESET clear
 // them - RM0351 does not list another reset; documented assumption).
-// ESR from the counters: TEC [23:16] = min(TEC, 255) (the field is 8 bits; the counter exceeds
-// 255 in bus-off: 255 is shown - an interpretation), REC [31:24] = min(REC, 255),
+// ESR from the counters: TEC [23:16] = TEC & 0xFF (RM0351 CAN_ESR: "least significant byte of
+// the 9-bit transmit error counter", so a bus-off TEC of 256..263 reads 0..7), REC [31:24] =
+// min(REC, 255) (the engine saturates REC at 255; after a successful reception it decrements
+// REC by 1 or resets it to 120 if it was above 128, RM0351 "Error management"),
 // EWGF = TEC >= 96 or REC >= 96 (RM0351 "warning limit ... >= 96"), EPVF = TEC > 127 or
 // REC > 127, BOFF = TEC > 255. MSR.ERRI is set when EWGF / EPVF / BOFF rises while EWGIE /
 // EPVIE / BOFIE is set, and when an error stores a non-zero LEC while LECIE is set; falling

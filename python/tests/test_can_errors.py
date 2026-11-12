@@ -241,20 +241,23 @@ def test_inject_errors_applies_from_now_and_validates():
     sim.close()
 
 
-def test_receiver_error_passive_and_successful_rx_sets_127():
+@pytest.mark.parametrize("n_err, rec_after", [(128, 127), (129, 120), (140, 120)])
+def test_receiver_error_passive_and_successful_rx_rec_rule(n_err, rec_after):
+    """RM0351 bxCAN: after a successful reception REC is decremented by 1, or reset to 120 if it
+    was higher than 128 (ISO 11898-1 allows 119..127)."""
     sim, bus = device_sim()
     d = bus.attach(CanDevice("d"))  # devices are always error active (no counters)
     n = FakeNode(sim, bus, "n")  # the only ACK: an error-passive receiver still ACKs
     n.mode(0, "normal")
-    bus.inject_errors(128, target="d")
+    bus.inject_errors(n_err, target="d")
     sim.start()
     d.send(CanFrame(0x200, b"\x01"))
-    sim.advance(ms=12)
+    sim.advance(ms=13)
     errs = [c for c in n.calls if c[0] == "error"]
-    assert [c[2]["rec"] for c in errs] == list(range(1, 129))
+    assert [c[2]["rec"] for c in errs] == list(range(1, n_err + 1))
     assert all(c[2]["lec"] == "stuff" and c[2]["tec"] == 0 for c in errs)
     rx = [c for c in n.calls if c[0] == "rx"]
-    assert len(rx) == 1 and rx[0][3] == {"tec": 0, "rec": 127, "epoch": 0}  # REC > 127 -> 127
+    assert len(rx) == 1 and rx[0][3] == {"tec": 0, "rec": rec_after, "epoch": 0}
     assert [lf.frame.id for lf in bus.log] == [0x200]
     states = [(e["kind"], e["sender"]) for e in bus.errors if e["kind"] != "injected"]
     assert states == [("error_passive", "n"), ("error_active", "n")]
@@ -575,7 +578,7 @@ def test_bus_off_and_recovery(can_exe):
     assert states == [("error_passive", inj[15]["t_ns"]), ("bus_off", inj[31]["t_ns"]), ("error_active", recover_at)]
     snaps = out["snaps"]
     assert snaps["before"] == ({"tec": 248, "rec": 0, "lec": 0, "ewgf": True, "epvf": True, "boff": False}, "passive")
-    assert snaps["boff"][0]["boff"] and snaps["boff"][0]["tec"] == 255 and snaps["boff"][1] == "bus_off"
+    assert snaps["boff"][0]["boff"] and snaps["boff"][0]["tec"] == 0 and snaps["boff"][1] == "bus_off"
     assert snaps["late"][0]["boff"]
     assert snaps["rec"] == ({"tec": 0, "rec": 0, "lec": 0, "ewgf": False, "epvf": False, "boff": False}, "active")
     sce, boff_cb, code = out["fw"]

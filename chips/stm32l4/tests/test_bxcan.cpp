@@ -851,9 +851,12 @@ TEST_CASE("bxcan fault confinement: counters drive ESR EWGF/EPVF/BOFF and ERRI/S
   r.wr(CAN1 + MSR, ERRI);
   esr = step("tx_result", fc(txerr(0, 1, "bit_recessive"), 256, 0));  // bus-off: TEC > 255
   CHECK((esr & (EWGF | EPVF | BOFF)) == (EWGF | EPVF | BOFF));
-  CHECK(tec_of(esr) == 255);  // the 8-bit field saturates (the counter is 256)
+  CHECK(tec_of(esr) == 0);  // TEC[7:0]: low byte of the 9-bit counter (256)
   CHECK(r.irq_high(IRQ_SCE));
   CHECK(r.can1.call("state", json::object())["tec"] == 256);
+  esr = step("tx_result", fc(txerr(0, 1, "bit_recessive"), 263, 0));
+  CHECK(tec_of(esr) == 7);
+  CHECK((esr & BOFF) != 0);
   CHECK(r.can1.call("state", json::object())["error_state"] == "bus_off");
   CHECK(r.can1.call("state", json::object())["esr"] == r.rd(CAN1 + ESR));
   CHECK(r.can1.call("state", json::object())["tsr"] == r.rd(CAN1 + TSR));
