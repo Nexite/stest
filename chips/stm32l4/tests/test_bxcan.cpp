@@ -198,7 +198,7 @@ TEST_CASE("bxcan init and normal transitions: INAK clears after 11 recessive bit
   CHECK(r.can1.mode() == stm32l4::Bxcan::Mode::Init);
   auto ev = can_events();
   REQUIRE(ev.size() == 1);
-  CHECK(ev[0] == json{{"kind", "can_mode"}, {"periph", "CAN1"}, {"mode", "init"}, {"bitrate", nullptr}, {"t", 1000}});
+  CHECK(ev[0] == json{{"kind", "can_mode"}, {"periph", "CAN1"}, {"mode", "init"}, {"bitrate", nullptr}, {"abom", false}, {"t", 1000}});
   r.clr(CAN1 + MCR, SLEEP);
   CHECK((r.rd(CAN1 + MSR) & (INAK | SLAK)) == INAK);
   CHECK(can_events().empty());  // still init
@@ -216,7 +216,7 @@ TEST_CASE("bxcan init and normal transitions: INAK clears after 11 recessive bit
   CHECK(r.can1.mode() == stm32l4::Bxcan::Mode::Normal);
   ev = can_events();
   REQUIRE(ev.size() == 1);
-  CHECK(ev[0] == json{{"kind", "can_mode"}, {"periph", "CAN1"}, {"mode", "normal"}, {"bitrate", 500000}, {"t", 27000}});
+  CHECK(ev[0] == json{{"kind", "can_mode"}, {"periph", "CAN1"}, {"mode", "normal"}, {"bitrate", 500000}, {"abom", false}, {"t", 27000}});
   // back to init: immediate; sleep from normal: immediate with SLAKI when SLKIE
   r.set(CAN1 + MCR, INRQ);
   CHECK((r.rd(CAN1 + MSR) & INAK) != 0);
@@ -795,4 +795,166 @@ TEST_CASE("bxcan TX: TXRQ clears RQCP/TXOK/ALST/TERR of its mailbox") {
   r.send(CAN1, 0, std_tir(0x13), 0);
   CHECK((r.rd(CAN1 + TSR) & 0xFF) == 0);
   CHECK_FALSE(r.irq_high(IRQ_TX));
+}
+
+// ---- fault confinement (Task 7): the bus engine owns TEC/REC and delivers absolute values ----
+namespace {
+constexpr uint32_t EWGF = 1u << 0, EPVF = 1u << 1, BOFF = 1u << 2;
+constexpr uint32_t EWGIE = 1u << 8, EPVIE = 1u << 9, BOFIE = 1u << 10, ABOM = 1u << 6;
+json fc(json j, unsigned tec, unsigned rec, uint64_t epoch = 0) {
+  j["tec"] = tec;
+  j["rec"] = rec;
+  j["epoch"] = epoch;
+  return j;
+}
+json txerr(unsigned m, uint64_t seq, const char* e) {
+  return {{"mailbox", m}, {"seq", seq}, {"ok", false}, {"arb_lost", false}, {"error", e}};
+}
+uint32_t tec_of(uint32_t esr) { return (esr >> 16) & 0xFF; }
+uint32_t rec_of(uint32_t esr) { return esr >> 24; }
+}  // namespace
+
+TEST_CASE("bxcan fault confinement: counters drive ESR EWGF/EPVF/BOFF and ERRI/SCE per IER") {
+  Rig r;
+  r.up(CAN1);
+  r.wr(CAN1 + IER, ERRIE | EWGIE | EPVIE | BOFIE);  // no LECIE: LEC changes alone do not set ERRI
+  r.send(CAN1, 0, std_tir(0x10), 0);
+  uint64_t t = r.clock.now_ns();
+  auto step = [&](const char* op, const json& a) {
+    t += 1000;
+    r.can1.deliver(op, a, t);
+    r.to(t);
+    return r.rd(CAN1 + ESR);
+  };
+  uint32_t esr = step("tx_result", fc(txerr(0, 1, "bit_recessive"), 8, 0));
+  CHECK(tec_of(esr) == 8);
+  CHECK(((esr >> 4) & 7) == 4);  // LEC bit recessive
+  CHECK((esr & (EWGF | EPVF | BOFF)) == 0);
+  CHECK((r.rd(CAN1 + MSR) & ERRI) == 0);
+  CHECK_FALSE(r.irq_high(IRQ_SCE));
+  esr = step("tx_result", fc(txerr(0, 1, "bit_recessive"), 95, 0));
+  CHECK((esr & EWGF) == 0);
+  esr = step("tx_result", fc(txerr(0, 1, "bit_recessive"), 96, 0));  // warning limit: >= 96
+  CHECK((esr & (EWGF | EPVF)) == EWGF);
+  CHECK((r.rd(CAN1 + MSR) & ERRI) != 0);
+  CHECK(r.irq_high(IRQ_SCE));
+  r.clr(CAN1 + ESR, 0x70);  // HAL: CLEAR_BIT(ESR, LEC) writes the read-only fields back
+  CHECK(tec_of(r.rd(CAN1 + ESR)) == 96);
+  CHECK((r.rd(CAN1 + ESR) & 0x70) == 0);
+  r.wr(CAN1 + MSR, ERRI);  // rc_w1
+  CHECK_FALSE(r.irq_high(IRQ_SCE));
+  esr = step("tx_result", fc(txerr(0, 1, "bit_recessive"), 104, 0));  // EWGF already set: no new ERRI
+  CHECK((r.rd(CAN1 + MSR) & ERRI) == 0);
+  esr = step("tx_result", fc(txerr(0, 1, "bit_recessive"), 128, 0));  // passive: > 127
+  CHECK((esr & (EWGF | EPVF | BOFF)) == (EWGF | EPVF));
+  CHECK(r.irq_high(IRQ_SCE));
+  r.wr(CAN1 + MSR, ERRI);
+  esr = step("tx_result", fc(txerr(0, 1, "bit_recessive"), 256, 0));  // bus-off: TEC > 255
+  CHECK((esr & (EWGF | EPVF | BOFF)) == (EWGF | EPVF | BOFF));
+  CHECK(tec_of(esr) == 255);  // the 8-bit field saturates (the counter is 256)
+  CHECK(r.irq_high(IRQ_SCE));
+  CHECK(r.can1.call("state", json::object())["tec"] == 256);
+  CHECK(r.can1.call("state", json::object())["error_state"] == "bus_off");
+  CHECK(r.can1.call("state", json::object())["esr"] == r.rd(CAN1 + ESR));
+  CHECK(r.can1.call("state", json::object())["tsr"] == r.rd(CAN1 + TSR));
+  CHECK(r.can1.call("state", json::object())["msr"] == r.rd(CAN1 + MSR));
+  r.wr(CAN1 + MSR, ERRI);
+  CHECK((r.rd(CAN1 + TSR) & TME0) == 0);  // the mailbox stays pending across bus-off
+  esr = step("counters", fc(json::object(), 0, 0));  // recovery
+  CHECK((esr & (EWGF | EPVF | BOFF)) == 0);
+  CHECK(tec_of(esr) == 0);
+  CHECK((r.rd(CAN1 + MSR) & ERRI) == 0);  // falling edges never set ERRI
+  CHECK(r.can1.call("state", json::object())["error_state"] == "active");
+  // receive side: REC from rx / error deliveries
+  r.wr(CAN1 + IER, ERRIE | EPVIE | LECIE);
+  esr = step("error", {{"lec", "stuff"}, {"tec", 0}, {"rec", 128}, {"epoch", 0}});
+  CHECK(rec_of(esr) == 128);
+  CHECK(((esr >> 4) & 7) == 1);
+  CHECK((esr & (EWGF | EPVF)) == (EWGF | EPVF));
+  CHECK(r.irq_high(IRQ_SCE));
+  r.wr(CAN1 + MSR, ERRI);
+  esr = step("rx", fc(rx(0x55, "01"), 0, 127));  // dropped by the filters; counters still apply
+  CHECK(rec_of(esr) == 127);
+  CHECK((esr & (EWGF | EPVF)) == EWGF);
+  CHECK(((esr >> 4) & 7) == 0);
+  CHECK_FALSE(r.irq_high(IRQ_SCE));
+  // ESR: only LEC is writable
+  r.wr(CAN1 + ESR, 0xFFFFFFFFu);
+  esr = r.rd(CAN1 + ESR);
+  CHECK(((esr >> 4) & 7) == 7);
+  CHECK(rec_of(esr) == 127);
+  CHECK((esr & (EPVF | BOFF)) == 0);
+}
+
+TEST_CASE("bxcan fault confinement: ack/ok results update TEC; validation") {
+  Rig r;
+  r.up(CAN1);
+  r.send(CAN1, 0, std_tir(0x10), 0);
+  uint64_t t = r.clock.now_ns() + 100;
+  r.can1.deliver("tx_result", fc(txerr(0, 1, "ack"), 8, 0), t);
+  r.can1.deliver("tx_result", fc(ok(0, 1), 7, 0), t + 100);
+  r.to(t);
+  CHECK(tec_of(r.rd(CAN1 + ESR)) == 8);
+  CHECK(((r.rd(CAN1 + ESR) >> 4) & 7) == 3);
+  r.to(t + 100);
+  CHECK(tec_of(r.rd(CAN1 + ESR)) == 7);
+  CHECK(((r.rd(CAN1 + ESR) >> 4) & 7) == 0);
+  // a stale result (mailbox already complete) still carries the engine's counters
+  r.can1.deliver("tx_result", fc(ok(0, 1), 6, 0), t + 200);
+  r.to(t + 200);
+  CHECK(tec_of(r.rd(CAN1 + ESR)) == 6);
+  const auto bad = [&](const char* op, const json& a) {
+    CHECK_THROWS_AS(r.can1.deliver(op, a, t + 300), std::invalid_argument);
+  };
+  json partial = ok(0, 2);
+  partial["tec"] = 1;  // tec without rec / epoch
+  bad("tx_result", partial);
+  bad("rx", fc(rx(0x1, ""), 1, 70000));  // counters are at most 0xFFFF
+  bad("error", {{"lec", "stuff"}, {"tec", 0}, {"rec", 1}});  // no epoch
+  bad("error", {{"lec", "nope"}, {"tec", 0}, {"rec", 1}, {"epoch", 0}});
+  bad("error", {{"lec", "ack"}, {"tec", 0}, {"rec", 1}, {"epoch", 0}, {"x", 1}});
+  bad("counters", {{"tec", 0}, {"epoch", 0}});
+  CHECK(r.clock.next_event_ns() == kNone);
+}
+
+TEST_CASE("bxcan fault confinement: MCR.RESET starts a new counter epoch; can_mode carries abom/reset") {
+  Rig r;
+  r.init(CAN1, ABOM);
+  (void)can_events();
+  r.start(CAN1);
+  auto ev = can_events();
+  REQUIRE(ev.size() == 1);
+  CHECK(ev[0]["mode"] == "normal");
+  CHECK(ev[0]["abom"] == true);
+  CHECK_FALSE(ev[0].contains("reset"));
+  r.clr(CAN1 + MCR, ABOM);  // ABOM change in normal mode: re-reported
+  ev = can_events();
+  REQUIRE(ev.size() == 1);
+  CHECK(ev[0]["mode"] == "normal");
+  CHECK(ev[0]["abom"] == false);
+  r.clr(CAN1 + MCR, ABOM);  // no change: no event
+  CHECK(can_events().empty());
+  uint64_t t = r.clock.now_ns() + 100;
+  r.can1.deliver("counters", fc(json::object(), 40, 3), t);
+  r.to(t);
+  CHECK(tec_of(r.rd(CAN1 + ESR)) == 40);
+  r.set(CAN1 + MCR, RESET);
+  ev = can_events();
+  REQUIRE(ev.size() == 1);
+  CHECK(ev[0]["mode"] == "sleep");
+  CHECK(ev[0]["reset"] == true);
+  CHECK(r.rd(CAN1 + ESR) == 0);
+  r.set(CAN1 + MCR, RESET);  // already in sleep: the reset is still reported
+  ev = can_events();
+  REQUIRE(ev.size() == 1);
+  CHECK(ev[0]["reset"] == true);
+  r.can1.deliver("counters", fc(json::object(), 50, 0, 0), t + 100);  // epoch 0: before the resets
+  r.to(t + 100);
+  CHECK(r.rd(CAN1 + ESR) == 0);
+  r.can1.deliver("error", {{"lec", "stuff"}, {"tec", 9}, {"rec", 9}, {"epoch", 1}}, t + 150);  // stale epoch
+  r.to(t + 150);
+  CHECK(r.rd(CAN1 + ESR) == 0);  // neither counters nor LEC
+  r.can1.deliver("counters", fc(json::object(), 50, 0, 2), t + 200);
+  r.to(t + 200);
+  CHECK(tec_of(r.rd(CAN1 + ESR)) == 50);
 }

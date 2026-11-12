@@ -32,21 +32,31 @@ class FakeNode:
 
     Each scripted action is issued at the first quantum end T >= its time (as Task 5's
     node-event wiring will: node events up to T are known after the quantum), and every
-    engine callback is recorded with its time."""
+    engine callback is recorded with its time. The fault-confinement counters the engine
+    adds (tec, rec, epoch; see test_can_errors.py) are recorded separately in ``fc``, so
+    ``calls`` keeps the arbitration/ACK view these tests check."""
 
     def __init__(self, sim: Sim, bus: CanBus, name: str):
         self.name = name
         self.bus = bus
         self.calls: list[tuple] = []
+        self.fc: list[tuple] = []  # (t, kind, counters)
         self.script: list[tuple] = []  # (t, action, args)
-        bus._attach_node(name, self._on_rx, self._on_tx_result)
+        bus._attach_node(name, self._on_rx, self._on_tx_result, self._on_fault)
         sim._can_hooks.append(self._hook)
 
-    def _on_rx(self, lf: LoggedFrame, t: int) -> None:
+    def _on_rx(self, lf: LoggedFrame, t: int, fc: dict) -> None:
         self.calls.append(("rx", t, lf))
+        self.fc.append((t, "rx", fc))
 
     def _on_tx_result(self, key, result: dict, t: int) -> None:
+        fc = {k: result.pop(k) for k in ("tec", "rec", "epoch") if k in result}
         self.calls.append(("tx_result", t, key, result))
+        if fc:
+            self.fc.append((t, "tx_result", fc))
+
+    def _on_fault(self, op: str, args: dict, t: int) -> None:
+        self.calls.append((op, t, args))
 
     def mode(self, t: int, mode: str, bitrate: int | None = BR) -> None:
         self.script.append((t, "mode", (mode, bitrate if mode == "normal" else None)))
@@ -338,9 +348,11 @@ def test_ack_only_from_normal_nodes_and_ack_devices():
     sim.advance(us=500)
     assert bus.log == []
     errs = [c for c in n1.calls if c[0] == "tx_result"]
-    assert errs[0] == ("tx_result", dur(f), 0, {"ok": False, "arb_lost": False, "error": "ack", "seq": 0})
-    period = dur(f) + IFS
-    assert [c[1] for c in errs] == [dur(f) + k * period for k in range(len(errs))]  # automatic retransmission
+    # an ACK error: SOF .. ACK slot, then a 20-bit error frame (Task 7; see stest.can.bus)
+    att = dur(f) + 12 * BIT
+    assert errs[0] == ("tx_result", att, 0, {"ok": False, "arb_lost": False, "error": "ack", "seq": 0})
+    period = att + IFS
+    assert [c[1] for c in errs] == [att + k * period for k in range(len(errs))]  # automatic retransmission
     # n2 goes normal: the next attempt starting at or after that instant is acknowledged
     t_on = sim.now_ns + 7
     n2.mode(t_on, "normal")
@@ -588,12 +600,13 @@ def test_abort_during_failed_attempt_takes_effect_before_retry():
     n.mode(0, "normal")
     f = CanFrame(0x100)
     n.request(0, 0, f, seq=7)
-    n.abort(10_000, 0)  # mid-flight of the first attempt (SOF 0, EOF ~ 100 us)
+    n.abort(10_000, 0)  # mid-flight of the first attempt (SOF 0, error frame ends ~ 120 us)
     sim.start()
     sim.advance(ms=1)
+    att = dur(f) + 12 * BIT  # SOF .. ACK slot + 20-bit error frame (Task 7)
     assert [(c[1], c[3]) for c in n.calls] == [
-        (dur(f), {"ok": False, "arb_lost": False, "error": "ack", "seq": 7}),
-        (max(10_000 + lookahead_ns(BR), dur(f)), {"ok": False, "arb_lost": False, "error": None, "aborted": True, "seq": 7}),
+        (att, {"ok": False, "arb_lost": False, "error": "ack", "seq": 7}),
+        (max(10_000 + lookahead_ns(BR), att), {"ok": False, "arb_lost": False, "error": None, "aborted": True, "seq": 7}),
     ]
     sim.close()
 

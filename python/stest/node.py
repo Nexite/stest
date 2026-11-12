@@ -475,7 +475,8 @@ class Node:
         run at quantum end ``T`` before the bus engines), in the node's event order. The node
         is sender ``self.name`` on each bus it is wired to (one controller per bus).
 
-        - ``can_mode`` -> ``bus._set_node_mode(mode, bitrate, t)``. Entering normal with a bit
+        - ``can_mode`` -> ``bus._set_node_mode(mode, bitrate, t, abom=, reset=)`` (MCR.ABOM, and
+          MCR.RESET: the bus engine owns the error counters). Entering normal with a bit
           rate other than the bus's ends the simulation (NodeCrashed, see
           ``Sim._can_bitrate_mismatch``).
         - ``can_tx`` -> ``bus._request(key=mailbox, frame, t, txfp, seq, nart)``.
@@ -496,7 +497,7 @@ class Node:
                 mode, bitrate = d["mode"], d.get("bitrate")
                 if mode == "normal" and bitrate != bus.bitrate:
                     self.sim._can_bitrate_mismatch(self, periph, bus, bitrate, t)
-                bus._set_node_mode(self.name, mode, bitrate, t)
+                bus._set_node_mode(self.name, mode, bitrate, t, abom=d.get("abom"), reset=bool(d.get("reset", False)))
             elif kind == "can_tx":
                 frame = CanFrame(int(d["id"]), bytes.fromhex(d["data"]), ext=bool(d["ext"]),
                                  rtr=bool(d["rtr"]), dlc=int(d["dlc"]))

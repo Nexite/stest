@@ -1,4 +1,5 @@
 #include "stm32l4/models/bxcan.hpp"
+#include <algorithm>
 #include <cstdio>
 #include <stdexcept>
 #include "stest/node.hpp"
@@ -32,7 +33,7 @@ constexpr uint32_t TMEIE = 1u << 0, FMPIE0 = 1u << 1, FFIE0 = 1u << 2, FOVIE0 = 
                    ERRIE = 1u << 15, WKUIE = 1u << 16, SLKIE = 1u << 17;
 constexpr uint32_t IER_RW = 0x7Fu | EWGIE | EPVIE | BOFIE | LECIE | ERRIE | WKUIE | SLKIE;
 // ESR (CAN_ESR_*)
-constexpr uint32_t LEC_POS = 4, LEC = 7u << 4;
+constexpr uint32_t EWGF = 1u << 0, EPVF = 1u << 1, BOFF = 1u << 2, LEC_POS = 4, LEC = 7u << 4;
 // BTR (CAN_BTR_*)
 constexpr uint32_t BTR_RESET = 0x01230000u, BRP = 0x3FFu, TS1_POS = 16, TS2_POS = 20,
                    LBKM = 1u << 30, SILM = 1u << 31;
@@ -60,6 +61,7 @@ uint32_t id16(uint32_t id, bool ext, bool rtr) {
   return (stid << 5) | (rtr ? 0x10u : 0u) | (ext ? 0x08u | ((id >> 15) & 7u) : 0u);
 }
 bool is_bool(const nlohmann::json& a, const char* k) { return a.contains(k) && a[k].is_boolean(); }
+const char* const kLecNames[] = {"", "stuff", "form", "ack", "bit_recessive", "bit_dominant", "crc"};
 // a non-negative integer no larger than max (JSON ints may be stored signed or unsigned)
 bool is_uint(const nlohmann::json& a, const char* k, uint64_t max) {
   if (!a.contains(k) || !a[k].is_number_integer()) return false;
@@ -125,6 +127,8 @@ void Bxcan::reset() {
   seq_ = order_ = 0;
   slaki_ = erri_ = false;
   reported_bitrate_ = 0;
+  tec_ = rec_ = 0;
+  epoch_ = 0;
   regs_.reset();
   sync();
 }
@@ -149,15 +153,18 @@ uint64_t Bxcan::bit_ns() const {
 
 // ---- modes ----
 
-void Bxcan::emit_mode() {
+void Bxcan::emit_mode(bool master_reset) {
   static const char* names[] = {"sleep", "init", "normal"};
   nlohmann::json b = nullptr;
   if (mode_ == Mode::Normal) {
     reported_bitrate_ = bitrate();
     b = reported_bitrate_;
   }
-  emit_event(clock_.now_ns(), {{"kind", "can_mode"}, {"periph", name_},
-                               {"mode", names[static_cast<int>(mode_)]}, {"bitrate", b}});
+  reported_abom_ = (regs_.get(MCR) & ABOM) != 0;
+  nlohmann::json ev = {{"kind", "can_mode"}, {"periph", name_}, {"mode", names[static_cast<int>(mode_)]},
+                       {"bitrate", b}, {"abom", reported_abom_}};
+  if (master_reset) ev["reset"] = true;
+  emit_event(clock_.now_ns(), ev);
 }
 
 void Bxcan::apply_mode() {
@@ -215,14 +222,14 @@ void Bxcan::master_reset() {
   mb_ = {};
   fifo_ = {};
   slaki_ = erri_ = false;
+  tec_ = rec_ = 0;  // ESR resets below; deliveries carrying older counters are dropped (epoch)
+  ++epoch_;
   // every register except the filters (they are not part of the CAN cell's master reset)
   const uint32_t rst[][2] = {{MCR, MCR_RESET}, {MSR, MSR_RESET}, {IER, 0}, {ESR, 0}, {BTR, BTR_RESET}};
   for (const auto& r : rst) regs_.set(r[0], r[1]);
   for (uint32_t off = TI0R; off < FIFO_END; off += 4) regs_.set(off, 0);
-  if (mode_ != Mode::Sleep) {
-    mode_ = Mode::Sleep;
-    emit_mode();
-  }
+  mode_ = Mode::Sleep;
+  emit_mode(true);  // always: the bus engine zeroes its counters for this controller
   sync();
 }
 
@@ -235,6 +242,8 @@ void Bxcan::write_mcr(uint32_t v) {
   if (v & AWUM) not_modelled("automatic wake-up on bus activity (MCR.AWUM)");
   regs_.set(MCR, v & MCR_RW);
   apply_mode();
+  // ABOM changed while in normal mode: re-report it (otherwise the next can_mode carries it)
+  if (mode_ == Mode::Normal && ((v & ABOM) != 0) != reported_abom_) emit_mode();
   sync();
 }
 
@@ -360,6 +369,19 @@ void Bxcan::on_tx_result(unsigned m, uint64_t seq, int outcome, uint32_t lec) {
       }
   }
   sync();
+}
+
+void Bxcan::set_counters(uint32_t tec, uint32_t rec) {
+  tec_ = tec;
+  rec_ = rec;
+  const uint32_t esr = regs_.get(ESR);
+  const uint32_t flags = (tec >= 96 || rec >= 96 ? EWGF : 0u) | (tec > 127 || rec > 127 ? EPVF : 0u) |
+                         (tec > 255 ? BOFF : 0u);
+  const uint32_t rising = flags & ~esr;
+  regs_.set(ESR, (esr & LEC) | flags | (std::min<uint32_t>(tec, 255) << 16) | (std::min<uint32_t>(rec, 255) << 24));
+  const uint32_t ier = regs_.get(IER);
+  if (((rising & EWGF) && (ier & EWGIE)) || ((rising & EPVF) && (ier & EPVIE)) || ((rising & BOFF) && (ier & BOFIE)))
+    erri_ = true;
 }
 
 void Bxcan::set_lec(uint32_t lec) {
@@ -603,11 +625,14 @@ nlohmann::json Bxcan::call(std::string_view op, const nlohmann::json&) {
       tx.push_back({{"state", sts[static_cast<int>(b.st)]},
                     {"seq", b.st == Tx::Requested ? nlohmann::json(b.seq) : nlohmann::json(nullptr)},
                     {"abort", b.abort && b.st != Tx::Empty}});
-    const uint32_t esr = regs_.get(ESR);
     return {{"mode", modes[static_cast<int>(mode_)]},
             {"bitrate", mode_ == Mode::Normal ? nlohmann::json(bitrate()) : nlohmann::json(nullptr)},
-            {"tec", (esr >> 16) & 0xFF},
-            {"rec", esr >> 24},
+            {"tec", tec_},
+            {"rec", rec_},
+            {"error_state", tec_ > 255 ? "bus_off" : (tec_ > 127 || rec_ > 127) ? "passive" : "active"},
+            {"esr", regs_.get(ESR)},
+            {"msr", regs_.get(MSR)},
+            {"tsr", regs_.get(TSR)},
             {"tx", tx},
             {"fifo", {fifo_[0].n, fifo_[1].n}}};
   }
@@ -618,6 +643,49 @@ nlohmann::json Bxcan::call(std::string_view op, const nlohmann::json&) {
 void Bxcan::deliver(std::string_view op, const nlohmann::json& a, uint64_t t_ns) {
   const auto bad = [&](const std::string& why) { throw std::invalid_argument(name_ + " " + std::string(op) + ": " + why); };
   if (!a.is_object()) bad("args must be an object");
+  // Fault-confinement counters from the bus engine (absolute values): "tec", "rec" and
+  // "epoch" together, optional on tx_result / rx, required on error / counters.
+  struct Fc {
+    bool has = false;
+    uint32_t tec = 0, rec = 0;
+    uint64_t epoch = 0;
+  } fc;
+  const bool need_fc = op == "error" || op == "counters";
+  if (need_fc || a.contains("tec") || a.contains("rec") || a.contains("epoch")) {
+    if (!is_uint(a, "tec", 0xFFFF) || !is_uint(a, "rec", 0xFFFF) || !is_uint(a, "epoch", UINT64_MAX))
+      bad("'tec', 'rec' (0..65535) and 'epoch' must be given together as non-negative integers");
+    fc = {true, a["tec"].get<uint32_t>(), a["rec"].get<uint32_t>(), a["epoch"].get<uint64_t>()};
+  }
+  // counters of an older epoch (sent before an MCR.RESET) are dropped
+  const auto apply_fc = [this, fc] {
+    if (fc.has && fc.epoch == epoch_) set_counters(fc.tec, fc.rec);
+  };
+  if (need_fc) {
+    for (const auto& [k, v] : a.items())
+      if (k != "tec" && k != "rec" && k != "epoch" && !(op == "error" && k == "lec")) bad("unknown key '" + k + "'");
+  }
+  if (op == "error") {
+    uint32_t lec = 0;
+    if (a.contains("lec") && a["lec"].is_string())
+      for (uint32_t i = 1; i < 7; ++i)
+        if (a["lec"].get<std::string>() == kLecNames[i]) lec = i;
+    if (!lec) bad("'lec' must be one of stuff, form, ack, bit_recessive, bit_dominant, crc");
+    clock_.schedule_at(t_ns, [this, fc, lec] {
+      if (fc.epoch == epoch_) {  // a receive error from before an MCR.RESET changes nothing
+        set_counters(fc.tec, fc.rec);
+        set_lec(lec);
+      }
+      sync();
+    });
+    return;
+  }
+  if (op == "counters") {
+    clock_.schedule_at(t_ns, [this, apply_fc] {
+      apply_fc();
+      sync();
+    });
+    return;
+  }
   if (op == "tx_result") {
     if (!is_uint(a, "mailbox", 2))
       bad("'mailbox' must be 0, 1 or 2");
@@ -631,17 +699,19 @@ void Bxcan::deliver(std::string_view op, const nlohmann::json& a, uint64_t t_ns)
     uint32_t lec = 0;
     if (a.contains("error") && !a["error"].is_null()) {
       if (!a["error"].is_string()) bad("'error' must be null or a string");
-      static const char* codes[] = {"", "stuff", "form", "ack", "bit_recessive", "bit_dominant", "crc"};
       const std::string e = a["error"].get<std::string>();
       for (uint32_t i = 1; i < 7; ++i)
-        if (e == codes[i]) lec = i;
+        if (e == kLecNames[i]) lec = i;
       if (!lec) bad("unknown 'error' \"" + e + "\" (stuff, form, ack, bit_recessive, bit_dominant, crc)");
     }
     if (okv + arb + abt + (lec != 0) != 1) bad("exactly one of ok, arb_lost, aborted, error must be set");
     const unsigned m = a["mailbox"].get<unsigned>();
     const uint64_t seq = a["seq"].get<uint64_t>();
     const int outcome = okv ? 0 : arb ? 1 : lec ? 2 : 3;
-    clock_.schedule_at(t_ns, [this, m, seq, outcome, lec] { on_tx_result(m, seq, outcome, lec); });
+    clock_.schedule_at(t_ns, [this, apply_fc, m, seq, outcome, lec] {
+      apply_fc();  // even for a stale result: the engine's counters are authoritative
+      on_tx_result(m, seq, outcome, lec);
+    });
     return;
   }
   if (op == "rx") {
@@ -662,7 +732,10 @@ void Bxcan::deliver(std::string_view op, const nlohmann::json& a, uint64_t t_ns)
       if (hi < 0 || lo < 0) bad("'data' is not hex: " + s);
       f.data[i / 2] = static_cast<uint8_t>(hi << 4 | lo);
     }
-    clock_.schedule_at(t_ns, [this, f] { on_rx(f); });
+    clock_.schedule_at(t_ns, [this, apply_fc, f] {
+      apply_fc();  // also when the frame is dropped (mode, filters): it was received on the bus
+      on_rx(f);
+    });
     return;
   }
   throw UnknownOp(op);

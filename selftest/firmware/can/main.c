@@ -20,7 +20,14 @@
  * starts it again; rx_hold = 1 stops draining FIFO0 (the callback disables the FIFO0
  * interrupt and leaves the message), 0 drains again. fifo0_ovr samples RF0R.FOVR0 every 1 ms.
  * The main loop does its work only when the SysTick count changed, so spurious WFI wake-ups
- * (one per quantum end) make no register accesses and timing is quantum-independent. */
+ * (one per quantum end) make no register accesses and timing is quantum-independent.
+ *
+ * Error variants (fault confinement tests): CAN_ERR_NOTIFY=1 (exes can_err, can_abom) enables
+ * the error notifications (EWG, EPV, BOF, LEC, ERR: CAN2_SCE interrupt) and records them:
+ * sce_count (CAN2_SCE_IRQHandler entries), err_cb_count / err_code_or (HAL_CAN_ErrorCallback
+ * calls / OR of hcan->ErrorCode, reset after each callback), err_last_esr (CAN2->ESR in the
+ * last callback), boff_cb_count (callbacks reporting bus-off). CAN_ABOM=1 (can_abom) sets
+ * AutoBusOff (MCR.ABOM): automatic bus-off recovery. */
 #include "main.h"
 
 #ifndef NODE_ID
@@ -28,6 +35,13 @@
 #endif
 #ifndef CAN_PRESCALER
 #define CAN_PRESCALER 10
+#endif
+
+#ifndef CAN_ERR_NOTIFY
+#define CAN_ERR_NOTIFY 0
+#endif
+#ifndef CAN_ABOM
+#define CAN_ABOM 0
 #endif
 
 #define RX_SLOTS 8
@@ -57,6 +71,11 @@ volatile uint32_t error_count = 0;
 volatile uint8_t can_run = 1;
 volatile uint8_t rx_hold = 0;
 volatile uint8_t fifo0_ovr = 0;
+volatile uint32_t sce_count = 0;
+volatile uint32_t err_cb_count = 0;
+volatile uint32_t err_code_or = 0;
+volatile uint32_t err_last_esr = 0;
+volatile uint32_t boff_cb_count = 0;
 
 void SystemClock_Config(void);
 static void MX_CAN2_Init(void);
@@ -76,6 +95,13 @@ int main(void)
   {
     Error_Handler();
   }
+#if CAN_ERR_NOTIFY
+  if (HAL_CAN_ActivateNotification(&hcan2, CAN_IT_ERROR_WARNING | CAN_IT_ERROR_PASSIVE | CAN_IT_BUSOFF |
+                                               CAN_IT_LAST_ERROR_CODE | CAN_IT_ERROR) != HAL_OK)
+  {
+    Error_Handler();
+  }
+#endif
   if (HAL_CAN_Start(&hcan2) != HAL_OK)
   {
     Error_Handler();
@@ -200,6 +226,20 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
   }
 }
 
+#if CAN_ERR_NOTIFY
+void HAL_CAN_ErrorCallback(CAN_HandleTypeDef *hcan)
+{
+  err_cb_count++;
+  err_code_or |= hcan->ErrorCode;
+  err_last_esr = hcan->Instance->ESR;
+  if ((hcan->ErrorCode & HAL_CAN_ERROR_BOF) != 0U)
+  {
+    boff_cb_count++;
+  }
+  hcan->ErrorCode = HAL_CAN_ERROR_NONE;
+}
+#endif
+
 static void MX_CAN2_Init(void)
 {
   hcan2.Instance = CAN2;
@@ -209,7 +249,7 @@ static void MX_CAN2_Init(void)
   hcan2.Init.TimeSeg1 = CAN_BS1_13TQ;
   hcan2.Init.TimeSeg2 = CAN_BS2_2TQ;
   hcan2.Init.TimeTriggeredMode = DISABLE;
-  hcan2.Init.AutoBusOff = DISABLE;
+  hcan2.Init.AutoBusOff = CAN_ABOM ? ENABLE : DISABLE;
   hcan2.Init.AutoWakeUp = DISABLE;
   hcan2.Init.AutoRetransmission = ENABLE;
   hcan2.Init.ReceiveFifoLocked = DISABLE;
@@ -276,6 +316,10 @@ void HAL_CAN_MspInit(CAN_HandleTypeDef *hcan)
 
     HAL_NVIC_SetPriority(CAN2_RX0_IRQn, 0, 0);
     HAL_NVIC_EnableIRQ(CAN2_RX0_IRQn);
+#if CAN_ERR_NOTIFY
+    HAL_NVIC_SetPriority(CAN2_SCE_IRQn, 0, 0);
+    HAL_NVIC_EnableIRQ(CAN2_SCE_IRQn);
+#endif
   }
 }
 
@@ -283,6 +327,14 @@ void CAN2_RX0_IRQHandler(void)
 {
   HAL_CAN_IRQHandler(&hcan2);
 }
+
+#if CAN_ERR_NOTIFY
+void CAN2_SCE_IRQHandler(void)
+{
+  sce_count++;
+  HAL_CAN_IRQHandler(&hcan2);
+}
+#endif
 
 void SystemClock_Config(void)
 {

@@ -28,6 +28,10 @@ class CanDevice:
     mode. With ``ack=False`` it only listens; a frame nobody else acknowledges is retried
     forever, as on a real bus. ``ack`` is fixed once the device is attached.
 
+    Devices are always error active and keep no error counters: errors on their frames
+    (no ACK, ``CanBus.inject_errors``, same-identifier collisions) are retried at once, forever,
+    and they never become error passive or bus-off. Only firmware nodes have fault confinement.
+
     An exception raised by :meth:`on_frame` or an :meth:`every` callback ends the
     simulation with a StestError naming the device (the original exception chained).
     """

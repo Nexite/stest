@@ -87,6 +87,23 @@ class CanFrame:
     def duration_ns(self, bitrate: int) -> int:
         return -(-self.bit_length() * 1_000_000_000 // bitrate)
 
+    def arbitration_bits(self) -> int:
+        """Bits on the wire (stuff bits included) from SOF through the last bit of the
+        arbitration field (RTR): 13 unstuffed bits for a standard frame, 33 for an extended one."""
+        return _stuffed_len(self._head_bits()[: 33 if self.ext else 13])
+
+    def bits_to_difference(self, other: CanFrame) -> int:
+        """Bits on the wire from SOF through the first bit at which this frame and ``other``
+        (same arbitration field, sent at the same instant) differ: where the transmitter of
+        the recessive bit detects a bit error. Both share the prefix, so stuff bits agree."""
+        if other.arbitration_key() != self.arbitration_key():
+            raise ValueError("bits_to_difference: the frames have different arbitration fields")
+        a, b = self._head_bits(), other._head_bits()
+        for i, (x, y) in enumerate(zip(a, b)):
+            if x != y:
+                return _stuffed_len(a[: i + 1])
+        raise ValueError("bits_to_difference: the frames are identical on the wire")
+
     def arbitration_key(self) -> tuple:
         """Wire arbitration field as a bit tuple; lexicographically smaller wins.
 

@@ -106,14 +106,19 @@ endforeach()
 
 # CAN: CubeMX-style CAN2 node at 500 kbit/s (CAN1 clock for the shared filters; 16-bit list +
 # 32-bit mask banks; FIFO0 interrupt; id 0x100 + NODE_ID every 10 ms). One exe per node id
-# (can_node1, can_node2) plus can_badrate (node 1 with Prescaler 20: 250 kbit/s). CAN HAL
-# module enabled in can/Inc; handlers from blinky.
+# (can_node1, can_node2) plus can_badrate (node 1 with Prescaler 20: 250 kbit/s), can_err (node 1
+# with the error notifications and CAN2_SCE interrupt) and can_abom (can_err with AutoBusOff).
+# CAN HAL module enabled in can/Inc; handlers from blinky.
 set(_can ${CMAKE_CURRENT_SOURCE_DIR}/firmware/can)
-foreach(variant node1 node2 badrate)
+foreach(variant node1 node2 badrate err abom)
   if(variant STREQUAL "node2")
     set(_defs NODE_ID=2)
   elseif(variant STREQUAL "badrate")
     set(_defs NODE_ID=1 CAN_PRESCALER=20)
+  elseif(variant STREQUAL "err")
+    set(_defs NODE_ID=1 CAN_ERR_NOTIFY=1)
+  elseif(variant STREQUAL "abom")
+    set(_defs NODE_ID=1 CAN_ERR_NOTIFY=1 CAN_ABOM=1)
   else()
     set(_defs NODE_ID=1)
   endif()

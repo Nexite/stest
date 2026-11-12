@@ -122,8 +122,9 @@ def hal_direct_gpio_hal_exe() -> Path:
 
 @pytest.fixture
 def can_exe():
-    """Factory: can_exe(1 | 2 | "badrate") -> the CAN2 node firmware (can_node1, can_node2,
-    can_badrate: node 1 at 250 kbit/s)."""
+    """Factory: can_exe(1 | 2 | "badrate" | "err" | "abom") -> the CAN2 node firmware (can_node1,
+    can_node2, can_badrate: node 1 at 250 kbit/s, can_err: node 1 with error notifications and
+    the SCE interrupt, can_abom: can_err with automatic bus-off recovery)."""
 
     def get(variant) -> Path:
         return _exe(f"can_node{variant}" if isinstance(variant, int) else f"can_{variant}")

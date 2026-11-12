@@ -296,8 +296,10 @@ class Sim:
         if self._can_queue:
             self._run_can_queue(T)
         for b in self._buses:
-            if b._npending or b._aborts:
+            if b._needs_run():
                 b._run(T)
+            if b._err_q:
+                b._flush_errors(T)
 
     def _run_can_queue(self, T: int) -> None:
         q = self._can_queue
@@ -501,14 +503,22 @@ class Sim:
 
 def _node_can_callbacks(n: Node, periph: str):
     """Engine result hooks for node ``n``'s controller ``periph``: inbox messages for the
-    model's ``deliver()`` ops ``rx`` {id, ext, rtr, dlc, data (hex)} and ``tx_result``
-    {mailbox, ok, arb_lost, error}, applied at exactly the frame's EOF."""
+    model's ``deliver()`` ops ``rx`` {id, ext, rtr, dlc, data (hex), tec, rec, epoch},
+    ``tx_result`` {mailbox, ok, arb_lost, error, seq[, aborted][, tec, rec, epoch]}, ``error``
+    {lec, tec, rec, epoch} and ``counters`` {tec, rec, epoch}, applied at exactly the engine's
+    times (see stest.can.bus)."""
 
-    def on_rx(lf, t: int) -> None:
+    def on_rx(lf, t: int, fc: dict | None = None) -> None:
         f = lf.frame
-        n.post(periph, "rx", {"id": f.id, "ext": f.ext, "rtr": f.rtr, "dlc": f.dlc, "data": f.data.hex()}, t)
+        args = {"id": f.id, "ext": f.ext, "rtr": f.rtr, "dlc": f.dlc, "data": f.data.hex()}
+        if fc is not None:
+            args.update(fc)
+        n.post(periph, "rx", args, t)
 
     def on_tx_result(key, result: dict, t: int) -> None:
         n.post(periph, "tx_result", {"mailbox": key, **result}, t)
 
-    return on_rx, on_tx_result
+    def on_fault(op: str, args: dict, t: int) -> None:
+        n.post(periph, op, args, t)
+
+    return on_rx, on_tx_result, on_fault

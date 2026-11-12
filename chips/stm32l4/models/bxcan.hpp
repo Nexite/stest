@@ -31,18 +31,22 @@
 // assumed idle), at which INAK / SLAK clear. A new MCR write before then cancels it.
 // MSR.SAMP/RX read 1 (recessive bus), TXM/RXM read 0.
 // Mode event, at every mode change (the instant INAK/SLAK change):
-//   {"kind":"can_mode","periph":"CAN1","mode":"sleep|init|normal","bitrate":<int|null>}
+//   {"kind":"can_mode","periph":"CAN1","mode":"sleep|init|normal","bitrate":<int|null>,
+//    "abom":bool[,"reset":true]}
 // bitrate (bit/s, integer division) only when entering normal. While in normal, a clock-tree
 // change that changes the bit rate re-emits the event with the new bitrate (subscribed to
 // ModelContext::clock_tree_changed; nothing clock-derived is cached otherwise: an ongoing
-// 11-bit synchronisation wait keeps the PCLK1 of its MCR write).
+// 11-bit synchronisation wait keeps the PCLK1 of its MCR write). abom = MCR.ABOM at the event;
+// an MCR write that changes ABOM while in normal mode re-emits the event (the bus engine runs
+// bus-off recovery). "reset": true on MCR.RESET (always emitted, also when already in sleep).
 //   bitrate = PCLK1 / ((BRP+1) x (1 + (TS1+1) + (TS2+1)))  (80 MHz, BRP 9, TS1 12, TS2 1: 500 000)
 // BTR is write-protected outside initialization mode (RM0351 55.9.2 "accessible only in
 // initialization mode"): a BTR write while MSR.INAK = 0 aborts (strict) instead of being
 // ignored. Reads are allowed.
 // MCR.RESET (master reset): every register except the filters returns to its reset value,
 // mode sleep; requests already handed to the bus are withdrawn (can_tx_abort) and their
-// results ignored. MCR.DBF, ABOM are stored (bus-off recovery is Task 7).
+// results ignored; the error counters are zeroed and a new counter epoch starts (below).
+// MCR.DBF is stored only.
 //
 // ---- TX mailboxes (RM0351 55.7.1) ----
 // A mailbox is empty (TMEx = 1), held (TXRQ set outside normal mode, TMEx = 0) or requested
@@ -66,9 +70,11 @@
 // mailbox stays busy (TMEx = 0, ABRQx reads 1) until the engine's result. ABRQx on an empty
 // mailbox has no effect.
 // deliver("tx_result", {"mailbox":m,"seq":k,"ok":bool,"arb_lost"?:bool,"aborted"?:bool,
-//   "error"?:null|"stuff"|"form"|"ack"|"bit_recessive"|"bit_dominant"|"crc"}, t): at t
-//   (EOF, or the engine's abort acknowledgement time). Ignored (stale) unless mailbox m is
-//   requested with this seq. Exactly one outcome: ok; arb_lost; error; aborted.
+//   "error"?:null|"stuff"|"form"|"ack"|"bit_recessive"|"bit_dominant"|"crc",
+//   "tec"?,"rec"?,"epoch"?}, t): at t (EOF, the failed attempt's post time, or the engine's
+//   abort acknowledgement time). Counters (see "Fault confinement") are applied first, also
+//   for a stale result. Ignored (stale) unless mailbox m is requested with this seq. Exactly
+//   one outcome: ok; arb_lost; error; aborted.
 //   ok:       RQCPx = TXOKx = TMEx = 1, ALSTx = TERRx = 0, ESR.LEC = 0.
 //   arb_lost: TXOKx = 0, ALSTx = 1.     error: TXOKx = 0, TERRx = 1, ESR.LEC = code
 //             (ack 3; stuff 1, form 2, bit_recessive 4, bit_dominant 5, crc 6), and MSR.ERRI
@@ -76,7 +82,6 @@
 //             RQCPx stays 0); with NART = 1 the mailbox completes: RQCPx = TMEx = 1.
 //   aborted:  for an ABRQ: RQCPx = TMEx = 1, TXOKx = 0 (ALST/TERR keep the last attempt's);
 //             for a withdrawal on leaving normal: back to held (see above).
-//   TEC/REC are not updated (fault confinement: Task 7); ESR.EWGF/EPVF/BOFF stay 0.
 // Setting TXRQx clears RQCPx (and so TXOKx/ALSTx/TERRx), as on hardware (RM0351 TSR).
 // Completion clears TIxR.TXRQ and TSR.ABRQx. Writing 1 to RQCPx clears RQCPx, TXOKx, ALSTx,
 // TERRx. TSR.CODE = lowest-numbered empty mailbox, else the lowest-priority pending one;
@@ -85,8 +90,9 @@
 // mailbox number first), 1 = by TXRQ order.
 //
 // ---- RX (RM0351 55.7.4 - 55.7.5) ----
-// deliver("rx", {"id":n,"ext":bool,"rtr":bool,"dlc":0..8,"data":"<hex>"}, t): a frame that
-// ended (EOF) at t. At t: dropped unless the controller is in normal mode (the engine
+// deliver("rx", {"id":n,"ext":bool,"rtr":bool,"dlc":0..8,"data":"<hex>","tec"?,"rec"?,
+// "epoch"?}, t): a frame that ended (EOF) at t. At t: counters applied (always: the frame was
+// received on the bus, even if dropped below); dropped unless the controller is in normal mode (the engine
 // already only delivers to nodes in normal mode at SOF) or while FMR.FINIT = 1 (filter
 // initialization mode deactivates reception); ESR.LEC = 0; then filtered by the active banks
 // of this controller. Filter number (FMI) per RM0351 "Filter match index": filters are
@@ -105,6 +111,33 @@
 // FM1R/FS1R/FFA1R are writable only with FMR.FINIT = 1; FiRx only with FINIT = 1 or bank i
 // inactive (FA1R bit clear). Other writes abort (strict; hardware ignores them). FMR.CAN2SB
 // > 28 aborts.
+//
+// ---- Fault confinement (RM0351 55.7.6 "Error management", ISO 11898-1) ----
+// The Python bus engine owns TEC and REC (it decides errors, ACK, delivery and retries inside
+// its lookahead window and must know error passive / bus-off for that) and delivers absolute
+// values with "tec", "rec" (0..65535) and "epoch" (all three or none) on tx_result and rx, and:
+// deliver("error", {"lec":"stuff"|"form"|"ack"|"bit_recessive"|"bit_dominant"|"crc","tec","rec",
+//   "epoch"}, t): the controller received an error frame (receive error): counters, then LEC
+//   (and MSR.ERRI if IER.LECIE).
+// deliver("counters", {"tec","rec","epoch"}, t): counters only (bus-off recovery: 0, 0 at the
+//   instant the engine lets the node rejoin; RM0351 requires at least 128 x 11 recessive bits).
+// error/counters reject unknown keys (strict); bad values -> std::invalid_argument.
+// Counters (and an "error"'s LEC) whose epoch differs from the controller's are dropped: the epoch counts MCR.RESETs
+// (the engine counts them from can_mode "reset"), so deliveries computed before a reset never
+// overwrite the reset ESR. The model never changes TEC/REC itself; nothing else resets them
+// (init/sleep mode keep them, as on hardware: only the recovery sequence and MCR.RESET clear
+// them - RM0351 does not list another reset; documented assumption).
+// ESR from the counters: TEC [23:16] = min(TEC, 255) (the field is 8 bits; the counter exceeds
+// 255 in bus-off: 255 is shown - an interpretation), REC [31:24] = min(REC, 255),
+// EWGF = TEC >= 96 or REC >= 96 (RM0351 "warning limit ... >= 96"), EPVF = TEC > 127 or
+// REC > 127, BOFF = TEC > 255. MSR.ERRI is set when EWGF / EPVF / BOFF rises while EWGIE /
+// EPVIE / BOFIE is set, and when an error stores a non-zero LEC while LECIE is set; falling
+// flags never set it. ESR: only LEC is writable (HAL's CLEAR_BIT(ESR, LEC) writes the read-only
+// fields back unchanged); EWGF/EPVF/BOFF/TEC/REC keep their hardware semantics (read-only).
+// A bus-off controller keeps its mailboxes pending (the engine does not let it transmit until
+// it rejoins). Bus-off recovery (ABOM = 1: automatic; 0: after INRQ set then cleared) is timed
+// by the engine (see stest.can.bus), which posts "counters" at the rejoin instant - a Clock
+// event, so polling ESR.BOFF is never fast-forwarded past it.
 //
 // ---- IRQs (levels, ModelContext::set_irq_source; RM0351 55.8) ----
 //   tx  = TMEIE & (RQCP0 | RQCP1 | RQCP2)
@@ -127,9 +160,10 @@
 // mode), MCR.AWUM and IER.WKUIE (wake-up on bus activity: a sleeping controller does not
 // see the bus here), BTR.LBKM / BTR.SILM (loop back / silent), DLC > 8 at TXRQ.
 //
-// call(): "state" -> {"mode", "bitrate" (null unless normal), "tec", "rec",
-//   "tx": [{"state": "empty"|"held"|"pending", "seq": k|null, "abort": bool} x3],
-//   "fifo": [n0, n1]}.
+// call(): "state" -> {"mode", "bitrate" (null unless normal), "tec", "rec" (the delivered
+//   counters, unclamped), "error_state": "active"|"passive"|"bus_off", "esr", "msr", "tsr"
+//   (raw register values), "tx": [{"state": "empty"|"held"|"pending", "seq": k|null,
+//   "abort": bool} x3], "fifo": [n0, n1]}.
 //   "can_info" -> {"type": "bxcan", "role": "master" | "slave"}: identifies a CAN controller
 //   (Python's Sim.start() checks every name wired with Sim.node(..., can={...}) with it).
 // The Python harness compares the bitrate of a can_mode "normal" event with its bus's bit
@@ -199,11 +233,12 @@ class Bxcan : public Peripheral {
   void on_rx(const Frame& f);
   bool match(const Frame& f, unsigned& fifo, uint8_t& fmi) const;
   void set_lec(uint32_t lec);
+  void set_counters(uint32_t tec, uint32_t rec);
   uint64_t bit_ns() const;
   uint64_t arb_key(unsigned m) const;
   void show_fifo(unsigned f);
   void sync();  // TSR/RFxR/MSR from the state, then the IRQ levels
-  void emit_mode();
+  void emit_mode(bool master_reset = false);
 
   std::string name_;
   Clock& clock_;
@@ -224,6 +259,9 @@ class Bxcan : public Peripheral {
   std::array<Fifo, 2> fifo_{};
   uint64_t seq_ = 0, order_ = 0;
   bool slaki_ = false, erri_ = false;
+  bool reported_abom_ = false;   // MCR.ABOM in the last can_mode event
+  uint32_t tec_ = 0, rec_ = 0;   // fault-confinement counters, as delivered by the bus engine
+  uint64_t epoch_ = 0;           // MCR.RESET count: deliveries of an older epoch carry stale counters
 };
 
 }  // namespace stest::stm32l4
