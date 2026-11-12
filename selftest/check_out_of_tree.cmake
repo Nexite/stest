@@ -40,7 +40,9 @@ if(CASE STREQUAL "ok")
   if(NOT rc EQUAL 0 OR NOT out MATCHES "consumer_smoke")
     message(FATAL_ERROR "consumer ctest -N does not list consumer_smoke:\n${out}")
   endif()
-  if(out MATCHES "runtime_|chip_|selftest_|python_")
+  # Match test lines only: the output starts with "Test project <WORK>", and WORK may itself
+  # contain one of these prefixes (e.g. a checkout under ~/python_projects).
+  if(out MATCHES "Test +#[0-9]+: (runtime_|chip_|selftest_|python_)")
     message(FATAL_ERROR "stest's own tests are registered in the consumer:\n${out}")
   endif()
   if(NOT out MATCHES "Total Tests: 1[\r\n]")
