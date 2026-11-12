@@ -14,10 +14,10 @@ of the cookbook.
 --8<-- "python/tests/test_recipes.py:marker"
 ```
 
-- `@pytest.mark.stest(...)` takes the keys `quantum_us`, `wall_timeout_s`, `poll_skip`,
-  `strict_analog` and `debugger_attached`. A marker on a class or module (`pytestmark =
-  pytest.mark.stest(...)`) applies to its tests; the closest marker wins as a whole (keys are
-  not merged across levels).
+- The [marker's keys](../../reference/pytest.md#the-stest-marker) are the settings in the
+  [reference](../../reference/pytest.md#settings). A marker on a class or module
+  (`pytestmark = pytest.mark.stest(...)`) applies to its tests; the closest marker wins as a
+  whole.
 - A smaller quantum makes waits stop closer to the event and inputs set between quanta land
   closer to where you put them, at the cost of host time (more round trips per virtual second).
   For exact input times use [`Pin.drive_at`](pins.md#exact-edge-times) instead.
@@ -33,9 +33,8 @@ uv run pytest tests -q --stest-quantum-us 100
 uv run pytest tests -q --stest-wall-timeout 10 --stest-strict-analog
 ```
 
-- The options are `--stest-quantum-us`, `--stest-wall-timeout`, `--stest-poll-skip`,
-  `--stest-strict-analog`, `--stest-no-debugger` and `--stest-can-log`. A marker on a test wins
-  over an option ([precedence](../../reference/pytest.md#precedence)).
+- Every option is in the [settings table](../../reference/pytest.md#settings). A marker on a
+  test wins over an option ([precedence](../../reference/pytest.md#precedence)).
 - To make them the default for a project, put them in `addopts` in your `pyproject.toml`'s
   `[tool.pytest.ini_options]`.
 

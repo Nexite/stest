@@ -5,7 +5,7 @@ firmware with (`-g -O0`). Recipes use the [imports and `firmware` fixture](index
 of the cookbook. They use these globals from the blinky firmware's `vars.c`:
 
 ```c
---8<-- "selftest/firmware/blinky/Core/Src/vars.c:7:23"
+--8<-- "selftest/firmware/blinky/Core/Src/vars.c:5:24"
 ```
 
 ## Read variables

@@ -38,11 +38,12 @@ What it builds:
   whatever `CMAKE_BUILD_TYPE` is (the build type applies to stest's runtime). C sources are
   C11.
 - Your sources (only) get `-Dmain=stest_firmware_main`: the runtime provides the real `main`.
-- The HAL and ST's `system_stm32l4xx.c` go into a static library, so your own copy of a HAL
-  file's function, a strong definition of a `__weak` HAL function (`HAL_GPIO_EXTI_Callback`,
-  `HAL_InitTick`, ...) or your own `system_stm32l4xx.c` wins.
-- The chip glue generated from the part TOML supplies the interrupt vector table and weak
-  default handlers, so handlers you do not define link.
+- The HAL and ST's `system_stm32l4xx.c` go into a static library, so your definition of a
+  `__weak` HAL function (`HAL_GPIO_EXTI_Callback`, `HAL_InitTick`, ...) or your own
+  `system_stm32l4xx.c` wins.
+- The chip glue generated from the part TOML supplies the interrupt vector table and a weak
+  default for every handler, so handlers you do not define link. A default that runs aborts
+  ([unhandled interrupt](#unhandled-interrupt)).
 - Include order: stest's host `cmsis_compiler.h`, then `INCLUDE_DIRS`, the HAL's `Inc`, the
   CMSIS device `Include`, CMSIS-Core `Include`, stest's `runtime/include`.
 - On macOS a post-build step writes `<name>.dSYM` (debug information for
@@ -83,14 +84,14 @@ covers using another HAL version.
 
 ### Read by a node
 
-A node (a firmware executable) reads these at startup. Under pytest the Sim sets them from its
+A node (a firmware executable) reads these at startup, also in standalone mode. Under pytest the Sim sets them from its
 settings when those are given; otherwise the node inherits them from the environment pytest runs
 in, or from `sim.node(..., env={...})`. The
 [pytest plugin reference](pytest.md#precedence) has the precedence rules.
 
 | Variable | Values | Meaning |
 |---|---|---|
-| `STEST_POLL_SKIP` | integer >= 0, default 64 | [Poll fast-forward](../concepts.md#poll-fast-forward) threshold in store-free loads; `0` disables it. Anything else exits with status 2 (`stest: bad STEST_POLL_SKIP ...`). Also read in standalone mode. |
+| `STEST_POLL_SKIP` | integer >= 0, default 64 | [Poll fast-forward](../concepts.md#poll-fast-forward) threshold in store-free loads; `0` disables it. Anything else exits with status 2 (`stest: bad STEST_POLL_SKIP ...`). |
 | `STEST_STRICT_ANALOG` | `1` to enable | Converting an ADC channel with no input voltage aborts the node instead of reading 0 V with a warning. Any other value: off. |
 | `STEST_DEBUGGER` | `0` to detach | `0` gives the bare-board power-on state (ITM locked and disabled, `DHCSR.C_DEBUGEN` and `DEMCR.TRCENA` clear). Any other value or unset: a debugger is attached. |
 
@@ -141,7 +142,7 @@ The firmware's stdout appears only as these events. Exit status:
 |---|---|
 | 0 | `--run-ms` reached. |
 | 2 | Bad arguments (`stest: --run-ms is required in standalone mode`, `bad --run-ms value`, `unknown argument`, each followed by `usage: <exe> --run-ms N [--quantum-us Q]`) or a bad `STEST_POLL_SKIP`. |
-| 70 | A strict abort. The events up to the abort and any unterminated output line (as an event with `"partial":true`) are printed first, then the `stest: ...` message on stderr. |
+| 70 | A strict abort: the `stest: ...` message on stderr, then on stdout the events up to the abort and any unterminated output line (as an event with `"partial":true`). |
 | `main`'s return value | The firmware's `main` returned. stderr has `stest: firmware main returned <code> at t=<ns> ns`. (Under Python this is an abort.) |
 
 ## Messages
@@ -247,6 +248,18 @@ An exact-time input from [`Pin.drive_at`][stest.Pin.drive_at] or [`Node.post`][s
 could not be applied: its time was before the node's current time, the model or op does not
 exist, or the model rejected the arguments (the model's error follows the colon). Use a time at
 or after `sim.now_ns`, and the model names and ops from the model's header.
+
+#### Unhandled interrupt
+
+```text
+stest: unhandled IRQ TIM7 (55)
+stest: unhandled exception HardFault (-13)
+```
+
+An interrupt or exception was taken, but the firmware defines no handler for it, so the weak
+default ran. Usually an interrupt was enabled (`HAL_NVIC_EnableIRQ`, or CubeMX's NVIC settings)
+without its `<name>_IRQHandler` in `stm32l4xx_it.c`, or the handler's file is missing from
+`SOURCES`. The number is the IRQ number (negative for core exceptions).
 
 #### Breakpoints and sleeping forever
 

@@ -348,7 +348,7 @@ def test_counting_loop_exact(sim, firmware):
 
 
 # --8<-- [start:hang]
-@pytest.mark.stest(wall_timeout_s=1)
+@pytest.mark.stest(wall_timeout_s=2)
 def test_hung_firmware(sim, firmware):
     # faults_spin spins without touching a register after 10 ms: virtual time stops.
     sim.node("app", firmware("faults_spin"))
