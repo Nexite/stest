@@ -72,8 +72,9 @@ times: **88 us at 500 kbit/s** (`docs/can.md`). The gate now runs at that quantu
 step on both jobs; artifacts `gate-can-*.txt`). Same rule: `median(mmio_s) + median(sync_s) <= 0.40`.
 
 The `--can-worst-case` row is **informational and never gated**: one `can_err` node alone on a
-500 kbit/s bus, retrying a frame nobody acknowledges forever (ACK error every ~140 us, error
-passive after 16 attempts, an SCE interrupt per error), measured end to end through the Python
+500 kbit/s bus, retrying a frame nobody acknowledges forever (ACK error, error passive after 16
+attempts, then an attempt every ~156 us: the 140 us attempt period plus 16 us of suspend
+transmission, 6,410 attempts per virtual s; an SCE interrupt per error), measured end to end through the Python
 harness over 1 virtual second per run (`spike/gate_can_noack.py`, `noack_s` = wall s per virtual
 s). It includes everything the standard gate leaves out (the Python bus engine, inbox posts,
 the model, HAL error callbacks), so it is the single-node upper bound for CAN traffic.

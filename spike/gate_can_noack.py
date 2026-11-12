@@ -2,7 +2,8 @@
 
 One ``can_err`` node (selftest/firmware/can) alone on a 500 kbit/s bus: nobody acknowledges,
 so its frame is retransmitted back to back for the whole run (ACK error, error passive after
-16 attempts, then every ~140 us with suspend transmission). The bus caps the quantum at 88 us
+16 attempts, then every ~156 us: the 140 us attempt period plus 16 us of suspend transmission,
+6,410 attempts per virtual s). The bus caps the quantum at 88 us
 and the engine decides an attempt, posts a result and an SCE interrupt every few quanta, so
 this is the most expensive single-node CAN load stest has. Prints the wall seconds per
 virtual second of each run (``noack_s=``) and the ACK-error attempts per virtual second.

@@ -12,9 +12,9 @@
 //    (or lands on it) moves the clock to exactly the quantum end, firing every event up
 //    to it, and calls the hook before the access proceeds; on resume the rest of the
 //    charge is applied. The access happens at the same virtual time as without the
-//    boundary. The hook runs on the calling (firmware)
-//    thread; the node uses it to hand the baton back to its loop thread, and it returns
-//    once the loop has set a later quantum end. Events due at the (unchanged) current
+//    boundary. The hook runs on the calling (firmware) thread; the node uses it to hand
+//    the baton back to its loop thread, and it returns once the loop has set a later
+//    quantum end. Events due at the (unchanged) current
 //    time, e.g. scheduled by the loop thread meanwhile, fire right after it returns.
 #include <cstdint>
 #include <type_traits>
