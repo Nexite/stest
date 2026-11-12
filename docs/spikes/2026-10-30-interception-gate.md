@@ -103,3 +103,34 @@ Reading:
 - **Decision pending (user):** if the x86-64 standard gate at 88 us exceeds 0.40, sync cost
   reduction (shared memory + futex / `os_sync_wait_on_address` instead of the socket round trip)
   becomes a decision for the user, as recorded in the caveats above.
+
+### CAN two-node row (gated) and the WFI change (Plan 3 final fix wave)
+
+`--can-two-node` adds a **gated** row: `can_node1` and `can_node2` exchanging a frame each every
+10 ms on one 500 kbit/s bus (q = 88 us), measured end to end through the Python harness over
+1 virtual second per run after a 20 ms init (`spike/gate_can_two_node.py`, `two_node_s` = wall s
+per virtual s for the pair). Budget: 0.40 per node, **0.80** for the pair; the gate fails if the
+median is over it. CI runs it in the non-blocking 88 us step
+(`run_gate.py --quantum-us 88 --can-two-node --can-worst-case`). It replaces the tight wall
+assert of `test_can_speed` (now opt-in, `STEST_PERF_STRICT=1`).
+
+Measured after the WFI change (WFI sleeps across quantum ends instead of returning at each),
+5 runs each:
+
+| Host | q | mmio_s median | sync_s median | total | two_node_s runs (s) | two_node_s median | noack_s median |
+|---|---|---|---|---|---|---|---|
+| macOS arm64 (M3 Pro, native), before the WFI change | 100 us | 0.000427 | 0.059263 | 0.059690 | | | 0.337925 |
+| macOS arm64 (M3 Pro, native), before the WFI change | 88 us | 0.000421 | 0.063399 | 0.063820 | | | 0.343832 |
+| macOS arm64 (M3 Pro, native) | 100 us | 0.000399 | 0.059774 | 0.060173 | | | 0.348281 |
+| macOS arm64 (M3 Pro, native) | 88 us | 0.000398 | 0.064074 | 0.064472 | 0.355213 0.345693 0.352747 0.359714 0.341585 | **0.352747** (PASS) | 0.351227 |
+| Linux arm64 (Docker Desktop VM, `build-gate-docker`) | 100 us | 0.000447 | 0.097242 | 0.097689 | | | 0.317106 |
+| Linux arm64 (Docker Desktop VM, `build-gate-docker`) | 88 us | 0.000464 | 0.107897 | 0.108361 | 0.411289 0.442860 0.443022 0.515940 0.436516 | **0.442860** (PASS) | 0.313119 |
+| **Linux x86-64 (GitHub Actions)** | 88 us | _pending: CI artifact `gate-can-linux-x86_64`_ | | | | | |
+
+Reading: the standard gate and the no-ACK row do not change measurably with the WFI change
+(the sync benchmark and the no-ACK node are bound by the per-quantum handoff, which WFI still
+makes; what goes away is the firmware loop iteration after each handoff). The two-node CAN
+load costs 0.18 (native) to 0.22 (Docker) per node per virtual second, half the budget. On
+x86-64, where Plan 1 measured sync about 2x the arm64 Docker figure, expect about 0.6-0.9 for
+the pair: near the 0.80 budget, which is why the row is gated in CI's non-blocking step; above
+it, the plan's stop-and-ask rule applies (see the follow-ups file).
