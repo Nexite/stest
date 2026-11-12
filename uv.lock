@@ -210,23 +210,32 @@ name = "stest"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "cantools" },
     { name = "pyelftools" },
+]
+
+[package.optional-dependencies]
+dbc = [
+    { name = "cantools" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "cantools" },
     { name = "pytest" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "cantools", specifier = ">=41" },
+    { name = "cantools", marker = "extra == 'dbc'", specifier = ">=41" },
     { name = "pyelftools", specifier = ">=0.33" },
 ]
+provides-extras = ["dbc"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8" }]
+dev = [
+    { name = "cantools", specifier = ">=41" },
+    { name = "pytest", specifier = ">=8" },
+]
 
 [[package]]
 name = "textparser"

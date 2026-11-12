@@ -118,12 +118,16 @@ history = bus.messages(dbc)                        # [(t_ns, name, signals)] of 
   exception chained. Extended and standard identifiers never cross-match.
 - A `DbcDevice` keeps the latest decoded value of every message it has seen in `received`
   (`{name: (t_ns, signals)}`).
-- A frame with a known identifier that does not decode (wrong length) raises from
-  `DbcDevice.on_frame` and therefore ends the simulation.
+- A frame with a known identifier that does not decode (wrong length / DLC) raises
+  `StestError` from `Dbc.decode`: in a `DbcDevice` callback (`on_frame`) it ends the
+  simulation (the Sim is aborted); from `bus.messages(dbc)` and `bus.wait_for_message` it raises
+  to the caller.
 - `wait_for_message` shares `wait_for_frame`'s consumption cursor.
-- Licensing: DBC support uses cantools (MIT), which depends on python-can (LGPL-3.0). Both
-  are imported runtime dependencies of the Apache-2.0 stest package. Neither is vendored or
-  modified.
+- Licensing and installation: DBC support uses cantools (MIT), which depends on python-can
+  (LGPL-3.0). They are the optional `dbc` extra of the Apache-2.0 stest package
+  (`pip install 'stest[dbc]'`; the repo's `dev` dependency group includes cantools), imported
+  only when a `Dbc` is loaded: `import stest` never loads them, and without them `Dbc(...)`
+  raises `StestError` naming the extra. Neither is vendored or modified.
 
 ## Errors and fault confinement
 

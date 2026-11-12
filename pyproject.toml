@@ -6,15 +6,18 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.11"
 dependencies = [
-    "cantools>=41",
     "pyelftools>=0.33",
 ]
+
+[project.optional-dependencies]
+# DBC support (stest.Dbc / DbcDevice): cantools, which depends on python-can (LGPL-3.0).
+dbc = ["cantools>=41"]
 
 [project.entry-points.pytest11]
 stest = "stest.pytest_plugin"
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "cantools>=41"]
 
 [build-system]
 requires = ["hatchling"]

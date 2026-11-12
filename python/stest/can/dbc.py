@@ -6,6 +6,10 @@ name (a ``str``) and encode from either the name or the raw int. Errors from can
 length does not fit the message) are raised as :class:`~stest.StestError` with the original
 exception chained. ``Dbc.decode`` returns ``None`` for a frame no message matches (unknown
 id, extended/standard mismatch, remote frames).
+
+cantools (and python-can, LGPL-3.0, which it imports) is an optional dependency, the ``dbc``
+extra (``pip install 'stest[dbc]'``), imported only when a :class:`Dbc` is loaded: ``import
+stest`` never loads it, and without it ``Dbc(...)`` raises :class:`~stest.StestError`.
 """
 
 from __future__ import annotations
@@ -13,24 +17,35 @@ from __future__ import annotations
 import os
 from typing import Callable
 
-import cantools
-from cantools.database import Database
-
 from ..errors import StestError
 from .device import CanDevice
 from .frame import CanFrame
 from .log import LoggedFrame
 
 
+def _cantools():
+    """The cantools module, imported on first use (the optional ``dbc`` extra)."""
+    try:
+        import cantools
+        import cantools.database
+    except ImportError as e:
+        raise StestError(
+            "DBC support needs cantools, which is not installed: install the 'dbc' extra "
+            "(pip install 'stest[dbc]', or uv add 'stest[dbc]')"
+        ) from e
+    return cantools
+
+
 class Dbc:
     """A loaded DBC file."""
 
     def __init__(self, path: str | os.PathLike):
+        cantools = _cantools()
         try:
             db = cantools.database.load_file(os.fspath(path))
         except Exception as e:
             raise StestError(f"cannot load DBC {os.fspath(path)!r}: {e}") from e
-        if not isinstance(db, Database):
+        if not isinstance(db, cantools.database.Database):
             raise StestError(f"{os.fspath(path)!r} is not a CAN database (DBC/KCD/SYM)")
         self.path = os.fspath(path)
         self.db = db
