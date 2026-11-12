@@ -170,10 +170,14 @@ TEST_CASE("cortexm: wfi calls the quantum hook at the quantum end; an unmoved en
 
 // A hook standing in for the node's loop thread: each call is one quantum handoff.
 Cortexm* g_hcore = nullptr;
+Clock* g_hclock = nullptr;
 int g_hook_raise_at = -1;  // call index at which the "loop thread" pends IRQ 3 (MODEL_CALL)
+int g_hook_inbox_at = -1;  // call index at which it schedules, at now, an event pending IRQ 3 (inbox)
 void moving_hook() {
   ++g_qhook_calls;
   if (g_qhook_calls == g_hook_raise_at) g_hcore->set_pending(3);
+  if (g_qhook_calls == g_hook_inbox_at)
+    g_hclock->schedule_at(g_hclock->now_ns(), [] { g_hcore->set_pending(3); });
   if (g_qhook_calls < 10) g_hcore->set_quantum_end(g_hcore->quantum_end() + 1 * MS);
 }
 
@@ -181,6 +185,8 @@ TEST_CASE("cortexm: wfi keeps sleeping across quantum ends until an exception wa
   Rig r;
   g_qhook_calls = 0;
   g_hcore = r.core.get();
+  g_hclock = &r.clock;
+  g_hook_inbox_at = -1;
   r.enable(3);
   r.core->set_quantum_hook(&moving_hook);
   r.core->set_quantum_end(1 * MS);
@@ -197,6 +203,14 @@ TEST_CASE("cortexm: wfi keeps sleeping across quantum ends until an exception wa
     r.core->wfi();
     CHECK(r.clock.now_ns() == 4 * MS);
     CHECK(g_qhook_calls == 4);
+    CHECK(r.count_irq(3) == 1);
+  }
+  SUBCASE("an inbox event scheduled at now during the handoff wakes it at the quantum end") {
+    g_hook_raise_at = -1;
+    g_hook_inbox_at = 2;
+    r.core->wfi();
+    CHECK(r.clock.now_ns() == 2 * MS);
+    CHECK(g_qhook_calls == 2);
     CHECK(r.count_irq(3) == 1);
   }
   SUBCASE("nothing wakes it: returns once the hook stops moving the quantum end") {
@@ -217,6 +231,7 @@ TEST_CASE("cortexm: wfi keeps sleeping across quantum ends until an exception wa
     CHECK(r.count_irq(3) == 1);
   }
   g_hcore = nullptr;
+  g_hclock = nullptr;
 }
 
 // ---- dispatcher ----
