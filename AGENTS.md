@@ -20,7 +20,7 @@ stest is an open-source (Apache-2.0) STM32 software-in-the-loop simulator. Real 
 | `tools/gen_chip.py` | TOML -> generated chip glue (IRQ table, weak handlers, model instances, `stest_chip`) |
 | `cmake/` | `StestToolchain.cmake` (finds upstream LLVM), `StestFetchST.cmake` (pinned ST sources), `stest_add_firmware.cmake` |
 | `selftest/` | Self-test firmwares (`firmware/`: `adc`, `blinky`, `can` (exes `can_node1`, `can_node2`, `can_badrate` (250 kbit/s), `can_err` (error notifications + CAN2_SCE), `can_abom` (`can_err` + AutoBusOff)), `dac`, `exti`, `faults` (variants incl. `faults_abort_output`, `faults_abort_events`), `hal_direct`, `itm` (+ `itm_mixed`: printf and ITM interleaved), `pollcount`, `pollpin`, `spi`, `tim`, `wfiloop` (WFI quantum-independence)) and CTest checks |
-| `spike/` | Interception benchmarks and the speed gate (`run_gate.py [--quantum-us 88] [--can-worst-case] [--build-dir DIR]`; `gate_can_noack.py`: the informational CAN no-ACK worst case) |
+| `spike/` | Interception benchmarks and the speed gate (`run_gate.py [--quantum-us 88] [--can-two-node] [--can-worst-case] [--build-dir DIR]`; `gate_can_two_node.py`: the gated two-node CAN row, budget 2 x 0.40; `gate_can_noack.py`: the informational CAN no-ACK worst case) |
 | `python/stest/`, `python/tests/` | `Sim`/`Node`, protocol mirror, DWARF/Mach-O symbol lookup, typed peripheral helpers (`peripherals.py`: `node.timer()`, `node.adc()`, `node.dac()`, `node.spi()`; `pin.py`: levels and analog voltages), pytest plugin; Python tests |
 | `python/stest/can/` | Simulated CAN (user guide `docs/can.md`): `bus.py` bus engine (arbitration, ACK, error frames, fault confinement, `inject_errors`, `errors`; algorithm in its module doc), `frame.py` (`CanFrame`, bit length, `lookahead_ns`), `device.py` (`CanDevice`), `dbc.py` (`Dbc`, `DbcDevice`, via cantools), `log.py` (candump / ASC) |
 | `docs/superpowers/{specs,plans}/` | Design spec and per-plan implementation plans; `docs/spikes/` gate results |
@@ -58,7 +58,7 @@ ctest --test-dir build --output-on-failure                 # includes python_tes
 uv run pytest python/tests -q                              # Python alone; uses build/selftest or $STEST_SELFTEST_BIN
 ./build/selftest/blinky --run-ms 2100                      # standalone: EVT <t> GPIO <port><pin> <level> / EVT <t> <json>
 uv run spike/run_gate.py                                   # speed gate (builds build-gate/ itself)
-uv run spike/run_gate.py --quantum-us 88 --can-worst-case  # gate at the CAN quantum + informational no-ACK worst case
+uv run spike/run_gate.py --quantum-us 88 --can-two-node --can-worst-case  # gate at the CAN quantum + gated two-node CAN row + informational no-ACK worst case
 ```
 
 Docker, exactly as CI runs it (`.github/workflows/ci.yml`):
@@ -72,7 +72,7 @@ docker run --rm -v "$PWD":/w -w /w stest-ci bash -euxo pipefail -c '
   uv run pytest python/tests -q
 '
 docker run --rm -v "$PWD":/w -w /w stest-ci bash -c 'uv run spike/run_gate.py --build-dir build-gate-docker'
-docker run --rm -v "$PWD":/w -w /w stest-ci bash -c 'uv run spike/run_gate.py --build-dir build-gate-docker --quantum-us 88 --can-worst-case'
+docker run --rm -v "$PWD":/w -w /w stest-ci bash -c 'uv run spike/run_gate.py --build-dir build-gate-docker --quantum-us 88 --can-two-node --can-worst-case'
 ```
 
 Note the Docker build writes into the host `build/`; if you share the tree with a native build, use a separate dir (e.g. `build-docker`, as the README does, and `--build-dir build-gate-docker` for the gate). `build*/` is gitignored.
@@ -117,7 +117,7 @@ Note the Docker build writes into the host `build/`; if you share the tree with 
 - TDD: write the failing test first. C++ uses doctest; CTest names are prefixed `runtime_`, `chip_`, `selftest_` (and `python_tests`, `python_perf_tests`). Python and e2e use pytest (`python/tests/`, `pytester` for plugin tests).
 - Self-test firmwares live in `selftest/firmware/*`; fault injection is one exe per variant (`faults_spin|crash|unmodelled|ro_write|clkoff`, plus `faults_printf` for stdout capture, `faults_abort_output` / `faults_abort_events` for output and events of an aborting quantum). HAL-mode builds are suffixed `_gpio_hal` (`blinky_gpio_hal`, `exti_gpio_hal`, `hal_direct_gpio_hal`).
 - Every CTest has a `TIMEOUT` (30 s for runtime/chip/selftests, 120 for the `selftest_configure_*` nested configures, 300 for `python_tests` / `python_perf_tests`); set one on new tests.
-- Wall-clock budgets are load-sensitive (under `ctest -j8`, `test_can_speed` reached 0.97 of its budget beside the nested configures, and fails under CPU load): mark every Python test that reads a wall clock `@pytest.mark.perf`. CTest's `python_tests` runs `-m "not perf"` and `python_perf_tests` runs `-m perf` with `RUN_SERIAL` (alone), as does `selftest_blinky_speed`; `python/tests/test_perf_isolation.py` enforces both. Plain `uv run pytest python/tests` runs everything.
+- Wall-clock budgets are load-sensitive (under `ctest -j8`, `test_can_speed` reached 0.97 of its budget beside the nested configures, and fails under CPU load): mark every Python test that reads a wall clock `@pytest.mark.perf`. CTest's `python_tests` runs `-m "not perf"` and `python_perf_tests` runs `-m perf` with `RUN_SERIAL` (alone), as does `selftest_blinky_speed`; `python/tests/test_perf_isolation.py` enforces both. Plain `uv run pytest python/tests` runs everything. `test_can_speed` (two CAN nodes, host-sensitive) checks its traffic always but its 1.6 s wall budget only with `STEST_PERF_STRICT=1` (otherwise a 4x sanity bound); the gated CAN speed figure is `spike/run_gate.py --can-two-node` (CI's non-blocking 88 us gate step).
 - Before claiming done, run the full suite natively AND in Docker (Linux-only paths like `PR_SET_PDEATHSIG` and `/proc` differ from macOS).
 - Do not match on raw JSON key order in event logs (keys are sorted).
 

@@ -1,8 +1,9 @@
-"""Wall-clock speed budgets are load-sensitive: run in parallel with other CTests
-(``ctest -j8``) they fail at random. The ``perf`` marker routes them to the CTest
+"""Wall-clock speed budgets are load-sensitive: they run close to their budget, so run in
+parallel with other CTests (``ctest -j8``) they fail under the extra load. The ``perf`` marker routes them to the CTest
 ``python_perf_tests``, which runs RUN_SERIAL (alone), and ``python_tests`` skips them. These
 checks keep that true: every test that reads a wall clock is marked, and the CTests are
-registered that way."""
+registered that way. test_can_speed's tight budget is opt-in (``STEST_PERF_STRICT=1``; the
+gated CAN figure is ``spike/run_gate.py --can-two-node``)."""
 
 from __future__ import annotations
 
@@ -47,6 +48,14 @@ def test_every_wall_clock_test_is_marked_perf():
                     marked.append(fn.name)
     assert unmarked == [], f"wall-clock tests without @pytest.mark.perf: {unmarked}"
     assert len(marked) >= 5  # adc, tim, can speed, engine backlog cost, var hot path
+
+
+def test_can_speed_budget_is_opt_in():
+    src = (TESTS / "test_can_e2e.py").read_text()
+    fn = next(f for f in ast.parse(src).body if isinstance(f, ast.FunctionDef) and f.name == "test_can_speed")
+    body = ast.get_source_segment(src, fn)
+    assert _marked_perf(fn)
+    assert 'os.environ.get("STEST_PERF_STRICT") == "1"' in body
 
 
 def _ctest_json() -> dict:

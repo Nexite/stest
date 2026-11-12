@@ -5,6 +5,7 @@ node 1 with Prescaler 20 = 250 kbit/s)."""
 from __future__ import annotations
 
 import json
+import os
 import time
 
 import pytest
@@ -322,8 +323,11 @@ def test_can_e2e_determinism(can_exe):
 
 @pytest.mark.perf  # wall-clock budget: CTest python_perf_tests (RUN_SERIAL)
 def test_can_speed(can_exe):
-    """2 nodes exchanging frames: 2 virtual s within 1.6 s of wall time (0.4 s per node per
-    virtual s), at the 88 us quantum a 500 kbit/s bus imposes."""
+    """2 nodes exchanging frames for 2 virtual s at the 88 us quantum a 500 kbit/s bus imposes.
+    The traffic is always checked. The wall-clock budget (1.6 s: 0.4 s per node per virtual s)
+    is load- and host-sensitive, so it is enforced only with STEST_PERF_STRICT=1; otherwise only
+    a coarse sanity bound (4x) applies. The gated measurement is the speed gate's CAN two-node
+    row (spike/run_gate.py --can-two-node)."""
     with Sim() as s:
         bus = s.can_bus("drive", BITRATE)
         n1 = s.node("n1", can_exe(1), can={"CAN2": bus})
@@ -335,4 +339,5 @@ def test_can_speed(can_exe):
         print(f"test_can_speed: 2 nodes, 2 virtual s, quantum {s.quantum_ns} ns: wall {wall:.3f} s")
         assert n1.var("rx_count") == 200 - 1 or n1.var("rx_count") == 200
         assert len(bus.log) >= 398
-        assert wall <= 1.6, f"too slow: {wall:.3f} s > 1.6 s for 2 nodes x 2 virtual s"
+        budget = 1.6 if os.environ.get("STEST_PERF_STRICT") == "1" else 4 * 1.6
+        assert wall <= budget, f"too slow: {wall:.3f} s > {budget:.1f} s for 2 nodes x 2 virtual s"
