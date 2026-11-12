@@ -17,8 +17,6 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: Build the site in strict mode
         run: uv run --only-group docs mkdocs build --strict
-      - uses: actions/configure-pages@v5
-        if: github.event_name == 'push'
       - uses: actions/upload-pages-artifact@v3
         if: github.event_name == 'push'
         with:
