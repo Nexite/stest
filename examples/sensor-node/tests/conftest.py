@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+# --8<-- [start:imports]
 import os
 from pathlib import Path
 
 import pytest
+# --8<-- [end:imports]
 
 from stest import Dbc
 
+# --8<-- [start:firmware]
 EXAMPLE_DIR = Path(__file__).resolve().parents[1]
 
 
-# --8<-- [start:firmware]
 @pytest.fixture
 def firmware():
     """``firmware("sensor")`` -> path of a firmware executable built by CMake.

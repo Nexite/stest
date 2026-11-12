@@ -148,31 +148,58 @@ the stest version your firmware is built with.
 ## Finding the executables: `conftest.py`
 
 Tests need the path of each built executable. The example's `tests/conftest.py` provides a
-`firmware` fixture that looks in `build/`, or in a directory named by an environment variable:
+`firmware` fixture that looks in `build/`, or in a directory named by an environment variable.
+Copy this into `tests/conftest.py` (rename `SENSOR_NODE_BIN` as you like):
 
 ```python
+--8<-- "examples/sensor-node/tests/conftest.py:imports"
+
+
 --8<-- "examples/sensor-node/tests/conftest.py:firmware"
 ```
 
-The fixture skips the test, with the command to run, when an executable is not built.
+`EXAMPLE_DIR` is the directory above `tests/`, where `build/` is. The fixture skips the test,
+with the command to run, when an executable is not built.
 
 ## A first test
 
-From the example's `tests/test_sensor.py`. A helper starts the sensor board on a CAN bus (the
-board transmits on CAN1, and a CAN frame needs a receiver to acknowledge it):
+A first test needs only the board's pins and globals. This one, from the example's
+`tests/test_first.py`, presses a button and checks that the LED toggled and the firmware counted
+the press:
 
 ```python
---8<-- "examples/sensor-node/tests/test_sensor.py:start"
+--8<-- "examples/sensor-node/tests/test_first.py:first"
 ```
 
-and the test presses the button and checks the LED:
+- `sim.node(name, path)` adds a node: one MCU, running the executable as its own process.
+  `sim.start()` starts every node, at virtual time 0.
+- Pins are named as on the chip (`"PA5"`). `set_low()` / `set_high()` drive an input; `level`
+  (and `history`) read an output.
+- `sim.advance(ms=...)` runs virtual time; inputs take effect between these steps.
+- `node.var("g_button_count")` reads a firmware global by name, from the debug info.
+
+Swap in your board's executable, pins and variables. (The example's sensor board also sends a
+CAN frame every 100 ms, and a node that transmits without a CAN bus stops with an error. This
+test ends at 20 ms, before the first frame. A board without CAN has no such limit.)
+
+### A test with a CAN bus
+
+When the board talks CAN, give it a bus with a receiver. From the example's
+`tests/test_sensor.py`:
+
+```python
+--8<-- "examples/sensor-node/tests/test_sensor.py:imports"
+
+
+--8<-- "examples/sensor-node/tests/test_sensor.py:start"
+```
 
 ```python
 --8<-- "examples/sensor-node/tests/test_sensor.py:button"
 ```
 
-Pins are named as on the chip (`"PA5"`). `set_low()` / `set_high()` drive an input,
-`level` and `history` read an output, and `sim.advance(ms=...)` runs virtual time. The
+A CAN frame needs an acknowledgement, so the bus gets a `CanDevice` that acknowledges every
+frame. [CAN](../can.md) covers buses, devices and DBC decoding. The
 [Writing tests](writing-tests/index.md) pages cover each area.
 
 ## Run the tests
@@ -182,8 +209,8 @@ uv run pytest tests -q
 ```
 
 ```text
-....                                                                     [100%]
-4 passed in 0.61s
+.....                                                                    [100%]
+5 passed in 0.37s
 ```
 
 The first run creates `.venv/` and installs stest and pytest into it. When a test fails, the

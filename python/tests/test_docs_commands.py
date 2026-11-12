@@ -1,4 +1,4 @@
-"""The shell commands the getting-started pages show are commands CI runs.
+"""The shell commands the Install, Quickstart and Getting started pages show are commands CI runs.
 
 Every command line in a fenced ``sh`` block of the checked pages must appear verbatim (after
 collapsing whitespace) as a line of a CI workflow (``.github/workflows/ci.yml`` or
@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-PAGES = ["docs/quickstart.md", "docs/guide/getting-started.md"]
+PAGES = ["docs/install.md", "docs/quickstart.md", "docs/guide/getting-started.md"]
 WORKFLOWS = [".github/workflows/ci.yml", ".github/workflows/docs.yml"]
 OPT_OUT = "<!-- not tested by CI -->"
 

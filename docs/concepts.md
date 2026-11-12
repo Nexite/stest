@@ -75,13 +75,19 @@ pins, logs and variables, applies inputs, and starts the next quantum. Consequen
 ## Determinism
 
 There is no wall clock and no host scheduling in the simulation. The same firmware, the same
-inputs and the same quantum give a **byte-identical** event log, on every run and every host
-stest supports. A failure you see once, you see every time.
+inputs and the same quantum give a **byte-identical** event log on every run. A failure you see once, you see every time.
 
 Each register access and event happens at the same virtual time wherever quantum boundaries
-fall. A different quantum can still shift some timings: loops that wake once per quantum, and
-polling loops dilated by poll fast-forward (below). Keep the quantum fixed when you compare
-runs.
+fall, and a sleeping core (`__WFI`) is not woken by quantum ends. A different quantum can still
+change results in two ways:
+
+- An input set from Python between quanta (`set_high()`, `set_voltage()`, ...) takes effect at
+  the quantum boundary where the nodes are paused, so its virtual time depends on the quantum.
+  `Pin.drive_at` and `Node.post` take an exact time instead.
+- A polling loop dilated by poll fast-forward (below) jumps to the end of the quantum when no
+  event is pending.
+
+Keep the quantum fixed when you compare runs.
 
 Only one thing is wall-clock: `wall_timeout_s` (default 30 s), a watchdog for a node that stops
 answering, such as firmware spinning in a loop with no register access.

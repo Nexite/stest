@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+# --8<-- [start:imports]
 from stest import CanDevice
 
 BITRATE = 500_000  # must match the firmware's CAN bit timing exactly
+# --8<-- [end:imports]
 
 
 # --8<-- [start:start]

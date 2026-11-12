@@ -17,8 +17,14 @@ dev container (see the Windows tab below).
 
 ## Install the toolchain
 
+How CI gets its toolchain differs from the commands below, so they are **not tested by CI**: the
+macOS runner runs `brew install llvm ninja` (CMake is preinstalled and uv comes from a setup
+action), and Linux CI runs everything inside the Docker image, which installs the same apt
+packages as the Ubuntu tab plus uv through pip.
+
 === "macOS"
 
+    <!-- not tested by CI -->
     ```sh
     brew install llvm cmake ninja uv
     ```
@@ -29,6 +35,7 @@ dev container (see the Windows tab below).
 
 === "Ubuntu 24.04"
 
+    <!-- not tested by CI -->
     ```sh
     sudo apt install clang-18 llvm-18-dev lld-18 cmake ninja-build python3
     curl -LsSf https://astral.sh/uv/install.sh | sh    # or: pipx install uv
@@ -41,25 +48,31 @@ dev container (see the Windows tab below).
 
 === "Windows / Docker"
 
-    stest does not run natively on Windows. Use the Docker image, which is what CI uses on
-    Linux: Ubuntu 24.04 with LLVM 18, CMake, Ninja, Python and uv, and `STEST_LLVM_ROOT`
-    already set.
+    stest does not run natively on Windows. Use the Docker image: Ubuntu 24.04 with LLVM 18,
+    CMake, Ninja, Python and uv, and `STEST_LLVM_ROOT` already set. These are the commands
+    CI's Linux job runs, from the root of the stest checkout:
 
     ```sh
     docker build -t stest-ci docker
     docker run --rm -v "$PWD":/w -w /w stest-ci bash -euxo pipefail -c '
-      cmake -S . -B build-docker -G Ninja -DCMAKE_BUILD_TYPE=Release
-      cmake --build build-docker
+      cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      cmake --build build
+      ctest --test-dir build --output-on-failure
+      uv run pytest python/tests -q
     '
     ```
 
-    Run it from the stest checkout. Use a separate build directory (`build-docker` here) if you
-    also build natively from the same tree: the container's build is Linux-only.
+    CI runs them on a Linux host; Docker Desktop on Windows is **not tested by CI**.
+
+    The container writes its (Linux) build into the checkout's `build/`. If you also build
+    natively in the same checkout, give the container its own directory, for example by
+    replacing `build` with `build-docker` in the commands above (also not tested by CI).
 
     For an editor that works inside the image, open the repository in the **dev container**
     (`.devcontainer/devcontainer.json`, with VS Code's Dev Containers extension or any tool
-    that reads that file). It builds the same image and mounts the checkout at `/w`; every
-    command on these pages then works unchanged in its terminal.
+    that reads that file). It builds the same image and mounts the checkout at `/w`, so the
+    commands on these pages work in its terminal. The dev container itself is **not tested by
+    CI**.
 
 ## Build stest and run its tests
 
@@ -72,7 +85,7 @@ ctest --test-dir build --output-on-failure
 uv run pytest python/tests -q
 ```
 
-These are the commands CI runs on macOS and inside the Docker image. The first configure
+These are the commands CI runs on macOS and inside the Docker image (Linux). The first configure
 downloads ST's STM32L4 HAL, the CMSIS device files and CMSIS-Core at pinned commits (checked by
 SHA-256), so it needs network access once.
 
