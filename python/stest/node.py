@@ -36,7 +36,30 @@ _CAN_KINDS = frozenset(("can_mode", "can_tx", "can_tx_abort"))
 
 
 class Node:
-    """A node of a :class:`Sim`. Create with ``sim.node(name, exe)``."""
+    """One firmware instance (one host process, one MCU) of a [`Sim`][stest.Sim].
+
+    Create with [`Sim.node`][stest.Sim.node]. Requests ([`call`][stest.Node.call],
+    [`var`][stest.Node.var], [`read_mem`][stest.Node.read_mem], pin and peripheral helpers)
+    need a started Sim and run while the node is paused between quanta, so they never race
+    the firmware. Logs and histories are as of the last completed quantum.
+
+    A request the node rejects (unknown model or op, bad arguments, out-of-range memory)
+    raises [`StestError`][stest.StestError] and the node keeps running. Once any node has
+    crashed, aborted or timed out, every request raises that same exception type again
+    ([`NodeCrashed`][stest.NodeCrashed] or [`WallClockTimeout`][stest.WallClockTimeout]).
+
+    Attributes:
+        sim (Sim): The owning simulation.
+        name (str): The node name given to ``Sim.node``.
+        index (int): Creation index within ``sim.nodes`` (orders same-time events).
+        exe (pathlib.Path): The firmware executable.
+        env (dict): Extra environment variables given to ``Sim.node``.
+        pid (int | None): Process id once started.
+        now_ns (int): The virtual time in ns the node last reported (end of the last
+            quantum it ran).
+        can (dict): CAN controller model name -> [`CanBus`][stest.CanBus], from
+            ``Sim.node(can=...)``.
+    """
 
     def __init__(self, sim: Sim, index: int, name: str, exe: str | os.PathLike, env: dict | None):
         self.sim = sim
@@ -83,57 +106,110 @@ class Node:
     # ---- public API ----
     @property
     def stderr_tail(self) -> list[str]:
-        """The node's last 20 stderr lines (captured continuously)."""
+        """The node's last 20 stderr lines (captured continuously, also after exit).
+
+        Runtime warnings and abort messages (``stest: ...``) appear here; a
+        [`NodeCrashed`][stest.NodeCrashed] message includes the same tail.
+        """
         return self.stderr_lines(STDERR_TAIL_LINES)
 
     def stderr_lines(self, n: int = STDERR_KEEP_LINES) -> list[str]:
-        """The node's last ``n`` (at most 200) captured stderr lines."""
+        """The node's last ``n`` captured stderr lines (200 are kept).
+
+        Args:
+            n: Number of lines (default 200). ``n <= 0`` returns ``[]``.
+
+        Returns:
+            The lines without line terminators, oldest first.
+        """
         with self._stderr_lock:
             return list(self._stderr)[-n:] if n > 0 else []
 
     @property
     def log(self) -> list[str]:
-        """ITM port-0 lines (text before each ``\\n``) in order, as of the last completed
-        quantum. Empty when no ITM output happened (e.g. ``Sim(debugger_attached=False)``).
-        A final unterminated line is appended if the node exits or aborts mid-line."""
+        """ITM stimulus port 0 lines (the text before each ``\\n``), oldest first.
+
+        As of the last completed quantum. Empty when the firmware wrote nothing to ITM
+        (e.g. ``Sim(debugger_attached=False)``, where ``ITM_SendChar`` drops output). A final
+        unterminated line is appended if the node exits or aborts mid-line. For firmware
+        logs prefer [`output`][stest.Node.output], which also covers stdout.
+        """
         return list(self._itm.get(0, ()))
 
     @property
     def output(self) -> list[str]:
-        """Firmware text output: ITM port-0 lines and stdout lines (``printf``, ``puts``,
-        ``putchar``, ``fwrite(..., stdout)``) merged in virtual-time order (lines at the same
-        instant keep the order the firmware wrote them; deterministic). Use this (and
-        :meth:`wait_for_log`) for firmware logs: it reads the same whether the firmware logs
-        through ITM or stdout, so code that picks its log backend by host architecture
-        (``#if defined(__ARM_ARCH)``) behaves the same on every host. As of the last
-        completed quantum; unterminated lines are appended if the node exits or aborts."""
+        """Firmware text output, one entry per line, in virtual-time order.
+
+        ITM port-0 lines and stdout lines (``printf``, ``puts``, ``putchar``,
+        ``fwrite(..., stdout)``) merged by the virtual time they were written (lines at the
+        same instant keep the firmware's order; deterministic). Use this and
+        [`wait_for_log`][stest.Node.wait_for_log] for firmware logs: they read the same
+        whether the firmware logs through ITM or stdout, so code that picks its log backend
+        by host architecture (``#if defined(__ARM_ARCH)``) behaves the same on every host.
+        A raw ``write(1, ...)`` bypasses the stdout capture and is not included (see
+        [`stdout_tail`][stest.Node.stdout_tail]). As of the last completed quantum;
+        unterminated lines are appended if the node exits or aborts.
+        """
         return [line for _, line in self._output]
 
     def itm_port(self, port: int) -> list[str]:
-        """Lines written to ITM stimulus port ``port`` (0 is :attr:`log`)."""
+        """Lines written to one ITM stimulus port.
+
+        Args:
+            port: Stimulus port number (0 is the same as [`log`][stest.Node.log]).
+
+        Returns:
+            The lines, oldest first, as of the last completed quantum.
+        """
         return list(self._itm.get(int(port), ()))
 
     @property
     def stdout_tail(self) -> list[str]:
-        """The node's last 200 firmware stdout lines as raw text from the process's stdout
-        pipe (complete as of the last completed quantum). For timestamped, ordered firmware
-        logs use :attr:`output` / :meth:`wait_for_log`."""
+        """The node's last 200 lines of raw text from the process's stdout pipe.
+
+        Includes raw ``write(1, ...)`` output, which bypasses the stdout capture. Complete
+        as of the last completed quantum. For timestamped, ordered firmware logs use
+        [`output`][stest.Node.output] and [`wait_for_log`][stest.Node.wait_for_log].
+        """
         return self.stdout_lines(STDOUT_KEEP_LINES)
 
     def stdout_lines(self, n: int = STDOUT_KEEP_LINES) -> list[str]:
-        """The node's last ``n`` (at most 200) captured stdout lines."""
+        """The node's last ``n`` raw stdout lines (200 are kept); see
+        [`stdout_tail`][stest.Node.stdout_tail].
+
+        Args:
+            n: Number of lines (default 200). ``n <= 0`` returns ``[]``.
+
+        Returns:
+            The lines without line terminators, oldest first.
+        """
         self._sync_stdout()
         with self._stdout_lock:
             return list(self._stdout)[-n:] if n > 0 else []
 
     def wait_for_log(self, pattern: str, timeout_ms: float, source: str = "any") -> re.Match:
-        """Advances the simulation until a firmware log line not yet consumed by an earlier
-        ``wait_for_log`` (with the same ``source``) matches the regex ``pattern``
-        (``re.search``); returns the match and consumes lines up to and including the
-        matching one. ``source``: ``"any"`` (default: :attr:`output`, ITM port 0 and stdout,
-        the same on every host), ``"itm"`` (:attr:`log`) or ``"stdout"``. Each source keeps
-        its own cursor. Raises WaitTimeout after ``timeout_ms`` of virtual time. Checked at
-        every quantum boundary."""
+        """Advance the simulation until a new firmware log line matches ``pattern``.
+
+        Only lines not consumed by an earlier ``wait_for_log`` with the same ``source`` are
+        searched (each source keeps its own cursor); the call consumes lines up to and
+        including the matching one, so successive calls walk forward through the log.
+        Lines already logged are checked first, then the log at every quantum boundary
+        (see [`Sim.wait_for`][stest.Sim.wait_for]).
+
+        Args:
+            pattern: Regular expression, matched with ``re.search`` against each line.
+            timeout_ms: Budget in virtual milliseconds.
+            source: ``"any"`` (default: [`output`][stest.Node.output], ITM port 0 and stdout,
+                the same on every host), ``"itm"`` ([`log`][stest.Node.log]) or
+                ``"stdout"`` (stdout lines only).
+
+        Returns:
+            The ``re.Match`` of the matching line.
+
+        Raises:
+            ValueError: ``source`` is not one of the three values.
+            WaitTimeout: No new line matched within ``timeout_ms``.
+        """
         if source not in LOG_SOURCES:
             raise ValueError(f"wait_for_log: source must be one of {', '.join(LOG_SOURCES)} (got {source!r})")
         rx = re.compile(pattern)
@@ -162,34 +238,94 @@ class Node:
         return found[0]
 
     def pin(self, name: str) -> Pin:
+        """A handle to one GPIO pin.
+
+        Args:
+            name: Pin name, port letter plus number 0..15, e.g. ``"PA5"``.
+
+        Returns:
+            A [`Pin`][stest.Pin]. Creating it sends nothing to the node; a port the chip
+            lacks is reported by the first request.
+
+        Raises:
+            ValueError: ``name`` is not a valid pin name.
+        """
         return Pin(self, name)
 
     def timer(self, name: str) -> Timer:
-        """Timer model ``name`` (e.g. "TIM7"): ``.state()``, ``.update_hz``, ``.channel(n).duty``."""
+        """A helper for a timer model.
+
+        Args:
+            name: Model name, e.g. ``"TIM7"``.
+
+        Returns:
+            A [`Timer`][stest.Timer] (``.state()``, ``.update_hz``, ``.channel(n).duty``).
+            Nothing is checked until its first query.
+        """
         return Timer(self, name)
 
     def adc(self, n: int) -> Adc:
-        """ADC ``n`` (1-based): ``.set(channel, volts)``, ``.get(channel)``."""
+        """A helper for one ADC instance.
+
+        Args:
+            n: ADC number, 1-based (``1`` is ADC1).
+
+        Returns:
+            An [`Adc`][stest.Adc] (``.set(channel, volts)``, ``.get(channel)``).
+        """
         return Adc(self, n)
 
     def dac(self, n: int) -> Dac:
-        """DAC ``n`` (model "DAC<n>"): ``.channel(c).volts``, ``.state()``."""
+        """A helper for a DAC model.
+
+        Args:
+            n: DAC number; the model is ``DAC<n>`` (``1`` is ``DAC1``).
+
+        Returns:
+            A [`Dac`][stest.Dac] (``.channel(c).volts``, ``.state()``).
+        """
         return Dac(self, f"DAC{int(n)}")
 
     def spi(self, name: str) -> SpiBus:
-        """SPI model ``name`` (e.g. "SPI1"): ``.bursts``, ``.queue_miso(data)``, ``.wait_for_bytes(n, timeout_ms)``."""
+        """A helper for an SPI model.
+
+        Args:
+            name: Model name, e.g. ``"SPI1"``.
+
+        Returns:
+            An [`SpiBus`][stest.SpiBus] (``.bursts``, ``.queue_miso(data)``,
+            ``.wait_for_bytes(n, timeout_ms)``).
+        """
         return SpiBus(self, name)
 
     def post(self, model: str, op: str, args: dict[str, Any], t_ns: int) -> None:
-        """Queue a timestamped message for peripheral model ``model``: it is sent with the
-        next quantum's RUN_UNTIL and applied, in posting order, before the node runs that
-        quantum, by the model's ``deliver(op, args, t_ns)`` (e.g. GPIO ``"drive_pin"``
-        ``{"pin": n, "level": 0 | 1 | None}``; see :meth:`Pin.drive_at`), which schedules its
-        effect at exactly ``t_ns`` of virtual time. ``t_ns`` must not be before the node's
-        time when the message arrives (``t_ns >= node.now_ns`` after the current quantum;
-        equal is fine). A message the node cannot apply (unknown model or op, bad args, a
-        past ``t_ns``) aborts the node with an ``stest: inbox message for ...`` message
-        (NodeCrashed on the next advance): it is a harness bug, not firmware behaviour."""
+        """Queue a timestamped message for a peripheral model, applied at exactly ``t_ns``.
+
+        The message is sent with the next quantum's run request and applied, in posting
+        order, before the node runs that quantum, by the model's ``deliver(op, args, t_ns)``,
+        which schedules its effect at exactly ``t_ns`` of virtual time, whatever the quantum.
+        Example: GPIO ``"drive_pin"`` with ``{"pin": n, "level": 0 | 1 | None}``, which is
+        what [`Pin.drive_at`][stest.Pin.drive_at] posts. The ops each model accepts are
+        documented in its C++ header.
+
+        Args:
+            model: Model name, e.g. ``"GPIOA"``.
+            op: The model's ``deliver`` op.
+            args: JSON-serialisable arguments of the op.
+            t_ns: Virtual time in ns. Must not be before the node's time when the message
+                arrives (``t_ns >= node.now_ns``; equal is fine).
+
+        Raises:
+            TypeError: ``t_ns`` is not an ``int``, or ``args`` is not a ``dict``.
+            ValueError: ``t_ns`` is negative or does not fit 64 bits.
+            StestError: The next quantum's queued messages would exceed the protocol's
+                maximum message size (advance the simulation to flush them first), or the
+                Sim is closed.
+            NodeCrashed: Raised by the next advance when the node cannot apply the message
+                (unknown model or op, bad args, a past ``t_ns``): the node aborts with an
+                ``stest: inbox message for ...`` message. It is a harness bug, not firmware
+                behaviour.
+        """
         self.sim._check_usable()
         if isinstance(t_ns, bool) or not isinstance(t_ns, int):
             raise TypeError(f"post: t_ns must be an int number of ns (got {t_ns!r})")
@@ -208,12 +344,41 @@ class Node:
         self._inbox_bytes = size
 
     def call(self, model: str, op: str, **args: Any) -> Any:
-        """Call ``op`` on peripheral model ``model`` (e.g. "GPIOA"); returns its JSON result."""
+        """Call an op of a peripheral model now, at the node's current virtual time.
+
+        This is the raw interface the pin and peripheral helpers are built on. It bypasses
+        RCC clock gating by design (the outside world, not the firmware, is acting).
+
+        Args:
+            model: Model name, e.g. ``"GPIOA"``.
+            op: The model's op, e.g. ``"get_pin"``.
+            **args: The op's arguments (JSON-serialisable).
+
+        Returns:
+            The op's result, decoded from JSON.
+
+        Raises:
+            StestError: Unknown model or op, or bad arguments (the node keeps running).
+        """
         p = self._request(proto.model_call(model, op, args), proto.Msg.MODEL_RESULT, f"MODEL_CALL {model}.{op}")
         return json.loads(p)
 
     def read_mem(self, addr: int, n: int) -> bytes:
-        """Read n bytes of the node's host memory at addr (no MMIO side effects)."""
+        """Read raw bytes of the node's host memory (no MMIO side effects).
+
+        The firmware runs natively, so addresses are host addresses of the node process
+        (see [`var`][stest.Node.var] for reading variables by name).
+
+        Args:
+            addr: Host address in the node process.
+            n: Number of bytes; at most the protocol's ``READ_MEM`` limit.
+
+        Returns:
+            The bytes read.
+
+        Raises:
+            StestError: ``n`` is above the limit, or the node rejected the address range.
+        """
         if n > proto.MAX_READ_MEM:
             raise StestError(
                 f"node {self.name!r}: read_mem of {n} bytes exceeds the protocol maximum of {proto.MAX_READ_MEM}"
@@ -221,6 +386,15 @@ class Node:
         return self._request(proto.read_mem(addr, n), proto.Msg.MEM, f"READ_MEM {addr:#x}")
 
     def write_mem(self, addr: int, data: bytes) -> None:
+        """Write raw bytes into the node's host memory (no MMIO side effects).
+
+        Args:
+            addr: Host address in the node process.
+            data: Bytes to write; at most the protocol's ``WRITE_MEM`` limit.
+
+        Raises:
+            StestError: ``data`` is above the limit, or the node rejected the address range.
+        """
         if len(data) > proto.MAX_WRITE_MEM:
             raise StestError(
                 f"node {self.name!r}: write_mem of {len(data)} bytes exceeds the protocol maximum "
@@ -229,15 +403,46 @@ class Node:
         self._request(proto.write_mem(addr, data), proto.Msg.OK, f"WRITE_MEM {addr:#x}")
 
     def var(self, expr: str) -> Any:
-        """Read a firmware variable by name: "count", "vars.c:count", "func::s_local",
-        "g_cfg.lamps[2].duty". Ints, floats, bool, enums (an int that equals its enumerator
-        name), structs (read-only mapping), arrays (list). The sim is paused between calls."""
+        """Read a firmware variable by name, using the executable's DWARF debug info.
+
+        Only variables with a static address (globals, file-scope and function-scope
+        ``static``) can be read. The simulation is paused between calls, so the value is
+        the one at [`Sim.now_ns`][stest.Sim.now_ns].
+
+        Args:
+            expr: ``"count"``, ``"vars.c:count"`` (file-scoped), ``"func::s_local"``
+                (function static), with member and index access such as
+                ``"g_cfg.lamps[2].duty"``.
+
+        Returns:
+            ``int``, ``float`` or ``bool`` for scalars; enums as an ``int`` that also
+            compares equal to its enumerator name; structs as a read-only mapping; arrays
+            as a ``list``.
+
+        Raises:
+            SymbolError: Unknown or ambiguous name, bad expression, no DWARF debug info,
+                or an unsupported type.
+            StestError: Called before ``sim.start()``.
+        """
         r, slide = self._resolve_var(expr)
         return r.type.decode(self.read_mem(r.addr + slide, r.type.size))
 
     def set_var(self, expr: str, value: Any) -> None:
-        """Write a scalar firmware variable (int, float, bool or enumerator name); the value
-        is range-checked against the variable's DWARF type before anything is written."""
+        """Write a scalar firmware variable by name.
+
+        The value is checked against the variable's DWARF type before anything is written.
+        The firmware sees it when it next reads the variable after the simulation resumes.
+
+        Args:
+            expr: Variable expression, as for [`var`][stest.Node.var].
+            value: An ``int``, ``float``, ``bool`` or enumerator name (``str``).
+
+        Raises:
+            SymbolRangeError: ``value`` does not fit the variable's type (also a
+                ``ValueError``).
+            SymbolError: The expression cannot be resolved, the value has the wrong type,
+                or the variable is not a scalar (assign struct members individually).
+        """
         r, slide = self._resolve_var(expr)
         self.write_mem(r.addr + slide, r.type.encode(value))
 

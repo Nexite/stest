@@ -13,7 +13,15 @@ _TAIL_BITS = 1 + 1 + 1 + 7  # CRC delimiter, ACK slot, ACK delimiter, EOF
 
 
 def crc15(bits: list[int]) -> int:
-    """CAN CRC-15 (polynomial 0x4599) over unstuffed bits SOF..end of data."""
+    """CAN CRC-15 (polynomial 0x4599).
+
+    Args:
+        bits: Unstuffed frame bits from SOF to the end of the data field, one ``int``
+            (0 or 1) per bit.
+
+    Returns:
+        The 15-bit CRC.
+    """
     crc = 0
     for b in bits:
         feedback = ((crc >> 14) & 1) ^ (b & 1)
@@ -44,6 +52,36 @@ def _stuffed_len(bits: list[int]) -> int:
 
 @dataclass(frozen=True)
 class CanFrame:
+    """An immutable classic CAN frame (ISO 11898-1, 0..8 data bytes).
+
+    ```python
+    CanFrame(0x123, b"\\x01\\x02")            # standard data frame, dlc 2
+    CanFrame(0x18FF0001, b"", ext=True)       # extended identifier
+    CanFrame(0x123, rtr=True, dlc=4)          # remote frame requesting 4 bytes
+    ```
+
+    Frames compare equal by value and are hashable.
+
+    Args:
+        id: Identifier: 0..0x7FF (standard) or 0..0x1FFFFFFF (``ext=True``).
+        data: Payload, 0..8 bytes (any bytes-like value; stored as ``bytes``).
+        ext: Extended (29-bit) identifier.
+        rtr: Remote frame (no data; ``dlc`` is the requested length).
+        dlc: Data length code 0..8. Defaults to ``len(data)``; for a data frame it must
+            equal ``len(data)``.
+
+    Raises:
+        ValueError: ``id`` out of range, more than 8 data bytes, a remote frame with data,
+            ``dlc`` outside 0..8, or a data frame whose ``dlc`` differs from ``len(data)``.
+
+    Attributes:
+        id: The identifier.
+        data: The payload (``bytes``).
+        ext: True for an extended identifier.
+        rtr: True for a remote frame.
+        dlc: The data length code (never ``None`` after construction).
+    """
+
     id: int
     data: bytes = b""
     ext: bool = False
@@ -80,22 +118,46 @@ class CanFrame:
         return bits
 
     def bit_length(self) -> int:
-        """Bits on the wire SOF..EOF including stuff bits; excludes IFS."""
+        """Exact number of bits on the wire from SOF to EOF, stuff bits included.
+
+        Excludes the 3-bit intermission (`IFS_BITS`).
+        """
         head = self._head_bits()
         return _stuffed_len(head + _int_bits(crc15(head), 15)) + _TAIL_BITS
 
     def duration_ns(self, bitrate: int) -> int:
+        """Time on the wire from SOF to EOF.
+
+        Args:
+            bitrate: Bit rate in bit/s.
+
+        Returns:
+            ``ceil(bit_length() * 1e9 / bitrate)`` in ns (exact for bit rates dividing 1e9).
+        """
         return -(-self.bit_length() * 1_000_000_000 // bitrate)
 
     def arbitration_bits(self) -> int:
-        """Bits on the wire (stuff bits included) from SOF through the last bit of the
-        arbitration field (RTR): 13 unstuffed bits for a standard frame, 33 for an extended one."""
+        """Bits on the wire, stuff bits included, from SOF through the last bit of the
+        arbitration field (RTR): 13 unstuffed bits for a standard frame, 33 for an extended
+        one. An injected error starts right after them."""
         return _stuffed_len(self._head_bits()[: 33 if self.ext else 13])
 
     def bits_to_difference(self, other: CanFrame) -> int:
-        """Bits on the wire from SOF through the first bit at which this frame and ``other``
-        (same arbitration field, sent at the same instant) differ: where the transmitter of
-        the recessive bit detects a bit error. Both share the prefix, so stuff bits agree."""
+        """Bits on the wire from SOF through the first bit at which two frames differ.
+
+        For two frames with the same arbitration field sent at the same instant, this is
+        where the transmitter of the recessive bit detects a bit error. Both share the
+        prefix, so their stuff bits agree.
+
+        Args:
+            other: A frame with the same arbitration field.
+
+        Returns:
+            The number of bits, stuff bits included.
+
+        Raises:
+            ValueError: The arbitration fields differ, or the frames are identical on the wire.
+        """
         if other.arbitration_key() != self.arbitration_key():
             raise ValueError("bits_to_difference: the frames have different arbitration fields")
         a, b = self._head_bits(), other._head_bits()
@@ -105,9 +167,12 @@ class CanFrame:
         raise ValueError("bits_to_difference: the frames are identical on the wire")
 
     def arbitration_key(self) -> tuple:
-        """Wire arbitration field as a bit tuple; lexicographically smaller wins.
+        """The wire arbitration field as a tuple of bits; the lexicographically smaller
+        one wins arbitration.
 
-        Standard: base ID, RTR, IDE(0). Extended: base ID, SRR(1), IDE(1), ext ID, RTR.
+        Standard: base ID, RTR, IDE (0). Extended: base ID, SRR (1), IDE (1), extended ID,
+        RTR. So a standard frame beats an extended one with the same base ID, and a data
+        frame beats a remote frame with the same identifier.
         """
         rtr = int(self.rtr)
         if self.ext:
@@ -116,6 +181,15 @@ class CanFrame:
 
 
 def lookahead_ns(bitrate: int) -> int:
-    """Lower bound of any frame's time (MIN_FRAME_BITS bit times, floored); the scheduler
-    quantum cap. Every real frame (>= 45 bits) takes strictly longer."""
+    """Lower bound of any frame's time on the wire: the scheduler's quantum cap.
+
+    ``MIN_FRAME_BITS`` (44) bit times, rounded down. Every real frame (at least 45 bits)
+    takes strictly longer, which keeps the bus engine causal.
+
+    Args:
+        bitrate: Bit rate in bit/s.
+
+    Returns:
+        The bound in ns (e.g. 88_000 at 500 kbit/s).
+    """
     return MIN_FRAME_BITS * 1_000_000_000 // bitrate

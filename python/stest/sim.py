@@ -41,17 +41,78 @@ def fmt_ms(t_ns: int) -> str:
 class Sim:
     """A simulation of one or more firmware nodes sharing a global virtual clock.
 
-    Scheduler: each quantum, RUN_UNTIL(t+q) is sent to every node, then STOPPED is read
-    from each in node-creation order (nodes run concurrently in between). Quantum
-    boundaries lie on the absolute grid k*q. Events are merged by (t_ns, node index,
-    per-node sequence). Every blocking read is bounded by ``wall_timeout_s`` of real
-    time. On any node failure every node is killed and reaped before the exception
-    (NodeCrashed / WallClockTimeout) propagates; the Sim is then unusable.
+    Typical use: create nodes (and CAN buses), call [`start`][stest.Sim.start], then advance
+    time with [`advance`][stest.Sim.advance] or one of the ``wait_*`` helpers, and
+    [`close`][stest.Sim.close] at the end (or use the Sim as a context manager; the pytest
+    ``sim`` fixture closes it for you).
 
-    CAN: ``can_bus()`` creates buses (before ``start()``); the quantum is capped at the
-    shortest frame time of the fastest bus (``stest.can.lookahead_ns``) so the bus engine,
-    run at every quantum end, never has to post a result into a node's past. A Sim with
-    buses but no nodes is valid (Python devices only).
+    ```python
+    with Sim() as sim:
+        node = sim.node("app", "build/selftest/blinky")
+        sim.start()
+        node.pin("PA5").wait_high(timeout_ms=600)
+    ```
+
+    Scheduler: each quantum, every node is told to run until the quantum end, then the
+    harness waits for all of them (nodes run concurrently in between). Quantum boundaries
+    lie on the absolute grid ``k * quantum``. Events are merged into
+    ``event_log`` by (time, node creation index, per-node order), so identical inputs give
+    an identical log. Python sees the nodes only between quanta: waits are checked at
+    quantum boundaries.
+
+    Failure: every blocking read of a node is bounded by ``wall_timeout_s`` of real time.
+    When a node crashes, aborts or times out, every node is killed and reaped before the
+    exception ([`NodeCrashed`][stest.NodeCrashed] or [`WallClockTimeout`][stest.WallClockTimeout])
+    propagates. The Sim is then unusable: later calls raise the same exception type again.
+
+    CAN: [`can_bus`][stest.Sim.can_bus] creates buses before ``start()``; the quantum is then
+    capped at the shortest frame time of the fastest bus
+    ([`lookahead_ns`][stest.can.lookahead_ns]) so the bus engine, run at every quantum end,
+    never posts a result into a node's past. A Sim with buses but no nodes is valid (Python
+    devices only).
+
+    The ``poll_skip``, ``strict_analog`` and ``debugger_attached`` arguments are passed to
+    every node as environment variables at ``start()``; left at ``None``, the node inherits
+    the variable from the Python process's environment (or a node's ``env=``), else the
+    runtime default applies. A value given here overrides both.
+
+    Args:
+        quantum_us: Lockstep quantum in virtual microseconds (default 1000). Smaller
+            quanta make waits stop closer to the event that satisfied them, at a cost in
+            speed. Capped by CAN buses (see [`quantum_ns`][stest.Sim.quantum_ns]).
+        wall_timeout_s: Real-time limit in seconds for every blocking wait on a node
+            (default 30). A node that does not answer in time ends the simulation with
+            [`WallClockTimeout`][stest.WallClockTimeout].
+        access_cost_ns: Virtual time in ns charged for each firmware MMIO access (default
+            25). Node env ``STEST_ACCESS_COST_NS``; always set from this argument.
+        poll_skip: Poll fast-forward threshold: after this many store-free loads re-reading
+            already-seen values, a node jumps its clock to the next scheduled event or the
+            quantum end. ``0`` disables it. ``None`` (default): ``STEST_POLL_SKIP`` from the
+            environment, else 64.
+        strict_analog: ``True``: converting an ADC channel with no input voltage aborts the
+            node. ``False``: it reads 0 V with one stderr warning per (ADC, channel).
+            ``None`` (default): ``STEST_STRICT_ANALOG`` from the environment (``"1"`` means
+            strict), else not strict.
+        debugger_attached: ``False``: the bare-board power-on state (ITM, ``DEMCR.TRCENA``
+            and ``DHCSR.C_DEBUGEN`` off, ITM software-locked), so CMSIS ``ITM_SendChar``
+            drops output. ``True``: a debugger is attached. ``None`` (default):
+            ``STEST_DEBUGGER`` from the environment (only ``"0"`` detaches), else attached.
+
+    Raises:
+        ValueError: ``quantum_us`` or ``wall_timeout_s`` is not positive, or
+            ``access_cost_ns`` or ``poll_skip`` is negative.
+
+    Attributes:
+        nodes (list[Node]): The nodes, in creation order.
+        event_log (list[tuple[int, str, str]]): Every node event so far as ``(t_ns, node
+            name, event JSON text)``, merged in deterministic order, as of the last
+            completed quantum. JSON keys are sorted; parse the text with ``json.loads``
+            rather than matching it.
+        wall_timeout_s (float): The real-time limit given to the constructor.
+        access_cost_ns (int): The MMIO access cost given to the constructor.
+        poll_skip (int | None): As given to the constructor.
+        strict_analog (bool | None): As given to the constructor.
+        debugger_attached (bool | None): As given to the constructor.
     """
 
     def __init__(self, quantum_us: int = 1000, wall_timeout_s: float = 30.0, access_cost_ns: int = 25,
@@ -97,24 +158,47 @@ class Sim:
 
     @property
     def quantum_ns(self) -> int:
-        """The quantum in ns (read-only; ``can_bus()`` caps it at the bus lookahead)."""
+        """The lockstep quantum in virtual ns (read-only).
+
+        ``quantum_us * 1000`` as constructed, lowered by [`can_bus`][stest.Sim.can_bus] to
+        the bus lookahead when that is shorter (an INFO message on the ``stest`` logger
+        reports the cap at ``start()``).
+        """
         return self._quantum_ns
 
     @property
     def quantum_us(self) -> int:
+        """The lockstep quantum in whole virtual microseconds (``quantum_ns // 1000``,
+        rounded down when a CAN bus capped the quantum to a non-multiple of 1 us)."""
         return self.quantum_ns // 1000
 
     # ---- setup ----
     def node(
         self, name: str, exe: str | os.PathLike, env: dict | None = None, can: dict | None = None
     ) -> Node:
-        """A firmware node. ``can`` wires its CAN controllers to buses of this Sim:
-        ``{"CAN2": bus}`` (a CanBus or a bus name); one controller per bus per node. On each
-        bus the node is the sender ``name`` (its frames' ``LoggedFrame.sender``); its
-        controller's mode / TX request / abort events feed the bus at every quantum end
-        (``Node._can_flush``) and the bus's results reach the model as ``rx`` / ``tx_result``
-        inbox messages at their EOF. A controller entering normal mode with a bit rate other
-        than its bus's ends the simulation with NodeCrashed."""
+        """Add a firmware node; it is spawned by [`start`][stest.Sim.start].
+
+        Args:
+            name: Unique node name (used in events, error messages and as the node's CAN
+                sender name).
+            exe: Path to the firmware executable built with ``stest_add_firmware``.
+            env: Extra environment variables for the node process, on top of the Python
+                process's environment. The Sim's own settings (``poll_skip``, ...) override
+                them when not ``None``.
+            can: Wires the node's CAN controllers to buses of this Sim, e.g.
+                ``{"CAN2": bus}`` (a [`CanBus`][stest.CanBus] or a bus name); one controller
+                per bus. On each bus the node is the sender ``name``
+                ([`LoggedFrame.sender`][stest.LoggedFrame]). Controller names are checked
+                against the firmware's chip at ``start()``.
+
+        Returns:
+            The new [`Node`][stest.Node].
+
+        Raises:
+            StestError: Called after ``start()``; a duplicate node name; an unknown bus name
+                or a bus of another Sim; two controllers on one bus; a bus that already has
+                a sender called ``name``.
+        """
         if self._started:
             raise StestError("nodes must be created before sim.start()")
         if any(n.name == name for n in self.nodes):
@@ -137,7 +221,20 @@ class Sim:
         return n
 
     def can_bus(self, name: str, bitrate: int = 500_000) -> CanBus:
-        """A CAN bus (before ``start()``). Caps the quantum at ``lookahead_ns(bitrate)``."""
+        """Create a CAN bus; caps the quantum at ``lookahead_ns(bitrate)``.
+
+        Args:
+            name: Unique bus name (used in logs, waits and ``Sim.node(can=...)``).
+            bitrate: Bit rate in bit/s, an ``int`` in 1..1_000_000 (default 500_000).
+                Firmware nodes must configure exactly this rate.
+
+        Returns:
+            The new [`CanBus`][stest.CanBus].
+
+        Raises:
+            StestError: Called after ``start()``, or a duplicate bus name.
+            ValueError: ``bitrate`` is not an ``int`` in 1..1_000_000.
+        """
         from .can.bus import CanBus
         from .can.frame import lookahead_ns
 
@@ -170,7 +267,18 @@ class Sim:
         return min((lookahead_ns(b.bitrate) for b in self._buses), default=None)
 
     def start(self) -> None:
-        """Spawns every node and waits for its HELLO."""
+        """Spawn every node process and wait until each is ready (at virtual time 0).
+
+        Loads each node's debug symbols for [`Node.var`][stest.Node.var] (a missing DWARF
+        is reported on the first ``var()`` call, not here) and checks CAN wiring.
+
+        Raises:
+            StestError: Called twice; no nodes and no CAN buses; a node executable does not
+                exist; a ``can=`` controller name that is not a CAN controller of the
+                node's chip (all nodes are then killed).
+            NodeCrashed: A node failed to start or speaks another protocol version.
+            WallClockTimeout: A node did not report ready within ``wall_timeout_s``.
+        """
         if self._started:
             raise StestError("sim.start() called twice")
         if not self.nodes and not self._buses:
@@ -223,11 +331,27 @@ class Sim:
     # ---- time ----
     @property
     def now_ns(self) -> int:
-        """Global virtual time: the end of the last completed quantum."""
+        """Global virtual time in ns: where the last [`advance`][stest.Sim.advance] or wait
+        stopped (a quantum boundary, or the exact end of an ``advance`` / wait timeout)."""
         return self._now
 
     def advance(self, *, ms: float = 0, us: float = 0, ns: int = 0) -> None:
-        """Advances every node by the given virtual duration (sum of the arguments)."""
+        """Advance every node by a virtual duration (the sum of the arguments).
+
+        Runs quantum by quantum and stops at exactly ``now_ns + duration``, which need not
+        be a quantum boundary (the last step is then a partial quantum).
+
+        Args:
+            ms: Virtual milliseconds (float; rounded to the nearest ns).
+            us: Virtual microseconds (float; rounded to the nearest ns).
+            ns: Virtual nanoseconds (int).
+
+        Raises:
+            ValueError: The total is negative.
+            StestError: ``start()`` was not called, or the Sim is closed.
+            NodeCrashed: A node crashed or aborted (strict mode) meanwhile.
+            WallClockTimeout: A node did not answer within ``wall_timeout_s``.
+        """
         dur = round(ms * 1_000_000) + round(us * 1_000) + int(ns)
         if dur < 0:
             raise ValueError("cannot advance by a negative duration")
@@ -237,9 +361,25 @@ class Sim:
             self._step(min(self._next_boundary(), end))
 
     def wait_for(self, cond: Callable[[], bool], timeout_ms: float, *, what: str | None = None) -> None:
-        """Advances quantum by quantum until ``cond()`` is true (checked now and at every
-        quantum boundary). Raises WaitTimeout after ``timeout_ms`` of virtual time, with
-        ``now_ns`` = start + timeout."""
+        """Advance quantum by quantum until ``cond()`` returns true.
+
+        ``cond`` is checked now (returning at once if true), then at every quantum boundary
+        and at the deadline. Firmware state can only be observed between quanta, so the
+        wait stops at the end of the quantum in which the condition became true.
+
+        Args:
+            cond: A callable with no arguments, e.g. ``lambda: node.var("ready")``.
+            timeout_ms: Budget in virtual milliseconds.
+            what: Description of the condition for the timeout message (default: the
+                callable's ``__name__``).
+
+        Raises:
+            WaitTimeout: ``cond()`` stayed false for ``timeout_ms``; ``now_ns`` is then
+                exactly start + ``timeout_ms``.
+            StestError: ``start()`` was not called, or the Sim is closed.
+            NodeCrashed: A node crashed or aborted meanwhile.
+            WallClockTimeout: A node did not answer within ``wall_timeout_s``.
+        """
         self._check_running()
         start = self._now
         deadline = start + round(timeout_ms * 1_000_000)
@@ -477,7 +617,12 @@ class Sim:
         )
 
     def close(self) -> None:
-        """SHUTDOWN to every node, SIGKILL whatever is left after 2 s; reaps all."""
+        """Shut every node down and reap it (idempotent).
+
+        Each node is asked to exit; whatever is still running after 2 s of real time is
+        killed. Logs, ``event_log`` and pin histories stay readable afterwards. A Sim that
+        is never closed is cleaned up when the interpreter exits.
+        """
         if self._closed:
             return
         self._closed = True

@@ -13,6 +13,16 @@ ASC_DATE = "Thu Jan 1 00:00:00.000 am 1970"
 
 @dataclass(frozen=True)
 class LoggedFrame:
+    """A frame delivered on a bus, as recorded in [`CanBus.log`][stest.CanBus].
+
+    Attributes:
+        t_ns: Virtual time in ns of the frame's end of frame (EOF), when receivers get it.
+        bus: Name of the bus.
+        frame: The [`CanFrame`][stest.CanFrame].
+        sender: Who sent it: a firmware node's name, a device's name, or a
+            ``CanBus.send`` sender name (default ``"python"``).
+    """
+
     t_ns: int  # end of frame (EOF)
     bus: str
     frame: CanFrame
@@ -24,6 +34,19 @@ def _ts(t_ns: int) -> str:
 
 
 def format_candump(frames: Iterable[LoggedFrame], channel: str) -> str:
+    """Format frames as candump log lines (``candump -l`` / ``can-utils`` style).
+
+    One line per frame: ``(<s>.<us>) <channel> <ID>#<DATA>`` with the EOF time in seconds and
+    microseconds, a 3-digit (standard) or 8-digit (extended) hex identifier, and
+    ``R<dlc>`` for remote frames.
+
+    Args:
+        frames: The frames, e.g. ``bus.log``.
+        channel: Interface name written on every line, e.g. the bus name.
+
+    Returns:
+        The text, one ``\\n``-terminated line per frame (empty for no frames).
+    """
     out = []
     for lf in frames:
         f = lf.frame
@@ -37,6 +60,18 @@ def format_candump(frames: Iterable[LoggedFrame], channel: str) -> str:
 
 
 def format_asc(frames: Iterable[LoggedFrame], channel_no: int) -> str:
+    """Format frames as a Vector ASC log (absolute timestamps, hex).
+
+    The header carries a fixed 1970 date so the output is deterministic; every frame is
+    logged as ``Rx``.
+
+    Args:
+        frames: The frames, e.g. ``bus.log``.
+        channel_no: ASC channel number written on every line.
+
+    Returns:
+        The text, header included.
+    """
     out = [f"date {ASC_DATE}\n", "base hex  timestamps absolute\n", "internal events logged\n"]
     for lf in frames:
         f = lf.frame
