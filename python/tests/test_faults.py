@@ -80,6 +80,22 @@ def test_write_to_read_only_register_aborts(faults_exe):
         )
 
 
+def test_access_with_clock_disabled_aborts(faults_exe):
+    with Sim() as s:
+        s.node("clk", faults_exe("clkoff"))
+        s.start()
+        with pytest.raises(
+            NodeCrashed,
+            match=r"access to GPIOB while its clock is disabled \(RCC AHB2ENR bit 1\) \(write32 0x48000414\)",
+        ) as ei:
+            s.advance(ms=100)
+        first = str(ei.value).splitlines()[0]
+        assert first == (
+            "node 'clk' aborted at virtual t=10.000 ms: "
+            "stest: access to GPIOB while its clock is disabled (RCC AHB2ENR bit 1) (write32 0x48000414) (exit status 70)"
+        )
+
+
 def test_stderr_tail_in_crash_message(faults_exe):
     with Sim() as s:
         # 5000 long lines (> any pipe buffer) before the abort: stderr must be drained

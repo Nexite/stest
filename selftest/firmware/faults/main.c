@@ -3,6 +3,18 @@
  *   CRASH       null-pointer store at 10 ms (host SIGSEGV/SIGBUS)
  *   UNMODELLED  write to USART1 (0x40013800, not modelled) at 10 ms (strict abort)
  *   RO_WRITE    write to GPIOA->IDR (read-only register) at 10 ms (strict abort)
+ *   CLKOFF      write to GPIOB->ODR without enabling the GPIOB clock at 10 ms (strict abort)
+ *   PRINTF      no fault: at 10 ms printf("hi\n") to stdout (after STEST_FAULT_STDOUT_LINES lines
+ *               "line <i>", if set), then sleep; used to test stdout capture
+ *   ABORT_OUTPUT  at 10 ms, in one quantum: printf "out 1", "out 2", ITM "itm 1", then the
+ *               unterminated printf fragment "frag", then the UNMODELLED write (strict abort);
+ *               used to test that standalone mode prints the aborting quantum's output
+ *   PARTIAL_END   no fault: at 10 ms printf("tail") without a newline, then sleep (a normal
+ *               --run-ms end must emit it as a partial event)
+ *   (ABORT_OUTPUT also prints "early <i>" lines before 10 ms, in earlier quanta)
+ *
+ * Every variant except CLKOFF enables the GPIOA clock first (GPIO access with its RCC
+ * enable bit clear is itself a strict abort).
  *
  * Time base: SysTick at 1 kHz from the reset clock (MSI 4 MHz); the firmware sleeps
  * in WFI until the 10th tick (virtual t = 10 ms + startup offset). Before that, if the
@@ -17,8 +29,12 @@
 #define CRASH 2
 #define UNMODELLED 3
 #define RO_WRITE 4
+#define CLKOFF 5
+#define PRINTF 6
+#define ABORT_OUTPUT 7
+#define PARTIAL_END 8
 #ifndef FAULT
-#error "define FAULT=SPIN|CRASH|UNMODELLED|RO_WRITE"
+#error "define FAULT=SPIN|CRASH|UNMODELLED|RO_WRITE|CLKOFF|PRINTF"
 #endif
 
 static volatile uint32_t ticks;
@@ -34,9 +50,22 @@ int main(void)
       fprintf(stderr, "chatter %ld ......................................................................\n", i);
   }
 
+#if FAULT != CLKOFF
+  RCC->AHB2ENR |= RCC_AHB2ENR_GPIOAEN;
+#endif
   SysTick_Config(SystemCoreClock / 1000u);
+#if FAULT == ABORT_OUTPUT
+  for (uint32_t last = 0; ticks < 10u;) {
+    if (ticks != last && ticks < 4u) {
+      last = ticks;
+      printf("early %lu\n", (unsigned long)last);
+    }
+    __WFI();
+  }
+#else
   while (ticks < 10u)
     __WFI();
+#endif
 
 #if FAULT == SPIN
   for (;;) {
@@ -48,6 +77,28 @@ int main(void)
   *(volatile uint32_t *)0x40013800u = 1u; /* USART1->CR1: no USART model */
 #elif FAULT == RO_WRITE
   GPIOA->IDR = 1u; /* read-only register: strict abort, not a silent no-op */
+#elif FAULT == CLKOFF
+  GPIOB->ODR = 1u; /* GPIOB clock (RCC AHB2ENR bit 1) never enabled: strict abort */
+#elif FAULT == ABORT_OUTPUT
+  {
+    printf("out 1\n");
+    printf("out 2\n");
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    for (const char *c = "itm 1\n"; *c; c++)
+      ITM_SendChar((uint32_t)(unsigned char)*c);
+    printf("frag");
+    *(volatile uint32_t *)0x40013800u = 1u; /* USART1->CR1: strict abort */
+  }
+#elif FAULT == PARTIAL_END
+  printf("tail");
+#elif FAULT == PRINTF
+  {
+    const char *lines = getenv("STEST_FAULT_STDOUT_LINES");
+    long n = lines ? strtol(lines, NULL, 10) : 0;
+    for (long i = 0; i < n; i++)
+      printf("line %ld\n", i);
+    printf("hi\n");
+  }
 #else
 #error "unknown FAULT"
 #endif

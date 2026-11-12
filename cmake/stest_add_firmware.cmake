@@ -3,7 +3,16 @@
 #   SOURCES <files...>        # firmware sources incl. main.c, *_it.c, *_hal_msp.c
 #   [INCLUDE_DIRS <dirs...>]  # firmware include dirs (stm32l4xx_hal_conf.h lives here)
 #   [DEFINES <defs...>]       # extra definitions for firmware + HAL
-#   [HAL_SOURCES <files...>]) # default: every <family>xx_hal*.c of the HAL (not *_template.c)
+#   [HAL_SOURCES <files...>]  # default: every <family>xx_hal*.c of the HAL (not *_template.c)
+#   [MODELS <TYPE>=<register|hal>...])  # per peripheral type, default register (see below)
+#
+# MODELS: TYPE is a peripheral type of the part (model kind upper-cased: GPIO, TIM, ...).
+# `register` (default): ST's HAL drives the model through its registers. `hal`: the family's
+# HAL shim (chips/<family>/family.cmake: STEST_<FAMILY>_HAL_SHIMS, ..._HAL_SHIM_<TYPE>_REPLACES
+# / _SOURCE) replaces that ST HAL file in the HAL archive and calls the model's C API
+# (runtime/include/stest/hal_api.h); the generated chip glue (gen_chip.py --hal) marks the
+# type's blocks hal-owned, so firmware MMIO to them warns once per register. An unknown TYPE,
+# a type without a shim, or another mode is a configure error listing what is supported.
 #
 # Builds executable <name> = firmware objects + HAL/system archive (all compiled with
 # STEST_CLANG + the MMIO pass, -g -O0, -D<device_define> -DUSE_HAL_DRIVER) + the
@@ -27,7 +36,7 @@ if(APPLE)
 endif()
 
 function(stest_add_firmware name)
-  cmake_parse_arguments(PARSE_ARGV 1 FW "" "CHIP" "SOURCES;INCLUDE_DIRS;DEFINES;HAL_SOURCES")
+  cmake_parse_arguments(PARSE_ARGV 1 FW "" "CHIP" "SOURCES;INCLUDE_DIRS;DEFINES;HAL_SOURCES;MODELS")
   if(FW_UNPARSED_ARGUMENTS)
     message(FATAL_ERROR "stest_add_firmware(${name}): unknown arguments ${FW_UNPARSED_ARGUMENTS}")
   endif()
@@ -84,6 +93,55 @@ function(stest_add_firmware name)
   list(GET info 1 family)
   list(GET info 2 device_define)
 
+  # ---- MODELS: per-type register/hal selection ----
+  string(TOUPPER "${family}" _fam)
+  set(STEST_${_fam}_HAL_SHIMS "")
+  include("${_STEST_ROOT}/chips/${family}/family.cmake" OPTIONAL RESULT_VARIABLE _fam_cmake)
+  if(_fam_cmake)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_fam_cmake}")
+  endif()
+  set(_shims "${STEST_${_fam}_HAL_SHIMS}")
+  if(_shims)
+    string(REPLACE ";" " " _hal_supported "${_shims}")
+  else()
+    set(_hal_supported "(none)")
+  endif()
+  set(hal_types "")
+  set(_seen_types "")
+  if(FW_MODELS)
+    execute_process(COMMAND "${Python3_EXECUTABLE}" "${gen_py}" --types "${toml}"
+                    OUTPUT_VARIABLE _types ERROR_VARIABLE err RESULT_VARIABLE rc
+                    OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(NOT rc EQUAL 0)
+      message(FATAL_ERROR "stest_add_firmware(${name}): ${err}")
+    endif()
+    string(REPLACE ";" " " _types_txt "${_types}")
+  endif()
+  foreach(_spec IN LISTS FW_MODELS)
+    set(_ctx "stest_add_firmware(${name}): MODELS ${_spec}")
+    set(_supported "supported: every type of ${FW_CHIP} in register mode (${_types_txt}); hal mode is supported for: ${_hal_supported}")
+    if(NOT _spec MATCHES "^([A-Za-z0-9_]+)=(.*)$")
+      message(FATAL_ERROR "${_ctx}: expected <TYPE>=register or <TYPE>=hal; ${_supported}")
+    endif()
+    string(TOUPPER "${CMAKE_MATCH_1}" _type)
+    set(_mode "${CMAKE_MATCH_2}")
+    if(NOT _type IN_LIST _types)
+      message(FATAL_ERROR "${_ctx}: unknown peripheral type ${_type} for ${FW_CHIP}; ${_supported}")
+    endif()
+    if(_type IN_LIST _seen_types)
+      message(FATAL_ERROR "${_ctx}: ${_type} is listed more than once")
+    endif()
+    list(APPEND _seen_types ${_type})
+    if(_mode STREQUAL "hal")
+      if(NOT _type IN_LIST _shims)
+        message(FATAL_ERROR "${_ctx}: ${_type} has no hal shim on ${family} (register mode only); ${_supported}")
+      endif()
+      list(APPEND hal_types ${_type})
+    elseif(NOT _mode STREQUAL "register")
+      message(FATAL_ERROR "${_ctx}: unknown mode '${_mode}' (want register or hal); ${_supported}")
+    endif()
+  endforeach()
+
   # ---- ST sources ----
   stest_st_family_dirs(${family} hal_dir device_dir)
   stest_cmsis_core_include(core_inc)
@@ -91,6 +149,17 @@ function(stest_add_firmware name)
     file(GLOB FW_HAL_SOURCES "${hal_dir}/Src/${family}xx_hal*.c")
     list(FILTER FW_HAL_SOURCES EXCLUDE REGEX "_template\\.c$")
   endif()
+  # hal mode: the shim replaces the whole ST file (ST sources are never patched).
+  foreach(_type IN LISTS hal_types)
+    set(_repl "${STEST_${_fam}_HAL_SHIM_${_type}_REPLACES}")
+    set(_shim "${STEST_${_fam}_HAL_SHIM_${_type}_SOURCE}")
+    if(NOT _repl OR NOT EXISTS "${_shim}")
+      message(FATAL_ERROR "stest_add_firmware(${name}): chips/${family}/family.cmake: incomplete hal shim for ${_type}")
+    endif()
+    string(REPLACE "." "\\." _repl_re "${_repl}")
+    list(FILTER FW_HAL_SOURCES EXCLUDE REGEX "(^|/)${_repl_re}$")
+    list(APPEND FW_HAL_SOURCES "${_shim}")
+  endforeach()
   set(system_c "${device_dir}/Source/Templates/system_${family}xx.c")
 
   # ---- common compile settings for firmware + HAL ----
@@ -117,8 +186,13 @@ function(stest_add_firmware name)
   # Generated chip glue: compiled into the executable as an object (not archived) so
   # firmware handlers override its weak defaults on ELF and Mach-O.
   set(gen "${CMAKE_CURRENT_BINARY_DIR}/${name}_chip.cpp")
+  set(gen_hal "")
+  if(hal_types)
+    string(REPLACE ";" "," _hal_csv "${hal_types}")
+    set(gen_hal --hal "${_hal_csv}")
+  endif()
   add_custom_command(OUTPUT "${gen}"
-    COMMAND "${Python3_EXECUTABLE}" "${gen_py}" "${toml}" "${gen}"
+    COMMAND "${Python3_EXECUTABLE}" "${gen_py}" "${toml}" "${gen}" ${gen_hal}
     DEPENDS "${toml}" "${gen_py}"
     COMMENT "Generating ${FW_CHIP} chip glue for ${name}")
 

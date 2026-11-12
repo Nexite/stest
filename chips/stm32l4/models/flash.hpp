@@ -8,13 +8,14 @@
 #include <string>
 #include <nlohmann/json.hpp>
 #include "stest/clock.hpp"
+#include "stest/model_context.hpp"
 #include "stest/peripheral.hpp"
 
 namespace stest::stm32l4 {
 
 class Flash : public Peripheral {
  public:
-  Flash(std::string name, const nlohmann::json& params, Clock& clock);
+  Flash(std::string name, const nlohmann::json& params, ModelContext& ctx);
   std::string_view name() const override { return name_; }
   uint32_t read(uint32_t off, unsigned width) override { return regs_.read(off, width); }
   void write(uint32_t off, unsigned width, uint32_t v) override;

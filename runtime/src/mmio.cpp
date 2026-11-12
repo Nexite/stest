@@ -1,5 +1,6 @@
 // Runtime implementation of the __stest_mmio_* ABI. This TU is NOT compiled
 // with the MMIO pass (its own volatile accesses must not recurse).
+#include "stest/mmio_windows.hpp"
 #include "stest/mmio.h"
 #include <algorithm>
 #include <cstdarg>
@@ -30,17 +31,18 @@ Tuple g_tuples[kMaxTuples];
 uint64_t g_break_epoch = 0;    // bumped by poll_streak_break()
 bool g_inited = false;
 
-constexpr uint64_t kPeriphBase = 0x40000000u, kPeriphSize = 0x20000000u;
-constexpr uint64_t kCoreBase = 0xE0000000u, kCoreSize = 0x100000u;
+using stest::kCoreBase;
+using stest::kCoreSize;
+using stest::kPeriphBase;
+using stest::kPeriphSize;
 
-inline bool in_window(uint64_t a) {
-  return (a - kPeriphBase) < kPeriphSize || (a - kCoreBase) < kCoreSize;
-}
+inline bool in_window(uint64_t a) { return stest::in_mmio_window(a); }
 
 // Clock event callbacks (e.g. SysTick wraps) fire here; nothing may escape into
 // instrumented C.
 void run_due_events() {
   try { g_clock.run_due(); }
+  catch (const stest::NotModelled& e) { stest_rt_abort("%s", e.what()); }
   catch (const std::exception& e) { stest_rt_abort("exception in clock event: %s", e.what()); }
   catch (...) { stest_rt_abort("unknown exception in clock event"); }
 }
@@ -57,6 +59,7 @@ inline void charge() {
 void deliver() {
   if (!g_hook) return;
   try { g_hook(); }
+  catch (const stest::NotModelled& e) { stest_rt_abort("%s", e.what()); }
   catch (const std::exception& e) { stest_rt_abort("exception in delivery hook: %s", e.what()); }
   catch (...) { stest_rt_abort("unknown exception in delivery hook"); }
 }
@@ -108,15 +111,28 @@ void fast_forward() {
                  (unsigned)e.addr, e.peripheral.c_str());
 }
 
+// "stest: <PERIPH>: <feature> not modelled (<read|write><bits> 0x<addr>[ = 0x<value>])"
+[[noreturn]] void abort_not_modelled(const stest::NotModelled& e, uint64_t a, unsigned bytes, bool is_write,
+                                     const uint32_t* v) {
+  if (v)
+    stest_rt_abort("%s (%s%u 0x%08x = 0x%08x)", e.what(), is_write ? "write" : "read", bytes * 8, (unsigned)a,
+                   (unsigned)*v);
+  stest_rt_abort("%s (%s%u 0x%08x)", e.what(), is_write ? "write" : "read", bytes * 8, (unsigned)a);
+}
+
 uint32_t bus_read(uint64_t a, unsigned bytes) {
   try { return g_bus.read(a, bytes); }
   catch (const stest::UnmodelledAccess& e) { abort_access(e); }
+  catch (const stest::NotModelled& e) { abort_not_modelled(e, a, bytes, false, nullptr); }
+  catch (const stest::ClockDisabled& e) { stest_rt_abort("%s", e.what()); }
   catch (const std::exception& e) { stest_rt_abort("exception in model at 0x%08x: %s", (unsigned)a, e.what()); }
   catch (...) { stest_rt_abort("unknown exception in model at 0x%08x", (unsigned)a); }
 }
 void bus_write(uint64_t a, unsigned bytes, uint32_t v) {
   try { g_bus.write(a, bytes, v); }
   catch (const stest::UnmodelledAccess& e) { abort_access(e); }
+  catch (const stest::NotModelled& e) { abort_not_modelled(e, a, bytes, true, &v); }
+  catch (const stest::ClockDisabled& e) { stest_rt_abort("%s", e.what()); }
   catch (const std::exception& e) { stest_rt_abort("exception in model at 0x%08x: %s", (unsigned)a, e.what()); }
   catch (...) { stest_rt_abort("unknown exception in model at 0x%08x", (unsigned)a); }
 }
@@ -167,6 +183,13 @@ inline void do_store(volatile void* p, unsigned bytes, uint64_t v) {
   }
   deliver();
 }
+
+// Widest of 4/2/1 bytes that fits in `left` and is naturally aligned at `a` (and `b`).
+inline unsigned chunk_width(uint64_t a, uint64_t b, size_t left) {
+  for (unsigned w = 4; w > 1; w >>= 1)
+    if (left >= w && ((a | b) & (w - 1)) == 0) return w;
+  return 1;
+}
 }  // namespace
 
 namespace stest {
@@ -187,6 +210,38 @@ uint32_t poll_skip_threshold() { return g_skip_threshold; }
 void poll_streak_break() {
   ++g_break_epoch;
   streak_reset();
+}
+
+uint32_t shim_access(uint64_t addr, unsigned width, bool is_write, ShimOp op, void* ctx) {
+  if (is_write) streak_reset();
+  charge();
+  uint32_t r = 0;
+  try {
+    Peripheral* p = g_bus.require_clock(addr, width, is_write);
+    try {
+      r = op(*p, ctx);
+    } catch (const ReadOnlyRegister&) {
+      throw UnmodelledAccess(addr, width, true, std::string(p->name()), /*ro=*/true);
+    } catch (const UnmodelledRegister&) {
+      throw UnmodelledAccess(addr, width, is_write, std::string(p->name()));
+    }
+  }
+  catch (const UnmodelledAccess& e) { abort_access(e); }
+  catch (const NotModelled& e) { abort_not_modelled(e, addr, width, is_write, nullptr); }  // shim: value not known
+  catch (const ClockDisabled& e) { stest_rt_abort("%s", e.what()); }
+  catch (const std::exception& e) { stest_rt_abort("exception in model at 0x%08x: %s", (unsigned)addr, e.what()); }
+  catch (...) { stest_rt_abort("unknown exception in model at 0x%08x", (unsigned)addr); }
+  if (is_write) {
+    deliver();
+    return 0;
+  }
+  uint64_t epoch = g_break_epoch;
+  deliver();
+  if (__builtin_expect(g_skip_threshold != 0, 1)) {
+    if (epoch != g_break_epoch) streak_reset();
+    else if (streak_load(addr, width, r)) fast_forward();
+  }
+  return r;
 }
 }  // namespace stest
 
@@ -245,5 +300,35 @@ void __stest_mmio_store8(volatile void* a, uint8_t v) { do_store(a, 1, v); }
 void __stest_mmio_store16(volatile void* a, uint16_t v) { do_store(a, 2, v); }
 void __stest_mmio_store32(volatile void* a, uint32_t v) { do_store(a, 4, v); }
 void __stest_mmio_store64(volatile void* a, uint64_t v) { do_store(a, 8, v); }
+
+void __stest_mmio_memcpy(volatile void* dst, const volatile void* src, size_t n) {
+  uint64_t d = (uint64_t)(uintptr_t)dst, s = (uint64_t)(uintptr_t)src;
+  // No d == s shortcut: a volatile self-copy still performs its reads and writes.
+  if (d > s && d - s < n) {  // dst overlaps the tail of src: copy backwards
+    for (size_t e = n; e > 0;) {
+      unsigned w = 1;
+      for (unsigned c = 4; c > 1; c >>= 1)
+        if (e >= c && (((d + e - c) | (s + e - c)) & (c - 1)) == 0) { w = c; break; }
+      e -= w;
+      do_store((volatile char*)dst + e, w, do_load((const volatile char*)src + e, w));
+    }
+    return;
+  }
+  for (size_t o = 0; o < n;) {
+    unsigned w = chunk_width(d + o, s + o, n - o);
+    do_store((volatile char*)dst + o, w, do_load((const volatile char*)src + o, w));
+    o += w;
+  }
+}
+
+void __stest_mmio_memset(volatile void* dst, int c, size_t n) {
+  uint64_t d = (uint64_t)(uintptr_t)dst;
+  uint32_t b = (uint8_t)c;
+  for (size_t o = 0; o < n;) {
+    unsigned w = chunk_width(d + o, 0, n - o);
+    do_store((volatile char*)dst + o, w, b * (w == 4 ? 0x01010101u : w == 2 ? 0x0101u : 1u));
+    o += w;
+  }
+}
 
 }  // extern "C"

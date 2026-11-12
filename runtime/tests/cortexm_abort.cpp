@@ -8,6 +8,14 @@
 #include "stest/runtime.hpp"
 using namespace stest;
 
+namespace {
+struct NmRead : Peripheral {  // every read selects an unmodelled feature
+  std::string_view name() const override { return "FAKE1"; }
+  uint32_t read(uint32_t, unsigned) override { throw NotModelled("FAKE1", "frobnication (CR.FROB)"); }
+  void write(uint32_t, unsigned, uint32_t) override {}
+};
+}  // namespace
+
 int main(int argc, char** argv) {
   stest_rt_init();
   const char* m = argc > 1 ? argv[1] : "";
@@ -19,6 +27,13 @@ int main(int argc, char** argv) {
   } else if (!strcmp(m, "clock_throw_std")) {
     runtime_clock().schedule_at(runtime_clock().now_ns() + 1, [] { throw std::runtime_error("tick"); });
     __stest_mmio_store32(&host, 1);
+  } else if (!strcmp(m, "not_modelled_read")) {
+    static NmRead p;
+    runtime_bus().map(0x40001000, 0x400, &p);
+    (void)__stest_mmio_load16((void*)0x40001002);
+  } else if (!strcmp(m, "not_modelled_clock")) {
+    runtime_clock().schedule_at(runtime_clock().now_ns() + 1, [] { throw NotModelled("FAKE2", "widgets"); });
+    (void)__stest_mmio_load32(&host);
   } else if (!strcmp(m, "capi_no_core")) {
     stest_rt_wfi();
   } else {

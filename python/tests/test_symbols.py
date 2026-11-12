@@ -206,3 +206,18 @@ def test_computed_member_offset_raises_on_access_named_and_anonymous():
     good = StructType(16, "good", "struct")  # control: constant offset still hoists correctly
     tbl._add_members(good, _Die("DW_TAG_structure_type", {}, [anon_ok]), 0)
     assert good.members["x"][0] == 5 and good.members["x"][1].decode(b"\x09") == 9
+
+
+def test_var_hot_path(node, monkeypatch):
+    import time
+
+    def boom(*a, **k):
+        raise AssertionError("SymbolTable.load called after start")
+
+    monkeypatch.setattr(SymbolTable, "load", classmethod(boom))
+    t0 = time.monotonic()
+    for _ in range(10_000):
+        node.var("u8")
+    assert time.monotonic() - t0 <= 0.5
+    node.set_var("u8", 3)
+    assert node.var("u8") == 3
