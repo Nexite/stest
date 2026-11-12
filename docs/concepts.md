@@ -144,7 +144,7 @@ hardware this is exact: nothing can change before the next event.
 
 It is not exact for a loop that counts its own iterations in a non-volatile variable while
 reading a constant register, such as a timeout `while (--n && !(REG & FLAG));` whose flag never
-sets. Each jump stretches that loop, so it takes much longer in virtual time than on hardware
-(and, with no event pending, depends on the quantum). If a test depends on such a loop, set the
+sets. Each jump stretches that loop, so it can take hundreds of times longer in virtual time than
+on hardware (and, with no event pending, depends on the quantum). If a test depends on such a loop, set the
 threshold with `Sim(poll_skip=N)`, `--stest-poll-skip N` or
 `@pytest.mark.stest(poll_skip=N)`; `0` disables fast-forward.

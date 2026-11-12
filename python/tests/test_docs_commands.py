@@ -129,3 +129,59 @@ def test_opt_outs_are_visible():
         if OPT_OUT in text:
             visible = text.replace(OPT_OUT, "")
             assert "not tested by CI" in visible, f"{page} opts blocks out of CI parity without saying so"
+
+
+# README.md is the repository's front door (GitHub renders it, MkDocs never sees it), so it gets
+# the same command rule as the getting-started pages, plus the link and snippet checks that
+# `mkdocs build --strict` and pymdownx.snippets give the site pages.
+README = "README.md"
+SITE = "https://nexite.github.io/stest/"
+
+
+def test_readme_commands_match_ci():
+    bad = unmatched(README)
+    assert not bad, "README commands not run by CI:\n" + "\n".join(bad)
+
+
+def test_readme_has_ci_checked_commands_and_visible_opt_outs():
+    text = (REPO / README).read_text()
+    assert any(cmds for _, cmds, opted_out in sh_blocks(text) if not opted_out), "README has no CI-checked sh block"
+    if OPT_OUT in text:
+        assert "not tested by CI" in text.replace(OPT_OUT, ""), "README opts blocks out without saying so"
+
+
+def _site_page(url: str) -> Path | None:
+    path = url[len(SITE):].split("#", 1)[0].strip("/")
+    for cand in ([f"docs/{path}.md", f"docs/{path}/index.md"] if path else ["docs/index.md"]):
+        if (REPO / cand).is_file():
+            return REPO / cand
+    return None
+
+
+def test_readme_site_links_name_existing_pages():
+    text = (REPO / README).read_text()
+    urls = re.findall(re.escape(SITE) + r"[^)\s>\"']*", text)
+    # the front door links into the site: install, quickstart, getting started, writing tests,
+    # the Python API, troubleshooting and the support matrix at least
+    for page in ["install/", "quickstart/", "guide/getting-started/", "guide/writing-tests/",
+                 "reference/python/", "reference/support/", "troubleshooting/"]:
+        assert any(u.split("#", 1)[0] == SITE + page for u in urls), f"README does not link {SITE + page}"
+    missing = [u for u in urls if _site_page(u) is None]
+    assert not missing, "README links to site pages that do not exist:\n" + "\n".join(missing)
+    # site pages are linked by URL; relative links are for repo files outside the site
+    rel = re.findall(r"\]\((?!https?://|#)([^)\s]+)\)", text)
+    on_site = [r for r in rel if r.startswith("docs/") and not r.startswith(("docs/superpowers/", "docs/spikes/"))]
+    assert not on_site, f"README links site pages by relative path; use the site URL: {on_site}"
+    gone = [r for r in rel if not (REPO / r.split("#", 1)[0]).exists()]
+    assert not gone, f"README links to repo paths that do not exist: {gone}"
+
+
+def test_readme_python_snippet_is_the_quickstart_test():
+    """A Python block in README must be the Quickstart test CI runs, verbatim."""
+    text = (REPO / README).read_text()
+    blocks = re.findall(r"^```python\n(.*?)^```$", text, re.M | re.S)
+    src = (REPO / "examples/quickstart/test_blinky.py").read_text()
+    m = re.search(r"# --8<-- \[start:test\]\n(.*?)# --8<-- \[end:test\]\n", src, re.S)
+    assert m
+    for b in blocks:
+        assert b == m[1], "README's Python block differs from examples/quickstart/test_blinky.py:test"

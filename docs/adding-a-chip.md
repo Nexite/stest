@@ -197,4 +197,4 @@ Add typed helpers for the family's peripherals to `python/stest/peripherals.py` 
 - [ ] `cmake/StestFetchST.cmake`: pinned `repo|commit|sha256` entries, `STEST_<FAMILY>_*_DIR` override variables, a branch in `stest_st_family_dirs`.
 - [ ] Models in `chips/<family>/models/`: at least RCC (implementing `ClockTree`), PWR, FLASH and GPIO, each with doctest tests.
 - [ ] If the core is not Cortex-M4, the open items in section 3.5 have been designed (plan) and implemented.
-- [ ] `AGENTS.md` repo map and setup notes, `README.md` if user-visible, and these docs updated.
+- [ ] `AGENTS.md` repo map and setup notes, `docs/reference/support.md` (and the README feature list) if user-visible, and these docs updated.

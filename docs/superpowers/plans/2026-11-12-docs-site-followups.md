@@ -57,8 +57,10 @@ what the code does today, and these are left for later plans.
 ## Docs and tooling
 - Material for MkDocs reaches end of life on 2027-05-05: plan a migration (its successor reads
   `mkdocs.yml`) before then.
-- AGENTS.md's "Determinism" bullet still says a quantum change affects timing "through extra wfi
-  wake-ups at quantum ends"; stale since WFI sleeps across quantum ends.
+- ~~AGENTS.md's "Determinism" bullet still says a quantum change affects timing "through extra wfi
+  wake-ups at quantum ends"~~ Done (Task 7): the WFI wording had already been corrected; the
+  bullet now also names the second quantum dependence (inputs set from Python between quanta),
+  matching `docs/concepts.md#determinism`.
 - Mermaid diagrams (Home, Concepts) were checked by construction only; check the rendered pages
   after the first deploy.
 - `examples/sensor-node/uv.lock` drifts when stest's dependency groups change (`uv run` relocks
