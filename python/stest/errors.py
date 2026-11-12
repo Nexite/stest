@@ -29,8 +29,9 @@ class NodeCrashed(StestError):
     an unexpected exit, or a CAN configuration error (a controller transmitting without
     being wired to a bus, or entering normal mode at a bit rate other than its bus's).
 
-    The message names the node, the virtual time and the exit status, and ends with the
-    node's last stderr lines. Every node has been killed and reaped before it is raised; the
+    For a node failure the message names the node, the virtual time and the exit status,
+    and ends with the node's last stderr lines; a CAN configuration error names the node,
+    the controller and the virtual time. Every node has been killed and reaped before it is raised; the
     aborting quantum's events and output are already in ``sim.event_log``, ``node.output``
     and pin histories. The [`Sim`][stest.Sim] is unusable afterwards.
     """

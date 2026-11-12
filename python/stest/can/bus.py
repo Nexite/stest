@@ -455,7 +455,7 @@ class CanBus:
 
         Returns:
             ``(t_ns, message name, signals)`` per frame in EOF order; frames the DBC does
-            not know are skipped.
+                not know are skipped.
 
         Raises:
             StestError: A frame matches a message but cannot be decoded.

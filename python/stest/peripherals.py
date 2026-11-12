@@ -34,16 +34,17 @@ class Timer:
 
         Returns:
             ``{"running", "cnt", "arr", "psc", "clk_hz", "update_hz", "counter",
-            "channels": [...]}``, plus ``"rcr"`` on timers with a repetition counter;
-            ``clk_hz`` is the timer clock and ``counter`` is ``"up"``, ``"down"`` or
-            ``"center1"``..``"center3"``; one ``channels`` entry per output-compare channel
-            (see [`TimerChannel`][stest.TimerChannel]).
+                "channels": [...]}``, plus ``"rcr"`` on timers with a repetition counter;
+                ``clk_hz`` is the timer clock and ``counter`` is ``"up"``, ``"down"`` or
+                ``"center1"``..``"center3"``; one ``channels`` entry per output-compare channel
+                (see [`TimerChannel`][stest.TimerChannel]).
         """
         return self.node.call(self.name, "state")
 
     @property
     def running(self) -> bool:
-        """Whether the counter is enabled (``CR1.CEN``)."""
+        """Whether the counter is counting (``CR1.CEN`` set; it stops on its own in one-pulse
+        mode)."""
         return bool(self.state()["running"])
 
     @property
@@ -89,8 +90,8 @@ class TimerChannel:
 
         Returns:
             ``{"ch", "enabled", "mode", "polarity", "ccr", "ref_duty", "duty"}``, plus
-            ``{"enabled_n", "polarity_n", "duty_n", "dead_time_ns"}`` on channels with a
-            complementary output.
+                ``{"enabled_n", "polarity_n", "duty_n", "dead_time_ns"}`` on channels with a
+                complementary output.
 
         Raises:
             StestError: The timer has fewer than ``n`` channels.
@@ -206,7 +207,7 @@ class Adc:
 
         Returns:
             The voltage in volts (an external voltage, else a DAC output on the pin), or
-            ``None`` if nothing drives the pin.
+                ``None`` if nothing drives the pin.
         """
         v = self.node.call(self.MODEL, "get_input", adc=self.n, channel=int(channel))
         return None if v is None else float(v)
@@ -236,8 +237,8 @@ class Dac:
 
         Returns:
             ``{"vref", "channels": [{"ch", "enabled", "dhr", "dor", "volts", "pin"}]}``;
-            ``volts`` is ``None`` while the channel is disabled, ``pin`` is ``None`` when the
-            output is internal only.
+                ``volts`` is ``None`` while the channel is disabled, ``pin`` is ``None`` when the
+                output is internal only.
         """
         return self.node.call(self.name, "state")
 
@@ -401,8 +402,8 @@ class SpiBus:
 
         Returns:
             ``{"enabled", "master", "data_bits", "cpol", "cpha", "lsbfirst", "baud_hz",
-            "frame_ns", "busy", "tx_level", "rx_level", "ovr", "miso_queued"}``
-            (``tx_level`` / ``rx_level`` in bytes).
+                "frame_ns", "busy", "tx_level", "rx_level", "ovr", "miso_queued"}``
+                (``tx_level`` / ``rx_level`` in bytes).
         """
         return self.node.call(self.name, "state")
 

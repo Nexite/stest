@@ -245,7 +245,7 @@ class Node:
 
         Returns:
             A [`Pin`][stest.Pin]. Creating it sends nothing to the node; a port the chip
-            lacks is reported by the first request.
+                lacks is reported by the first request.
 
         Raises:
             ValueError: ``name`` is not a valid pin name.
@@ -260,7 +260,7 @@ class Node:
 
         Returns:
             A [`Timer`][stest.Timer] (``.state()``, ``.update_hz``, ``.channel(n).duty``).
-            Nothing is checked until its first query.
+                Nothing is checked until its first query.
         """
         return Timer(self, name)
 
@@ -294,7 +294,7 @@ class Node:
 
         Returns:
             An [`SpiBus`][stest.SpiBus] (``.bursts``, ``.queue_miso(data)``,
-            ``.wait_for_bytes(n, timeout_ms)``).
+                ``.wait_for_bytes(n, timeout_ms)``).
         """
         return SpiBus(self, name)
 
@@ -416,8 +416,8 @@ class Node:
 
         Returns:
             ``int``, ``float`` or ``bool`` for scalars; enums as an ``int`` that also
-            compares equal to its enumerator name; structs as a read-only mapping; arrays
-            as a ``list``.
+                compares equal to its enumerator name; structs as a read-only mapping; arrays
+                as a ``list``.
 
         Raises:
             SymbolError: Unknown or ambiguous name, bad expression, no DWARF debug info,

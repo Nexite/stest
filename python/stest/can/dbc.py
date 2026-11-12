@@ -115,8 +115,8 @@ class Dbc:
 
         Returns:
             ``(message name, {signal: physical value})``, enum signals as their choice
-            name; or ``None`` for a remote frame, an identifier no message has, or a
-            standard / extended mismatch with the message.
+                name; or ``None`` for a remote frame, an identifier no message has, or a
+                standard / extended mismatch with the message.
 
         Raises:
             StestError: The frame matches a message but cannot be decoded (e.g. too short).
