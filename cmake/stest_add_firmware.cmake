@@ -24,8 +24,13 @@
 # HAL Inc, CMSIS device Include, CMSIS-Core Include, runtime/include.
 include_guard(GLOBAL)
 include(${CMAKE_CURRENT_LIST_DIR}/StestFetchST.cmake)
-get_filename_component(_STEST_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." REALPATH)
+# stest_add_firmware() may be called from a consumer's directory scope (stest added with
+# add_subdirectory), where variables set while this file was included are not visible: keep
+# what the function needs in internal cache variables.
+get_filename_component(_stest_root "${CMAKE_CURRENT_LIST_DIR}/.." REALPATH)
+set(STEST_ROOT_DIR "${_stest_root}" CACHE INTERNAL "stest source root")
 find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
+set(STEST_PYTHON "${Python3_EXECUTABLE}" CACHE INTERNAL "Python used by stest_add_firmware")
 
 if(APPLE)
   get_filename_component(_stest_llvm_bin "${STEST_CLANG}" DIRECTORY)
@@ -77,13 +82,13 @@ function(stest_add_firmware name)
 
   # ---- chip part ----
   string(TOLOWER "${FW_CHIP}" part)
-  file(GLOB toml "${_STEST_ROOT}/chips/*/parts/${part}.toml")
+  file(GLOB toml "${STEST_ROOT_DIR}/chips/*/parts/${part}.toml")
   list(LENGTH toml n)
   if(NOT n EQUAL 1)
     message(FATAL_ERROR "stest_add_firmware(${name}): chip '${FW_CHIP}' -> ${n} matches for chips/*/parts/${part}.toml")
   endif()
-  set(gen_py "${_STEST_ROOT}/tools/gen_chip.py")
-  execute_process(COMMAND "${Python3_EXECUTABLE}" "${gen_py}" --info "${toml}"
+  set(gen_py "${STEST_ROOT_DIR}/tools/gen_chip.py")
+  execute_process(COMMAND "${STEST_PYTHON}" "${gen_py}" --info "${toml}"
                   OUTPUT_VARIABLE info ERROR_VARIABLE err RESULT_VARIABLE rc
                   OUTPUT_STRIP_TRAILING_WHITESPACE)
   if(NOT rc EQUAL 0)
@@ -96,7 +101,7 @@ function(stest_add_firmware name)
   # ---- MODELS: per-type register/hal selection ----
   string(TOUPPER "${family}" _fam)
   set(STEST_${_fam}_HAL_SHIMS "")
-  include("${_STEST_ROOT}/chips/${family}/family.cmake" OPTIONAL RESULT_VARIABLE _fam_cmake)
+  include("${STEST_ROOT_DIR}/chips/${family}/family.cmake" OPTIONAL RESULT_VARIABLE _fam_cmake)
   if(_fam_cmake)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_fam_cmake}")
   endif()
@@ -109,7 +114,7 @@ function(stest_add_firmware name)
   set(hal_types "")
   set(_seen_types "")
   if(FW_MODELS)
-    execute_process(COMMAND "${Python3_EXECUTABLE}" "${gen_py}" --types "${toml}"
+    execute_process(COMMAND "${STEST_PYTHON}" "${gen_py}" --types "${toml}"
                     OUTPUT_VARIABLE _types ERROR_VARIABLE err RESULT_VARIABLE rc
                     OUTPUT_STRIP_TRAILING_WHITESPACE)
     if(NOT rc EQUAL 0)
@@ -166,19 +171,19 @@ function(stest_add_firmware name)
   add_library(${name}_fwcfg INTERFACE)
   target_include_directories(${name}_fwcfg INTERFACE
     ${FW_INCLUDE_DIRS} "${hal_dir}/Inc" "${device_dir}/Include" "${core_inc}"
-    "${_STEST_ROOT}/runtime/include")
+    "${STEST_ROOT_DIR}/runtime/include")
   target_compile_definitions(${name}_fwcfg INTERFACE ${device_define} USE_HAL_DRIVER ${FW_DEFINES})
   target_compile_options(${name}_fwcfg INTERFACE -g -O0)
 
   # HAL + CMSIS system file: an archive, so firmware copies (e.g. a CubeMX
   # Core/Src/system_*.c) and strong overrides of __weak HAL functions win.
   add_library(${name}_hal STATIC ${FW_HAL_SOURCES} "${system_c}")
-  target_include_directories(${name}_hal BEFORE PRIVATE "${_STEST_ROOT}/chips/cmsis_host")
+  target_include_directories(${name}_hal BEFORE PRIVATE "${STEST_ROOT_DIR}/chips/cmsis_host")
   target_link_libraries(${name}_hal PRIVATE ${name}_fwcfg)
   stest_enable_mmio(${name}_hal)
 
   add_library(${name}_fw OBJECT ${FW_SOURCES})
-  target_include_directories(${name}_fw BEFORE PRIVATE "${_STEST_ROOT}/chips/cmsis_host")
+  target_include_directories(${name}_fw BEFORE PRIVATE "${STEST_ROOT_DIR}/chips/cmsis_host")
   target_link_libraries(${name}_fw PRIVATE ${name}_fwcfg)
   target_compile_definitions(${name}_fw PRIVATE main=stest_firmware_main)
   stest_enable_mmio(${name}_fw)
@@ -192,12 +197,16 @@ function(stest_add_firmware name)
     set(gen_hal --hal "${_hal_csv}")
   endif()
   add_custom_command(OUTPUT "${gen}"
-    COMMAND "${Python3_EXECUTABLE}" "${gen_py}" "${toml}" "${gen}" ${gen_hal}
+    COMMAND "${STEST_PYTHON}" "${gen_py}" "${toml}" "${gen}" ${gen_hal}
     DEPENDS "${toml}" "${gen_py}"
     COMMENT "Generating ${FW_CHIP} chip glue for ${name}")
 
-  add_executable(${name} $<TARGET_OBJECTS:${name}_fw> "${gen}" "${_STEST_ROOT}/runtime/src/node_main.cpp")
+  add_executable(${name} $<TARGET_OBJECTS:${name}_fw> "${gen}" "${STEST_ROOT_DIR}/runtime/src/node_main.cpp")
   target_link_libraries(${name} PRIVATE ${name}_hal stest_chip_${family})
+  # Set per target: a consumer's scope (stest added with add_subdirectory) does not see the
+  # CMAKE_C_STANDARD / CMAKE_CXX_STANDARD of stest's top-level CMakeLists.txt.
+  set_target_properties(${name}_hal ${name}_fw PROPERTIES C_STANDARD 11)
+  set_target_properties(${name} PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
   if(APPLE)
     if(STEST_XCODE_LD)
       target_link_options(${name} PRIVATE "-fuse-ld=${STEST_XCODE_LD}")

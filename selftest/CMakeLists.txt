@@ -204,7 +204,7 @@ set_tests_properties(selftest_wfiloop_quantum_determinism PROPERTIES TIMEOUT 30)
 # MODELS= types/modes).
 foreach(case bad_include bad_compiler models_unknown models_unsupported)
   add_test(NAME selftest_configure_${case}
-    COMMAND ${CMAKE_COMMAND} -DCASE=${case} -DSTEST_ROOT=${PROJECT_SOURCE_DIR}
+    COMMAND ${CMAKE_COMMAND} -DCASE=${case} -DSTEST_ROOT=${STEST_ROOT_DIR}
             -DWORK=${CMAKE_CURRENT_BINARY_DIR}/cmake_checks_${case}
             -DSTEST_CLANG=${STEST_CLANG} -DSTEST_LLVM_ROOT=${STEST_LLVM_ROOT}
             -DLLVM_DIR=${LLVM_DIR}
@@ -215,6 +215,34 @@ foreach(case bad_include bad_compiler models_unknown models_unsupported)
   set_tests_properties(selftest_configure_${case} PROPERTIES TIMEOUT 120)
 endforeach()
 
+# Out-of-tree consumption (selftest/out_of_tree/*): a consumer project that includes the
+# toolchain, add_subdirectory()s stest and builds blinky (ok), and one that forgets the toolchain
+# include (no_toolchain). Sources this build already fetched are passed as FetchContent overrides
+# so the nested configure does not download them again.
+set(_oot_src "")
+foreach(pair "nlohmann_json|JSON_SRC" "stest_st_stm32l4xx_hal_driver|ST_HAL_SRC"
+             "stest_st_cmsis_device_l4|ST_DEV_SRC" "stest_st_cmsis_core|ST_CORE_SRC")
+  string(REPLACE "|" ";" pair "${pair}")
+  list(GET pair 0 dep)
+  list(GET pair 1 var)
+  FetchContent_GetProperties(${dep} SOURCE_DIR _dep_src)
+  if(_dep_src)
+    list(APPEND _oot_src "-D${var}=${_dep_src}")
+  endif()
+endforeach()
+foreach(case ok no_toolchain)
+  add_test(NAME selftest_out_of_tree_${case}
+    COMMAND ${CMAKE_COMMAND} -DCASE=${case} -DSTEST_ROOT=${STEST_ROOT_DIR}
+            -DWORK=${CMAKE_CURRENT_BINARY_DIR}/out_of_tree_${case}
+            -DSTEST_CLANG=${STEST_CLANG} -DSTEST_LLVM_ROOT=${STEST_LLVM_ROOT}
+            -DLLVM_DIR=${LLVM_DIR} -DCMAKE_BIN=${CMAKE_COMMAND} -DCTEST_BIN=${CMAKE_CTEST_COMMAND}
+            -DGEN=${CMAKE_GENERATOR} -DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}
+            -DSTEST_CLANGXX=${STEST_CLANGXX} ${_oot_src}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/check_out_of_tree.cmake)
+  # A nested configure + build of the runtime, chip models, MMIO pass and blinky's HAL.
+  set_tests_properties(selftest_out_of_tree_${case} PROPERTIES TIMEOUT 300)
+endforeach()
+
 # Python harness tests (python/tests) against the self-test executables. Uses uv with a
 # per-build-dir environment so native and container builds never share a venv.
 # Wall-clock speed budgets (@pytest.mark.perf) are load-sensitive: under `ctest -j8` they share
@@ -223,16 +251,16 @@ endforeach()
 # (RUN_SERIAL) and python_tests skips them. python/tests/test_perf_isolation.py checks both.
 find_program(STEST_UV uv)
 if(STEST_UV)
-  set(_py_env "STEST_SELFTEST_BIN=${CMAKE_CURRENT_BINARY_DIR};UV_PROJECT_ENVIRONMENT=${CMAKE_BINARY_DIR}/py-venv")
+  set(_py_env "STEST_SELFTEST_BIN=${CMAKE_CURRENT_BINARY_DIR};UV_PROJECT_ENVIRONMENT=${PROJECT_BINARY_DIR}/py-venv")
   add_test(NAME python_tests
-    COMMAND ${STEST_UV} run --project ${PROJECT_SOURCE_DIR} pytest ${PROJECT_SOURCE_DIR}/python/tests -q
+    COMMAND ${STEST_UV} run --project ${STEST_ROOT_DIR} pytest ${STEST_ROOT_DIR}/python/tests -q
             -m "not perf"
-    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+    WORKING_DIRECTORY ${STEST_ROOT_DIR})
   set_tests_properties(python_tests PROPERTIES ENVIRONMENT "${_py_env}" TIMEOUT 300)
   add_test(NAME python_perf_tests
-    COMMAND ${STEST_UV} run --project ${PROJECT_SOURCE_DIR} pytest ${PROJECT_SOURCE_DIR}/python/tests -q
+    COMMAND ${STEST_UV} run --project ${STEST_ROOT_DIR} pytest ${STEST_ROOT_DIR}/python/tests -q
             -m perf
-    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+    WORKING_DIRECTORY ${STEST_ROOT_DIR})
   set_tests_properties(python_perf_tests PROPERTIES ENVIRONMENT "${_py_env}" TIMEOUT 300 RUN_SERIAL TRUE)
 else()
   message(WARNING "stest: uv not found; the python_tests CTest is not registered")

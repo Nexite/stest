@@ -19,14 +19,15 @@ set(STEST_STM32L4_HAL_DIR "" CACHE PATH "stm32l4xx_hal_driver checkout (fetched 
 set(STEST_STM32L4_CMSIS_DEVICE_DIR "" CACHE PATH "cmsis_device_l4 checkout (fetched if empty)")
 set(STEST_CMSIS_CORE_DIR "" CACHE PATH "CMSIS-Core dir with core_cm4.h, or checkout with Include/ (fetched if empty)")
 
-# repo | commit | sha256 of https://github.com/STMicroelectronics/<repo>/archive/<commit>.tar.gz
-set(_STEST_ST_PINS
-  "stm32l4xx_hal_driver|047a8610c7dc0dcfdb4cd63b86cd3a2cbd3e5899|1dc2a7d8c9a1fd4b3d7c0d8fb7fe108b36ba8873b2d20ae2e0371f69cb833c06"
-  "cmsis_device_l4|dc04e41afbd7c204cd09f2fa5dd29658efbaff6c|d6421a4bb6ec22f0294d840d441054265c36f415b82fc1dd7fe1a3187fa8f2e4"
-  "cmsis_core|1a2f783395dd72778a98ebe7771f36ca1c30a35e|0dd7b9316c8ff157479d8a7ee21c2734f7ef543ffbd6bf680fdba631d2381853")
-
 # _stest_st_source(<repo> <out_var>): source dir of the pinned archive (fetched once).
+# The pins live inside the function: it may be called from a consumer's directory scope
+# (stest added with add_subdirectory), where variables set by this file are not visible.
 function(_stest_st_source repo out_var)
+  # repo | commit | sha256 of https://github.com/STMicroelectronics/<repo>/archive/<commit>.tar.gz
+  set(_STEST_ST_PINS
+    "stm32l4xx_hal_driver|047a8610c7dc0dcfdb4cd63b86cd3a2cbd3e5899|1dc2a7d8c9a1fd4b3d7c0d8fb7fe108b36ba8873b2d20ae2e0371f69cb833c06"
+    "cmsis_device_l4|dc04e41afbd7c204cd09f2fa5dd29658efbaff6c|d6421a4bb6ec22f0294d840d441054265c36f415b82fc1dd7fe1a3187fa8f2e4"
+    "cmsis_core|1a2f783395dd72778a98ebe7771f36ca1c30a35e|0dd7b9316c8ff157479d8a7ee21c2734f7ef543ffbd6bf680fdba631d2381853")
   foreach(pin IN LISTS _STEST_ST_PINS)
     string(REPLACE "|" ";" pin "${pin}")
     list(GET pin 0 r)
@@ -90,8 +91,10 @@ function(stest_cmsis_core_include out_var)
   # cmsis_gcc.h, ...): core_cm4.h does `#include "cmsis_compiler.h"`, and a quoted
   # include searches the includer's own directory before any -I path, so the host
   # shim in chips/cmsis_host would otherwise be bypassed.
+  # Staged in the calling project's build dir (stest's own, or a consumer's when stest is
+  # added with add_subdirectory).
   string(MD5 key "${inc}")
-  set(stage "${CMAKE_BINARY_DIR}/_stest/cmsis_core_${key}")
+  set(stage "${PROJECT_BINARY_DIR}/_stest/cmsis_core_${key}")
   file(GLOB hdrs "${inc}/*.h")
   list(FILTER hdrs EXCLUDE REGEX "/cmsis_(compiler|gcc|clang|armcc|armclang|armclang_ltm|iccarm|tiarmclang)\\.h$")
   file(COPY ${hdrs} DESTINATION "${stage}")

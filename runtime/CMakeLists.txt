@@ -1,12 +1,15 @@
 include(FetchContent)
 set(FETCHCONTENT_QUIET ON)
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)  # doctest v2.4.11 declares an old minimum
-FetchContent_Declare(doctest GIT_REPOSITORY https://github.com/doctest/doctest.git GIT_TAG v2.4.11 GIT_SHALLOW TRUE)
 FetchContent_Declare(nlohmann_json GIT_REPOSITORY https://github.com/nlohmann/json.git GIT_TAG v3.11.3 GIT_SHALLOW TRUE)
 set(JSON_BuildTests OFF CACHE INTERNAL "")
 set(JSON_Install OFF CACHE INTERNAL "")
-set(DOCTEST_WITH_TESTS OFF CACHE INTERNAL "")
-FetchContent_MakeAvailable(doctest nlohmann_json)
+FetchContent_MakeAvailable(nlohmann_json)
+if(STEST_BUILD_TESTS)  # doctest: stest's own unit tests (runtime/, chips/) only
+  FetchContent_Declare(doctest GIT_REPOSITORY https://github.com/doctest/doctest.git GIT_TAG v2.4.11 GIT_SHALLOW TRUE)
+  set(DOCTEST_WITH_TESTS OFF CACHE INTERNAL "")
+  FetchContent_MakeAvailable(doctest)
+endif()
 
 # Never instrumented by the MMIO pass: runtime volatile accesses must not recurse.
 find_package(Threads REQUIRED)
@@ -14,10 +17,16 @@ add_library(stest_runtime STATIC src/mmio.cpp src/bus.cpp src/clock.cpp src/peri
                                  src/node.cpp src/control_channel.cpp src/model_context.cpp src/stdout_capture.cpp
                                  # Core-generic ITM/DWT/CoreDebug models (chips/cortexm), mapped by Cortexm.
                                  ../chips/cortexm/coredebug.cpp ../chips/cortexm/itm.cpp ../chips/cortexm/dwt.cpp)
-target_include_directories(stest_runtime PUBLIC include ${PROJECT_SOURCE_DIR}/chips)
+target_include_directories(stest_runtime PUBLIC include ${STEST_ROOT_DIR}/chips)
 target_link_libraries(stest_runtime PUBLIC nlohmann_json::nlohmann_json Threads::Threads)
 # Hot path of every firmware access: always optimised, even in Debug/unset configs.
 target_compile_options(stest_runtime PRIVATE -O2)
+
+# Everything below is stest's own tests (STEST_BUILD_TESTS, default ON only when stest is
+# the top-level project).
+if(NOT STEST_BUILD_TESTS)
+  return()
+endif()
 
 add_executable(runtime_tests tests/main.cpp tests/test_bus.cpp tests/test_clock.cpp tests/test_mmio.cpp
                              tests/test_stdout_capture.cpp)
@@ -73,7 +82,7 @@ stest_cmsis_core_include(_stest_cmsis_core)
 # pass, driving NVIC/SCB/SysTick and intrinsics through the runtime.
 foreach(opt O0 O2)
   add_library(runtime_cmsis_fw_${opt} OBJECT tests/cmsis_e2e/fw.c)
-  target_include_directories(runtime_cmsis_fw_${opt} BEFORE PRIVATE ${PROJECT_SOURCE_DIR}/chips/cmsis_host)
+  target_include_directories(runtime_cmsis_fw_${opt} BEFORE PRIVATE ${STEST_ROOT_DIR}/chips/cmsis_host)
   target_include_directories(runtime_cmsis_fw_${opt} PRIVATE ${_stest_cmsis_core} include)
   target_compile_options(runtime_cmsis_fw_${opt} PRIVATE -std=c11 -${opt} -Wall -Wextra -Werror)
   stest_enable_mmio(runtime_cmsis_fw_${opt})
