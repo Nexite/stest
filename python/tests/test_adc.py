@@ -138,6 +138,7 @@ def test_adc_is_deterministic(adc_exe):
     assert a == run(250)
 
 
+@pytest.mark.perf  # wall-clock budget: CTest python_perf_tests (RUN_SERIAL)
 def test_adc_speed_two_virtual_seconds(adc_exe):
     """Speed budget: <= 0.4 s wall per virtual second with a conversion every 1 ms."""
     import time

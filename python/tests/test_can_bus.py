@@ -664,6 +664,7 @@ def test_ack_is_fixed_after_attach_and_quantum_is_read_only():
         sim.quantum_ns = 1_000_000
 
 
+@pytest.mark.perf  # wall-clock budget: CTest python_perf_tests (RUN_SERIAL)
 def test_engine_cost_is_not_quadratic_in_backlog():
     """A lone sender (nobody ACKs) queueing 1 frame/ms: the backlog grows to 4000 requests
     while the head is retransmitted ~9 times per ms. Quadratic engines took ~6 s."""

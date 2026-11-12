@@ -320,6 +320,7 @@ def test_can_e2e_determinism(can_exe):
     assert all(v[3] == 0 for v in small["vars"])
 
 
+@pytest.mark.perf  # wall-clock budget: CTest python_perf_tests (RUN_SERIAL)
 def test_can_speed(can_exe):
     """2 nodes exchanging frames: 2 virtual s within 1.6 s of wall time (0.4 s per node per
     virtual s), at the 88 us quantum a 500 kbit/s bus imposes."""

@@ -197,14 +197,23 @@ endforeach()
 
 # Python harness tests (python/tests) against the self-test executables. Uses uv with a
 # per-build-dir environment so native and container builds never share a venv.
+# Wall-clock speed budgets (@pytest.mark.perf) are load-sensitive: under `ctest -j8` they share
+# the CPU with the other tests (test_can_speed, sync-bound at the 88 us CAN quantum, reached
+# 0.97 of its budget alongside the nested configures), so they run alone in python_perf_tests
+# (RUN_SERIAL) and python_tests skips them. python/tests/test_perf_isolation.py checks both.
 find_program(STEST_UV uv)
 if(STEST_UV)
+  set(_py_env "STEST_SELFTEST_BIN=${CMAKE_CURRENT_BINARY_DIR};UV_PROJECT_ENVIRONMENT=${CMAKE_BINARY_DIR}/py-venv")
   add_test(NAME python_tests
     COMMAND ${STEST_UV} run --project ${PROJECT_SOURCE_DIR} pytest ${PROJECT_SOURCE_DIR}/python/tests -q
+            -m "not perf"
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
-  set_tests_properties(python_tests PROPERTIES
-    ENVIRONMENT "STEST_SELFTEST_BIN=${CMAKE_CURRENT_BINARY_DIR};UV_PROJECT_ENVIRONMENT=${CMAKE_BINARY_DIR}/py-venv"
-    TIMEOUT 300)
+  set_tests_properties(python_tests PROPERTIES ENVIRONMENT "${_py_env}" TIMEOUT 300)
+  add_test(NAME python_perf_tests
+    COMMAND ${STEST_UV} run --project ${PROJECT_SOURCE_DIR} pytest ${PROJECT_SOURCE_DIR}/python/tests -q
+            -m perf
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+  set_tests_properties(python_perf_tests PROPERTIES ENVIRONMENT "${_py_env}" TIMEOUT 300 RUN_SERIAL TRUE)
 else()
   message(WARNING "stest: uv not found; the python_tests CTest is not registered")
 endif()
@@ -212,3 +221,5 @@ endif()
 # Every CTest that runs a firmware/node executable gets a 30 s timeout.
 set_tests_properties(selftest_blinky_standalone selftest_blinky_quantum_determinism
   selftest_blinky_speed PROPERTIES TIMEOUT 30)
+# A wall-clock budget: run it alone (see python_perf_tests).
+set_tests_properties(selftest_blinky_speed PROPERTIES RUN_SERIAL TRUE)

@@ -25,3 +25,6 @@ packages = ["python/stest"]
 
 [tool.pytest.ini_options]
 testpaths = ["python/tests"]
+markers = [
+    "perf: wall-clock speed budget (load-sensitive; CTest runs these alone in python_perf_tests, RUN_SERIAL)",
+]

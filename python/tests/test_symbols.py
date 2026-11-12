@@ -208,6 +208,7 @@ def test_computed_member_offset_raises_on_access_named_and_anonymous():
     assert good.members["x"][0] == 5 and good.members["x"][1].decode(b"\x09") == 9
 
 
+@pytest.mark.perf  # wall-clock budget: CTest python_perf_tests (RUN_SERIAL)
 def test_var_hot_path(node, monkeypatch):
     import time
 
