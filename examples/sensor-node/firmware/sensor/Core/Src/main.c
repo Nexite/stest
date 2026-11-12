@@ -34,7 +34,8 @@ static void send_reading(uint16_t millivolts, uint8_t button_count);
 
 int main(void)
 {
-  uint32_t next_sample = SAMPLE_PERIOD_MS;
+  /* Tick of the last sample. The first one is due SAMPLE_PERIOD_MS after reset (tick 0). */
+  uint32_t last_sample = 0;
 
   HAL_Init();
   SystemClock_Config();
@@ -56,9 +57,10 @@ int main(void)
     /* Sleep until the next interrupt (SysTick every 1 ms, or the button). Under stest a
      * sleeping core costs no host time: the simulation skips to the next event. */
     __WFI();
-    if (HAL_GetTick() >= next_sample)
+    /* Unsigned difference: still correct when the 32-bit ms tick wraps (after ~49.7 days). */
+    if (HAL_GetTick() - last_sample >= SAMPLE_PERIOD_MS)
     {
-      next_sample += SAMPLE_PERIOD_MS;
+      last_sample += SAMPLE_PERIOD_MS;
       uint16_t mv = read_millivolts();
       g_sample_count++;
       send_reading(mv, g_button_count);
