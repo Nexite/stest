@@ -13,16 +13,27 @@ if TYPE_CHECKING:
 
 
 class CanDevice:
-    """A virtual CAN device implemented in Python. Subclass it (calling
-    ``super().__init__(name)``) and override :meth:`on_frame`; attach with
-    ``bus.attach(device)``.
+    """A virtual CAN device implemented in Python.
 
-    Device code runs on the virtual clock: :meth:`on_frame` runs at the frame's end of frame
-    (EOF) and an :meth:`every` callback at its due time. Inside a callback :attr:`now_ns` is
-    that instant and :meth:`send` requests the frame at it, so device timing never depends
-    on the quantum. (Callbacks are executed at the first quantum end at or after their time;
+    Subclass it (calling ``super().__init__(name)``), override
+    [`on_frame`][stest.CanDevice.on_frame], and attach it with
+    [`bus.attach(device)`][stest.CanBus.attach]:
+
+    ```python
+    class Echo(CanDevice):
+        def on_frame(self, lf):
+            if lf.frame.id == 0x1F0:
+                self.send(CanFrame(0x1F1, lf.frame.data))
+
+    bus.attach(Echo("echo"))
+    ```
+
+    Device code runs on the virtual clock: ``on_frame`` runs at the frame's end of frame
+    (EOF) and an [`every`][stest.CanDevice.every] callback at its due time. Inside a callback
+    [`now_ns`][stest.CanDevice.now_ns] is that instant and [`send`][stest.CanDevice.send]
+    requests the frame at it, so device timing never depends on the quantum. (Callbacks are executed at the first quantum end at or after their time;
     the scheduler's lookahead guarantees no arbitration after that instant has been decided
-    yet.) Outside callbacks, :attr:`now_ns` is the simulation time (``sim.now_ns``).
+    yet.) Outside callbacks, ``now_ns`` is the simulation time (``sim.now_ns``).
 
     ``ack`` (default True): the device acknowledges frames, like a real controller in normal
     mode. With ``ack=False`` it only listens; a frame nobody else acknowledges is retried
@@ -32,8 +43,23 @@ class CanDevice:
     (no ACK, ``CanBus.inject_errors``, same-identifier collisions) are retried at once, forever,
     and they never become error passive or bus-off. Only firmware nodes have fault confinement.
 
-    An exception raised by :meth:`on_frame` or an :meth:`every` callback ends the
-    simulation with a StestError naming the device (the original exception chained).
+    An exception raised by ``on_frame`` or an ``every`` callback ends the simulation with a
+    [`StestError`][stest.StestError] naming the device (the original exception chained).
+
+    Args:
+        name: Device name, unique among the bus's senders (its frames'
+            ``LoggedFrame.sender``).
+        ack: Whether the device acknowledges frames. ``None`` (default) keeps the class
+            attribute ``ack`` (``True`` unless a subclass overrides it).
+
+    Raises:
+        ValueError: ``name`` is empty or not a string.
+
+    Attributes:
+        name (str): The device name.
+        ack (bool): Whether the device acknowledges frames; read-only once attached
+            (setting it then raises [`StestError`][stest.StestError]).
+        bus (CanBus | None): The bus the device is attached to, or ``None``.
     """
 
     ack: bool = True
@@ -48,22 +74,56 @@ class CanDevice:
         self._attach_t = 0
 
     def on_frame(self, lf: LoggedFrame) -> None:
-        """Called for every frame delivered on the bus (except the device's own), at the
-        frame's EOF (``self.now_ns == lf.t_ns``), in EOF order across all buses."""
+        """Called for every frame delivered on the bus except the device's own.
+
+        Runs at the frame's EOF (``self.now_ns == lf.t_ns``), in EOF order across all buses.
+        The default does nothing; override it.
+
+        Args:
+            lf: The delivered frame.
+        """
 
     @property
     def now_ns(self) -> int:
+        """The device's virtual time in ns: the running callback's instant, else
+        ``sim.now_ns``.
+
+        Raises:
+            StestError: The device is not attached to a bus.
+        """
         return self._require_bus()._sim._can_now()
 
     def send(self, frame: CanFrame) -> None:
-        """Request ``frame`` on the device's bus at the current virtual time (:attr:`now_ns`).
-        Queued without limit; the device's pending frames contend in identifier order."""
+        """Request a frame on the device's bus at [`now_ns`][stest.CanDevice.now_ns].
+
+        Requests queue without limit; the device's pending frames contend in arbitration
+        order (the frame that would win on the wire first, then request order). Errors are retried
+        forever.
+
+        Args:
+            frame: The [`CanFrame`][stest.CanFrame] to send.
+
+        Raises:
+            StestError: The device is not attached to a bus.
+            TypeError: ``frame`` is not a ``CanFrame``.
+        """
         bus = self._require_bus()
         bus._device_send(self.name, frame)
 
     def every(self, period_ms: float, fn: Callable[[], None]) -> None:
-        """Run ``fn()`` every ``period_ms`` of virtual time, first at ``now + period`` (exact
-        integer-ns multiples of the period from the registration time)."""
+        """Run ``fn()`` periodically on the virtual clock.
+
+        First at ``now_ns + period``, then at exact integer-ns multiples of the period from
+        the registration time. There is no way to cancel it.
+
+        Args:
+            period_ms: Period in virtual milliseconds (rounded to the nearest ns).
+            fn: Callable with no arguments; it may call [`send`][stest.CanDevice.send].
+
+        Raises:
+            StestError: The device is not attached to a bus.
+            ValueError: The period rounds to less than 1 ns.
+        """
         bus = self._require_bus()
         period = round(period_ms * 1_000_000)
         if period <= 0:

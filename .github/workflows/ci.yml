@@ -21,6 +21,8 @@ jobs:
             cmake --build build
             ctest --test-dir build --output-on-failure
             uv run pytest python/tests -q
+            ./build/selftest/blinky --run-ms 2100
+            uv run pytest examples/quickstart -q
           '
       - name: Speed gate (non-blocking)
         continue-on-error: true
@@ -57,6 +59,11 @@ jobs:
         run: ctest --test-dir build --output-on-failure
       - name: pytest
         run: uv run pytest python/tests -q
+      # The Quickstart page's commands (docs/quickstart.md; python/tests/test_docs_commands.py).
+      - name: Quickstart (blinky standalone and its pytest)
+        run: |
+          ./build/selftest/blinky --run-ms 2100
+          uv run pytest examples/quickstart -q
       - name: Speed gate (non-blocking)
         continue-on-error: true
         run: |
@@ -74,3 +81,48 @@ jobs:
           name: gate-macos-arm64
           path: out/gate-*macos-arm64.txt
           if-no-files-found: warn
+
+  # The example consumer project (examples/sensor-node), built and tested as a user would:
+  # its own fresh build dir and venv, stest via add_subdirectory, and no FetchContent source
+  # overrides, so nlohmann_json and the pinned ST HAL/CMSIS are downloaded by the consumer.
+  example:
+    name: example sensor-node (${{ matrix.host }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host: ubuntu-24.04 x86-64, docker image
+            runner: ubuntu-24.04
+            docker: true
+          - host: macos-15 arm64, native
+            runner: macos-15
+            docker: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the stest image (local only, not published)
+        if: matrix.docker
+        run: docker build -t stest-ci docker
+      - name: Build and test the example (inside the image)
+        if: matrix.docker
+        run: |
+          docker run --rm -v "$PWD":/w -w /w/examples/sensor-node stest-ci bash -euxo pipefail -c '
+            unset UV_PROJECT_ENVIRONMENT
+            cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+            cmake --build build
+            uv run pytest tests -q
+          '
+      - name: Install toolchain
+        if: ${{ !matrix.docker }}
+        run: brew install llvm ninja
+      - uses: astral-sh/setup-uv@v5
+        if: ${{ !matrix.docker }}
+      - name: Build and test the example (native)
+        if: ${{ !matrix.docker }}
+        working-directory: examples/sensor-node
+        run: |
+          unset UV_PROJECT_ENVIRONMENT
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+          uv run pytest tests -q

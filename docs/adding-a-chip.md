@@ -173,7 +173,7 @@ None of the following exists yet. These are the known places that assume Cortex-
   An M33 needs its own identification, any SCB/NVIC differences the HAL touches, and a decision on how to treat the security extension. The likely shape is a `core` value mapped to core options in the generated `ChipDesc`, but that design is not settled.
 - **Address windows** (`mmio_windows.hpp`) cover `0x40000000-0x5FFFFFFF`, which includes the secure peripheral aliases at `0x5xxxxxxx`. Decide whether the secure alias of a block maps to the same model.
 
-Record decisions about these in the relevant plan (`docs/superpowers/plans/`) before implementing them.
+Record decisions about these in the relevant plan ([`docs/superpowers/plans/`](https://github.com/Nexite/stest/blob/main/docs/superpowers/plans/)) before implementing them.
 
 ### 3.6 Python
 
@@ -197,4 +197,4 @@ Add typed helpers for the family's peripherals to `python/stest/peripherals.py` 
 - [ ] `cmake/StestFetchST.cmake`: pinned `repo|commit|sha256` entries, `STEST_<FAMILY>_*_DIR` override variables, a branch in `stest_st_family_dirs`.
 - [ ] Models in `chips/<family>/models/`: at least RCC (implementing `ClockTree`), PWR, FLASH and GPIO, each with doctest tests.
 - [ ] If the core is not Cortex-M4, the open items in section 3.5 have been designed (plan) and implemented.
-- [ ] `AGENTS.md` repo map and setup notes, `README.md` if user-visible, and these docs updated.
+- [ ] `AGENTS.md` repo map and setup notes, `docs/reference/support.md` (and the README feature list) if user-visible, and these docs updated.

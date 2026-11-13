@@ -19,12 +19,16 @@ stest is an open-source (Apache-2.0) STM32 software-in-the-loop simulator. Real 
 | `chips/cmsis_host/` | Host shim for CMSIS `cmsis_compiler.h` (replaces ARM toolchain header) |
 | `tools/gen_chip.py` | TOML -> generated chip glue (IRQ table, weak handlers, model instances, `stest_chip`) |
 | `cmake/` | `StestToolchain.cmake` (finds upstream LLVM), `StestFetchST.cmake` (pinned ST sources), `stest_add_firmware.cmake` |
-| `selftest/` | Self-test firmwares (`firmware/`: `adc`, `blinky`, `can` (exes `can_node1`, `can_node2`, `can_badrate` (250 kbit/s), `can_err` (error notifications + CAN2_SCE), `can_abom` (`can_err` + AutoBusOff)), `dac`, `exti` (+ `exti_wfe`: ST's WFE sleep entry), `faults` (variants incl. `faults_abort_output`, `faults_abort_events`), `hal_direct`, `itm` (+ `itm_mixed`: printf and ITM interleaved), `pollcount`, `pollpin`, `spi`, `tim`, `wfiloop` (WFI quantum-independence)) and CTest checks |
+| `selftest/` | Self-test firmwares (`firmware/`: `adc`, `blinky`, `can` (exes `can_node1`, `can_node2`, `can_badrate` (250 kbit/s), `can_err` (error notifications + CAN2_SCE), `can_abom` (`can_err` + AutoBusOff)), `dac`, `exti` (+ `exti_wfe`: ST's WFE sleep entry), `faults` (variants incl. `faults_abort_output`, `faults_abort_events`), `hal_direct`, `itm` (+ `itm_mixed`: printf and ITM interleaved), `pollcount`, `pollpin`, `spi`, `tim`, `wfiloop` (WFI quantum-independence)), CTest checks, and `out_of_tree/` consumer projects for the add_subdirectory checks |
+| `examples/sensor-node/` | Example consumer project (what a user's test repo looks like): two CubeMX-style L496 boards (`sensor`: PC13 button/EXTI -> PA5 LED, PC0 ADC1_IN1 sent every 100 ms on CAN1 as DBC `SensorReading` 0x120; `display`: receives it, PA5 on above 2000 mV), `can/sensor-node.dbc`, pytest tests, its own `pyproject.toml` (`stest[dbc]` by path). CI job `example` builds and tests it from a fresh build dir and venv with no FetchContent overrides (Linux in the Docker image, macOS native); the docs quote its files, so keep paths stable |
 | `spike/` | Interception benchmarks and the speed gate (`run_gate.py [--quantum-us 88] [--can-two-node] [--can-worst-case] [--build-dir DIR]`; `gate_can_two_node.py`: the gated two-node CAN row, budget 2 x 0.40; `gate_can_noack.py`: the informational CAN no-ACK worst case) |
 | `python/stest/`, `python/tests/` | `Sim`/`Node`, protocol mirror, DWARF/Mach-O symbol lookup, typed peripheral helpers (`peripherals.py`: `node.timer()`, `node.adc()`, `node.dac()`, `node.spi()`; `pin.py`: levels and analog voltages), pytest plugin; Python tests |
 | `python/stest/can/` | Simulated CAN (user guide `docs/can.md`): `bus.py` bus engine (arbitration, ACK, error frames, fault confinement, `inject_errors`, `errors`; algorithm in its module doc), `frame.py` (`CanFrame`, bit length, `lookahead_ns`), `device.py` (`CanDevice`), `dbc.py` (`Dbc`, `DbcDevice`, via cantools), `log.py` (candump / ASC) |
-| `docs/superpowers/{specs,plans}/` | Design spec and per-plan implementation plans; `docs/spikes/` gate results |
+| `examples/quickstart/` | The Quickstart test (`test_blinky.py`, run from the repo root against `build/selftest/blinky`); README and `docs/quickstart.md` quote its `test` snippet section |
+| `mkdocs.yml`, `docs/` | User docs site (MkDocs Material + mkdocstrings, `https://nexite.github.io/stest/`): `index.md`, `install.md`, `quickstart.md`, `concepts.md`, `can.md`, `troubleshooting.md`, `contributing.md`, contributor guides `adding-a-{peripheral,chip}.md`, `guide/` (`getting-started.md`, `writing-tests/*`), `reference/` (`python/*` generated from docstrings, `pytest.md`, `firmware.md`, `support.md`). `docs/superpowers/` and `docs/spikes/` are excluded from the site (`exclude_docs`). README is the short front door and links into the site by URL |
+| `docs/superpowers/{specs,plans}/` | Design spec and per-plan implementation plans; `docs/spikes/` gate results (neither is on the site) |
 | `docker/Dockerfile`, `.devcontainer/` | Ubuntu 24.04 + LLVM 18 image (also the zero-setup environment) |
+| `.github/workflows/` | `ci.yml` (Linux in the Docker image, macOS native: build, ctest, pytest, the Quickstart commands, non-blocking speed gates; job `example` builds and tests `examples/sensor-node`), `docs.yml` (`mkdocs build --strict` on every PR, GitHub Pages deploy from `main`) |
 
 ## How it works
 
@@ -59,6 +63,10 @@ uv run pytest python/tests -q                              # Python alone; uses 
 ./build/selftest/blinky --run-ms 2100                      # standalone: EVT <t> GPIO <port><pin> <level> / EVT <t> <json>
 uv run spike/run_gate.py                                   # speed gate (builds build-gate/ itself)
 uv run spike/run_gate.py --quantum-us 88 --can-two-node --can-worst-case  # gate at the CAN quantum + gated two-node CAN row + informational no-ACK worst case
+uv run pytest examples/quickstart -q                       # the Quickstart test (needs build/selftest/blinky)
+uv run --group docs mkdocs build --strict                  # docs site into site/ (CI: uv run --only-group docs ...; no C/C++ toolchain needed)
+uv run --group docs mkdocs serve                           # live preview at http://127.0.0.1:8000/
+(cd examples/sensor-node && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build && uv run pytest tests -q)  # the example consumer (CI job `example` also unsets UV_PROJECT_ENVIRONMENT)
 ```
 
 Docker, exactly as CI runs it (`.github/workflows/ci.yml`):
@@ -70,18 +78,32 @@ docker run --rm -v "$PWD":/w -w /w stest-ci bash -euxo pipefail -c '
   cmake --build build
   ctest --test-dir build --output-on-failure
   uv run pytest python/tests -q
+  ./build/selftest/blinky --run-ms 2100
+  uv run pytest examples/quickstart -q
 '
 docker run --rm -v "$PWD":/w -w /w stest-ci bash -c 'uv run spike/run_gate.py --build-dir build-gate-docker'
 docker run --rm -v "$PWD":/w -w /w stest-ci bash -c 'uv run spike/run_gate.py --build-dir build-gate-docker --quantum-us 88 --can-two-node --can-worst-case'
 ```
 
-Note the Docker build writes into the host `build/`; if you share the tree with a native build, use a separate dir (e.g. `build-docker`, as the README does, and `--build-dir build-gate-docker` for the gate). `build*/` is gitignored.
+Out-of-tree use (the consumer contract; a user's test repo with stest as a git submodule, referenced by path; user guide `docs/guide/getting-started.md`, worked example `examples/sensor-node/`): include the toolchain file before `project()`, then `add_subdirectory` stest:
+
+```cmake
+cmake_minimum_required(VERSION 3.23)
+include(<stest>/cmake/StestToolchain.cmake)   # before project(); stest's configure fails otherwise
+project(my_sil C CXX)
+add_subdirectory(<stest> stest)
+stest_add_firmware(board_a CHIP STM32L496RG SOURCES ... INCLUDE_DIRS ...)
+```
+
+`STEST_BUILD_TESTS` (default ON only when stest is the top-level project) gates `spike/`, `selftest/`, the runtime/chip test executables, doctest and every stest `add_test`; the runtime/chip libraries and `stest_add_firmware` work either way. `STEST_ROOT_DIR` (internal cache) is stest's source root. `selftest_out_of_tree_ok` / `_no_toolchain` (`selftest/check_out_of_tree.cmake`, consumers in `selftest/out_of_tree/`) configure, build and test exactly this pattern.
+
+Note the Docker build writes into the host `build/`; if you share the tree with a native build, use a separate dir (e.g. `build-docker`, as `docs/install.md` suggests, and `--build-dir build-gate-docker` for the gate; the Quickstart test hardcodes `build/selftest/blinky`, and `python/tests` finds a different build through `STEST_SELFTEST_BIN`). `build*/` is gitignored.
 
 ## Non-negotiable rules
 
 - **Firmware and ST sources compile unchanged.** Never patch ST code or require firmware edits. HAL-mode shims (Plan 2) replace whole ST `.c` files at link time.
 - **Strict by default.** Unmodelled address, unimplemented register, write to a fully read-only register, or access to a clock-disabled peripheral (Plan 2) aborts the node with an `stest: ...` message naming address, width, direction and peripheral (exit 70, ERROR frame). Never return silent zeros or drop writes. Registers that merely contain RO bits keep hardware semantics.
-- **Determinism.** No wall clock or host scheduling in simulation logic; identical inputs (including quantum size) give byte-identical event logs. Clock events fire at their own times (`Clock::advance_to`) and a node stops at exactly the quantum end with every event up to it fired (a charge that would cross it moves the clock to T, yields, and completes on resume), so each MMIO access and event happens at the same virtual time wherever boundaries fall and inbox messages at t >= T are never in the past; WFI sleeps across quantum ends (yielding the baton at each) and returns only when an exception is pending or was taken, as on hardware, so a `while (!x) __WFI();` with `x` written from Python sees it at the next interrupt (`__WFE` adds the ARMv7-M event register: `__SEV`, exception entry/return and SCR.SEVONPEND set it; see `Cortexm::wfe`); changing the quantum can still change timing through loops dilated by poll fast-forward. (Wall-clock use is limited to timeouts/watchdogs.)
+- **Determinism.** No wall clock or host scheduling in simulation logic; identical inputs (including quantum size) give byte-identical event logs. Clock events fire at their own times (`Clock::advance_to`) and a node stops at exactly the quantum end with every event up to it fired (a charge that would cross it moves the clock to T, yields, and completes on resume), so each MMIO access and event happens at the same virtual time wherever boundaries fall and inbox messages at t >= T are never in the past; WFI sleeps across quantum ends (yielding the baton at each) and returns only when an exception is pending or was taken, as on hardware, so a `while (!x) __WFI();` with `x` written from Python sees it at the next interrupt (`__WFE` adds the ARMv7-M event register: `__SEV`, exception entry/return and SCR.SEVONPEND set it; see `Cortexm::wfe`); changing the quantum can still change timing in two ways: inputs set from Python between quanta (`set_high()`, `set_voltage()`, ...) take effect at the quantum boundary where the nodes are paused (`Pin.drive_at` / `Node.post` take an exact time), and loops dilated by poll fast-forward jump to the quantum end when no event is pending (user-facing version: `docs/concepts.md#determinism`). (Wall-clock use is limited to timeouts/watchdogs.)
 - **Model contract** (`peripheral.hpp`): any time-driven state change is a scheduled `Clock` event, or visible as a different value on each read (like SysTick VAL). Lazily computed "ready at T" state without an event at T is overshot by poll fast-forward.
 - **No Sakura** (the first user project) names, pins or DBC assumptions anywhere in stest. Sakura tests live in Sakura's repo.
 - **Licensing.** Apache-2.0; ST files keep their own notices (see `NOTICE`, `LICENSE`).
@@ -94,7 +116,13 @@ Note the Docker build writes into the host `build/`; if you share the tree with 
 - `chips/*/parts/*.toml` <-> `tools/gen_chip.py` (schema/validation) <-> model class names/ctors. `stest_add_firmware` re-runs the generator when either changes.
 - Model added: its source in `chips/<family>/CMakeLists.txt`, a TOML `[[peripheral]]` entry, and tests.
 - HAL shims (`chips/<family>/hal/`) <-> `family.cmake` <-> `runtime/include/stest/hal_api.h` <-> the model's C API implementation; a shim must define every public symbol of the ST file it replaces, with ST's signatures (see `docs/adding-a-peripheral.md`, "Writing a HAL shim").
-- New `stest_add_firmware` options: update the header comment in `cmake/stest_add_firmware.cmake` and README.
+- New `stest_add_firmware` options: update the header comment in `cmake/stest_add_firmware.cmake` and the options table in `docs/reference/firmware.md`.
+- Public Python API <-> its Google-style docstrings <-> `docs/reference/python/*.md` (mkdocstrings renders the docstrings; `python/tests/test_docstrings.py` requires every item of `stest.__all__` / `stest.can.__all__` to be documented). A new public name goes into a reference page; internals (`protocol`, `symbols`, `macho`) stay off the site. pytest plugin options and the `stest` marker <-> `docs/reference/pytest.md`.
+- Env vars (`getenv("STEST_...")`, Python's `STEST_*`, CMake `$ENV{}`), `stest_add_firmware` keywords, `STEST_*` cache options and strict-abort / warning messages <-> `docs/reference/firmware.md` (`python/tests/test_docs_coverage.py` fails when one is missing; a message row there pins its source literal and its example on the page, so update both when the text changes).
+- Modelled peripherals (part TOML `model =` entries, `chips/cortexm/`) <-> `docs/reference/support.md` (the coverage test requires each model's header link) and the README feature list.
+- Example files (`examples/quickstart/test_blinky.py`, `examples/sensor-node/**`, `python/tests/test_recipes.py`) <-> the guides that quote them through `--8<--` snippet sections (`# --8<-- [start:name]` / `[end:name]`) or line ranges; renaming a file or section breaks `mkdocs build --strict` (`check_paths`), and README's Python block must equal the quickstart `test` section (`test_docs_commands.py`).
+- Commands in fenced `sh` blocks of README, `docs/install.md`, `docs/quickstart.md`, `docs/guide/getting-started.md` (and the cookbook, reference and troubleshooting pages) <-> `.github/workflows/ci.yml` / `docs.yml`: each must be a CI line verbatim, or carry `<!-- not tested by CI -->` just before the block and say "not tested by CI" in visible text (`test_docs_commands.py`, `test_docs_coverage.py`). Change CI and the docs together.
+- stest's CMake must keep working as a subproject (`selftest/out_of_tree/`): use `${STEST_ROOT_DIR}` (not `${PROJECT_SOURCE_DIR}` / `${CMAKE_SOURCE_DIR}`) for stest paths and `${PROJECT_BINARY_DIR}` / `${CMAKE_CURRENT_BINARY_DIR}` for build outputs; anything a function such as `stest_add_firmware` reads must be a cache variable, global property or set inside the function (the consumer's directory scope does not see stest's plain variables); new tests, test executables and test-only fetches go under `STEST_BUILD_TESTS`.
 
 ## Adding a peripheral model (current state)
 
@@ -116,10 +144,11 @@ Note the Docker build writes into the host `build/`; if you share the tree with 
 
 - TDD: write the failing test first. C++ uses doctest; CTest names are prefixed `runtime_`, `chip_`, `selftest_` (and `python_tests`, `python_perf_tests`). Python and e2e use pytest (`python/tests/`, `pytester` for plugin tests).
 - Self-test firmwares live in `selftest/firmware/*`; fault injection is one exe per variant (`faults_spin|crash|unmodelled|ro_write|clkoff`, plus `faults_printf` for stdout capture, `faults_abort_output` / `faults_abort_events` for output and events of an aborting quantum). HAL-mode builds are suffixed `_gpio_hal` (`blinky_gpio_hal`, `exti_gpio_hal`, `hal_direct_gpio_hal`).
-- Every CTest has a `TIMEOUT` (30 s for runtime/chip/selftests, 120 for the `selftest_configure_*` nested configures, 300 for `python_tests` / `python_perf_tests`); set one on new tests.
+- Every CTest has a `TIMEOUT` (30 s for runtime/chip/selftests, 120 for the `selftest_configure_*` nested configures, 300 for the `selftest_out_of_tree_*` nested configure + build, 300 for `python_tests` / `python_perf_tests`); set one on new tests.
 - Wall-clock budgets are load-sensitive (under `ctest -j8`, `test_can_speed` reached 0.97 of its budget beside the nested configures, and fails under CPU load): mark every Python test that reads a wall clock `@pytest.mark.perf`. CTest's `python_tests` runs `-m "not perf"` and `python_perf_tests` runs `-m perf` with `RUN_SERIAL` (alone), as does `selftest_blinky_speed`; `python/tests/test_perf_isolation.py` enforces both. Plain `uv run pytest python/tests` runs everything. `test_can_speed` (two CAN nodes, host-sensitive) checks its traffic always but its 1.6 s wall budget only with `STEST_PERF_STRICT=1` (otherwise a 4x sanity bound); the gated CAN speed figure is `spike/run_gate.py --can-two-node` (CI's non-blocking 88 us gate step).
 - Before claiming done, run the full suite natively AND in Docker (Linux-only paths like `PR_SET_PDEATHSIG` and `/proc` differ from macOS).
 - Do not match on raw JSON key order in event logs (keys are sorted).
+- Docs honesty tests (all in `python/tests`, run by `python_tests`): `test_docstrings.py` (public API documented), `test_docs_commands.py` (shell commands on README and the getting-started pages are CI lines; README site links resolve to `docs/` pages; README's Python block is the quickstart test), `test_docs_coverage.py` (env vars, options, cache variables, messages, modelled peripherals and GitHub links on the reference pages), `test_recipes.py` (every cookbook snippet runs; the guides quote it by snippet section). Docs-only changes still need `uv run --group docs mkdocs build --strict` (broken links, anchors and snippet paths fail it).
 
 ## Known gotchas
 
@@ -140,5 +169,5 @@ Note the Docker build writes into the host `build/`; if you share the tree with 
 
 ## Workflow
 
-- Specs and plans live in `docs/superpowers/` (`specs/`, `plans/`, one plan per milestone, plus `...-followups.md`). One branch per plan (`plan-1-core`, `plan-2-peripherals`, `plan-3-can`); the current work follows `docs/superpowers/plans/2026-10-31-stest-plan-3-can.md`. Record decisions and deferred findings in the plan's follow-ups file (`docs/superpowers/plans/2026-10-30-plan-1-followups.md`, `2026-10-31-plan-2-followups.md`, `2026-10-31-plan-3-followups.md`; check them before assuming a behaviour is a regression).
+- Specs and plans live in `docs/superpowers/` (`specs/`, `plans/`, one plan per milestone, plus `...-followups.md`). One branch per plan (`plan-1-core`, `plan-2-peripherals`, `plan-3-can`); the docs site followed `docs/superpowers/plans/2026-11-12-stest-docs-site.md` (branch `docs-site`). Record decisions and deferred findings in the plan's follow-ups file (`docs/superpowers/plans/2026-10-30-plan-1-followups.md`, `2026-10-31-plan-2-followups.md`, `2026-10-31-plan-3-followups.md`, `2026-11-12-docs-site-followups.md`; check them before assuming a behaviour is a regression).
 - Commits use a conventional prefix (`feat`, `fix`, `fix(runtime):`, `docs:`, `docs(plan-N):`) and a body explaining why. Every commit in history ends with a `Co-Authored-By: <model name> <noreply@anthropic.com>` trailer naming the model that did the work; use the attribution line your harness instructs.

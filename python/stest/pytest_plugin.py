@@ -1,18 +1,24 @@
 """pytest plugin: the ``sim`` fixture, options, the ``stest`` marker, failure reports.
 
-Registered through the ``pytest11`` entry point (installed with the package).
+Registered through the ``pytest11`` entry point (installed with the package). The
+reference page is ``docs/reference/pytest.md``; keep it in sync with this module.
 
-* fixture ``sim``: a function-scoped :class:`stest.Sim`, closed on teardown (also when the
-  test raised or timed out).
+* fixture ``sim``: a function-scoped, not yet started ``stest.Sim``, closed on teardown
+  (also when the test raised or timed out).
 * options ``--stest-quantum-us`` (default 1000) and ``--stest-wall-timeout`` (seconds,
   default 30).
-* option ``--stest-poll-skip`` (poll fast-forward threshold; 0 disables; default: runtime's 64).
+* option ``--stest-poll-skip`` (poll fast-forward threshold; 0 disables; default: the node's
+  ``STEST_POLL_SKIP``, else the runtime's 64).
 * option ``--stest-strict-analog``: converting an ADC channel with no input voltage aborts
-  the node (default: it reads 0 V with one stderr warning).
+  the node (default: the node's ``STEST_STRICT_ANALOG``, else it reads 0 V with one stderr
+  warning).
 * option ``--stest-no-debugger``: power-on state without an attached debugger (ITM/DWT trace
-  disabled; ``ITM_SendChar`` drops output). Default: a debugger is attached.
+  disabled; ``ITM_SendChar`` drops output). Default: the node's ``STEST_DEBUGGER``, else a
+  debugger is attached.
 * marker ``@pytest.mark.stest(quantum_us=..., wall_timeout_s=..., poll_skip=..., strict_analog=...,
-  debugger_attached=...)`` overrides them per test (marker > CLI > default).
+  debugger_attached=...)`` overrides them per test (marker > CLI > the node's environment
+  variable > default). Only the closest marker applies (no merging across function, class
+  and module); any other key or a positional argument raises ``pytest.UsageError``.
 * on failure each node's last 200 stderr lines, ITM port-0 log, last 200 firmware output lines
   (``Node.output``: ITM port 0 + stdout in virtual-time order), last 200 raw stdout lines and
   the merged event log are attached to the report as ``stest node <name> stderr`` / ``log`` /

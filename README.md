@@ -1,79 +1,76 @@
 # stest
 
-stest is an open-source (Apache-2.0) software-in-the-loop simulator for STM32 firmware. Firmware is compiled natively with upstream LLVM clang plus the stest pass plugin, which rewrites volatile (memory-mapped I/O) accesses into calls to a simulated peripheral runtime, so unmodified firmware sources (HAL included) run on a host machine in deterministic virtual time (nanoseconds). A Python harness (a pytest plugin) drives one or more firmware nodes in lockstep, reads and writes pins and firmware variables, and reports failures with the nodes' stderr and a merged event log. It ships the STM32L496 chip package (RCC, PWR, FLASH, GPIO, EXTI/SYSCFG, TIM, ADC, DAC, SPI, bxCAN, plus the Cortex-M core, ITM and DWT) with self-test firmware for each, and simulated CAN buses that connect firmware nodes and Python devices.
+**stest runs your STM32 firmware on your computer, in deterministic virtual time, and lets you test it with pytest.**
 
-## Requirements
+Your firmware and ST's unmodified HAL are compiled natively with upstream LLVM clang plus an LLVM pass. The pass turns every memory-mapped register access into a call into the stest runtime, which routes it to a register-level model of the peripheral. A firmware build is an ordinary host executable; a Python harness (a pytest plugin) runs one or more of them in lockstep, drives pins, analog inputs and CAN buses, and reads back events, logs and firmware variables by name.
 
-- Upstream LLVM 18 or newer (clang, llvm-config and the LLVM CMake package; Apple clang is not supported), CMake 3.23+, Ninja
-- Python 3.11+ and [uv](https://docs.astral.sh/uv/)
-- Platforms: macOS arm64 and Linux (x86-64, arm64) natively. On Windows, or for zero setup, use the Docker image (`docker/Dockerfile`, Ubuntu 24.04 with LLVM 18) or the dev container in `.devcontainer/`.
+**Documentation: <https://nexite.github.io/stest/>**
 
-macOS: `brew install llvm cmake ninja uv`. Ubuntu 24.04: `apt install clang-18 llvm-18-dev lld-18 cmake ninja-build` and `curl -LsSf https://astral.sh/uv/install.sh | sh` (or `pipx install uv`), then `export STEST_LLVM_ROOT=/usr/lib/llvm-18`.
+## Features
 
-## Build
+- **Unmodified firmware.** Your sources and ST's HAL compile as they are: no `#ifdef SIMULATION`, no stubs.
+- **Register-level peripheral models** for the STM32L496: RCC, PWR, FLASH, GPIO, EXTI/SYSCFG, timers, ADC, DAC, SPI and bxCAN, plus the Cortex-M core (NVIC, SysTick, WFI/WFE), ITM and DWT.
+- **Deterministic virtual time** in nanoseconds: the same inputs give a byte-identical event log, and the host never sleeps.
+- **Strict by default:** an unmodelled register, a write to a read-only register or access to a peripheral whose clock is off aborts with a message naming the address, instead of returning a silent zero.
+- **pytest:** a `sim` fixture, pins, firmware variables by name, firmware logs (ITM and stdout), and failure reports with each node's output and event log.
+- **Multi-node CAN:** firmware nodes and Python devices (with optional DBC support) on simulated CAN buses, with error injection and fault confinement.
+
+Supported today: the STM32L496 on macOS arm64 and Linux x86-64 / arm64 hosts (Docker image or dev container on Windows). See the [support matrix](https://nexite.github.io/stest/reference/support/) for exactly what is modelled.
+
+## Quickstart
+
+You need upstream LLVM 18+ (not Apple clang), CMake 3.23+, Ninja, Python 3.11+ and [uv](https://docs.astral.sh/uv/); [Install](https://nexite.github.io/stest/install/) has the commands per platform and the Docker image. Cloning is not tested by CI (CI starts from a checkout):
+
+<!-- not tested by CI -->
+```sh
+git clone https://github.com/Nexite/stest.git
+cd stest
+```
+
+Build stest, its chip models and its self-test firmware, then run the blinky firmware for 2.1 virtual seconds on its own:
 
 ```sh
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release   # add -DSTEST_LLVM_ROOT=<llvm prefix> if LLVM is not found
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-```
-
-With the image instead:
-
-```sh
-docker build -t stest docker
-docker run --rm -v "$PWD":/w stest sh -c 'cmake -S . -B build-docker -G Ninja && cmake --build build-docker'
-```
-
-## Run blinky standalone
-
-```sh
 ./build/selftest/blinky --run-ms 2100
 ```
 
-Standalone, the firmware runs against the simulated chip for the given span of virtual time without a harness, and prints its events: `EVT 500001825 GPIO A5 1` is PA5 (the LED) going high at 500.0018 ms of virtual time (GPIO events use this `EVT <t_ns> GPIO <port><pin> <level>` form; every other kind, including the firmware's own stdout lines, is printed as `EVT <t_ns> <json>`).
-
-## Run the tests
-
-```sh
-ctest --test-dir build              # C++ runtime, pass, self-test firmware, and the Python tests
-uv run pytest python/tests -q       # the Python tests alone
+```text
+EVT 500001825 GPIO A5 1
+EVT 1000001825 GPIO A5 0
+EVT 1500001825 GPIO A5 1
+EVT 2000001825 GPIO A5 0
 ```
 
-The self-test binaries are found in `build/selftest` (or `$STEST_SELFTEST_BIN`).
-
-## Testing firmware with pytest
-
-Installing the package (`uv sync`) registers the `stest` pytest plugin, which provides the `sim` fixture. This is the blinky LED test:
+The same firmware under pytest (`examples/quickstart/test_blinky.py`):
 
 ```python
 def test_blinky_toggles_pa5(sim):
     node = sim.node("b", "build/selftest/blinky")
     sim.start()
     led = node.pin("PA5")
-    led.wait_high(timeout_ms=600)          # virtual time; the host does not sleep
+    led.wait_high(timeout_ms=600)  # virtual time; the host does not sleep
     sim.advance(ms=1600)
     assert [lvl for _, lvl in led.history] == [1, 0, 1, 0]
-    assert node.var("uwTick") > 0          # firmware variables by name
+    assert node.var("uwTick") > 0  # firmware variables by name
 ```
 
-Options: `--stest-quantum-us` (lockstep quantum, default 1000) and `--stest-wall-timeout` (wall-clock seconds for any blocking wait, default 30). Override per test with `@pytest.mark.stest(quantum_us=100, wall_timeout_s=5)`. When a test fails, the report includes each node's last 200 stderr lines, its firmware output, the merged event log and, per CAN bus, the last 200 frames in candump format; `--stest-can-log DIR` also writes every bus's frames to `DIR/<test>-<bus>.log`.
+```sh
+uv run pytest examples/quickstart -q
+```
 
-Analog inputs: `node.pin("PB1").set_voltage(1.65)` (or `node.adc(1).set(16, 1.65)`, resolved through the part TOML's `[[analog]]` pin table) applies a voltage the ADC converts (only analog-capable pins accept one: ADC inputs from the `[[analog]]` table and DAC outputs; any other pin raises `StestError`); `node.pin("PA4").voltage` and `node.dac(1).channel(1).volts` read a DAC output. Converting a channel with no voltage set reads 0 V and prints one warning per channel; make it abort instead with `Sim(strict_analog=True)`, `--stest-strict-analog`, `@pytest.mark.stest(strict_analog=True)`, or the node env var `STEST_STRICT_ANALOG=1`.
+The [Quickstart](https://nexite.github.io/stest/quickstart/) explains each step.
 
-Firmware logging: **use `node.output` and `node.wait_for_log(...)` (default `source="any"`) for firmware logs; they work the same on every host.** `node.output` is every line the firmware logged, through ITM port 0 or stdout (`printf`, `puts`, `putchar`, `fwrite(..., stdout)`), merged in virtual-time order. Code that picks its log backend by architecture (`#if defined(__ARM_ARCH)` is true on arm64 hosts, false on x86-64) therefore reads the same on macOS arm64 and Linux x86-64. `node.wait_for_log(r"hello (\d+)", timeout_ms=500)` advances the simulation to the next unconsumed matching line and returns the `re.Match`; `source="itm"` or `source="stdout"` restricts it to one backend. Every chip maps core-generic ITM, DWT and CoreDebug models, so CMSIS `ITM_SendChar` and DWT `CYCCNT` work unchanged. `node.log` is the list of ITM port-0 lines only (text before each `\n`; `node.itm_port(n)` for other ports), and `node.stdout_tail` holds the last 200 raw lines of the node's stdout pipe. The runtime replaces the firmware's C `stdout` stream (macOS `funopen`, Linux `fopencookie`), so each stdout line is also an event `{"kind":"stdout","periph":"stdout","text":"..."}` stamped in virtual time; a raw `write(1, ...)` bypasses it (it still reaches `stdout_tail`). ITM lines are also events (`{"kind":"itm","periph":"ITM","port":0,"text":"..."}`, stamped in virtual time). By default a debugger is attached (ITM enabled, `DEMCR.TRCENA`/`DHCSR.C_DEBUGEN` set); for the bare-board power-on state, where `ITM_SendChar` drops output unless the firmware unlocks (`ITM->LAR = 0xC5ACCE55`) and enables the ITM itself, use `Sim(debugger_attached=False)`, `--stest-no-debugger`, `@pytest.mark.stest(debugger_attached=False)` or the node env var `STEST_DEBUGGER=0`. A failing test's report adds `stest node <name> output`, `log` (ITM) and `stdout` sections. `CYCCNT` is derived from virtual time and `SystemCoreClock`; DWT comparators and other unmodelled trace features abort.
+## Documentation
 
-WFI / WFE: `__WFI` sleeps until an exception is pending (even with PRIMASK set) or taken, as on ARMv7-M; quantum ends never wake it. A `while (!x) __WFI();` loop with `x` written from Python sees the new value at the next interrupt (e.g. SysTick), not at the next quantum. `__WFE` models the event register: it returns at once (clearing it) if it is set, otherwise sleeps like WFI and also wakes when it gets set; `__SEV`, every exception entry and return, and (with `SCB->SCR.SEVONPEND`) any newly pending interrupt set it. ST's `HAL_PWR_EnterSLEEPMode(..., PWR_SLEEPENTRY_WFE)` (`__SEV(); __WFE(); __WFE();`) therefore sleeps until exactly one wake-up.
-
-Poll fast-forward: after 64 store-free loads that re-read already-seen (address, width, value) tuples, a node jumps its clock to the next scheduled event or the quantum end. For loops that poll a hardware value this is exact. A loop that counts iterations in a non-volatile local while reading constant volatile values (`while (--n && !(REG & FLAG));`, flag never set) is time-dilated by it (potentially hundreds of times longer than on hardware, and quantum-dependent when no event is pending). Control the threshold with `Sim(..., poll_skip=N)`, `--stest-poll-skip N`, `@pytest.mark.stest(poll_skip=N)`, or the node env var `STEST_POLL_SKIP=N`; `0` disables it, the default is 64.
-
-HAL mode: by default every peripheral is simulated at the register level (ST's HAL compiles unchanged and its register accesses reach the models). `stest_add_firmware(<name> CHIP ... SOURCES ... MODELS GPIO=hal)` instead replaces ST's `stm32l4xx_hal_gpio.c` with stest's shim (`chips/stm32l4/hal/`), which drives the GPIO model directly while keeping its registers, pins, EXTI setup, event times and IRQs identical to register mode. Firmware that still writes a hal-mode block directly works but gets one stderr warning per register (`stest: warning: firmware accessed GPIOA ODR directly while GPIO is in hal mode`). `MODELS <TYPE>=register` is the default; unknown types and types without a shim (only GPIO has one so far) fail at configure time.
-
-CAN: `bus = sim.can_bus("drive", 500_000)` creates a simulated bus and `sim.node("n1", exe, can={"CAN2": bus})` wires a firmware node's bxCAN controller to it; Python devices (`CanDevice`, DBC-aware `DbcDevice`), `bus.wait_for_frame` / `wait_for_message`, error injection and fault confinement (TEC/REC, error passive, bus-off and recovery) are covered in [docs/can.md](docs/can.md). A bus caps the quantum at the shortest frame time (88 us at 500 kbit/s). DBC support (`Dbc`, `DbcDevice`) uses cantools, which depends on python-can (LGPL-3.0); it is the optional `dbc` extra (`pip install 'stest[dbc]'`), imported only when a `Dbc` is loaded (the repo's dev dependency group includes it).
-
-## Design
-
-See the [design spec](docs/superpowers/specs/2026-10-30-stest-sil-design.md).
+- [Install](https://nexite.github.io/stest/install/): toolchain per platform, building stest and running its tests, install failures.
+- [Getting started with your own project](https://nexite.github.io/stest/guide/getting-started/): build a CubeMX project under stest and write its first test ([`examples/sensor-node`](examples/sensor-node) is the worked example).
+- [Concepts](https://nexite.github.io/stest/concepts/): virtual time and quanta, determinism, strictness, WFI/WFE, poll fast-forward, register and HAL mode.
+- [Writing tests](https://nexite.github.io/stest/guide/writing-tests/): recipes for pins, variables, firmware output, peripherals, multiple nodes, [CAN](https://nexite.github.io/stest/can/), fault scenarios and pytest options.
+- Reference: [Python API](https://nexite.github.io/stest/reference/python/), [pytest plugin](https://nexite.github.io/stest/reference/pytest/), [firmware build, environment variables and messages](https://nexite.github.io/stest/reference/firmware/), [support matrix](https://nexite.github.io/stest/reference/support/).
+- [Troubleshooting](https://nexite.github.io/stest/troubleshooting/).
+- [Contributing](https://nexite.github.io/stest/contributing/): start with [AGENTS.md](AGENTS.md) and the [design spec](docs/superpowers/specs/2026-10-30-stest-sil-design.md).
 
 ## License
 
-Apache-2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Apache-2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE). ST's HAL and CMSIS sources are downloaded at configure time and keep their own licenses. The optional DBC support uses cantools, which depends on python-can (LGPL-3.0); see [CAN](https://nexite.github.io/stest/can/).

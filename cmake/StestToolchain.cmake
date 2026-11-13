@@ -1,6 +1,13 @@
 # Locates upstream LLVM/clang (never Apple clang) and defines stest_enable_mmio().
 # Include this BEFORE project() so the compilers are chosen from the same LLVM
-# that the pass plugin is built against.
+# that the pass plugin is built against. A project using stest via add_subdirectory()
+# includes it at the top of its own top-level CMakeLists.txt; stest's CMakeLists.txt
+# checks that it did (global property STEST_TOOLCHAIN_INCLUDED, set only for an include
+# before any project()).
+
+if(NOT DEFINED PROJECT_NAME)
+  set_property(GLOBAL PROPERTY STEST_TOOLCHAIN_INCLUDED TRUE)
+endif()
 
 set(STEST_LLVM_ROOT "" CACHE PATH "LLVM install prefix (contains bin/clang and lib/cmake/llvm)")
 

@@ -276,7 +276,32 @@ class _NodePort:
 
 
 class CanBus:
-    """A CAN bus of a :class:`~stest.Sim`. Create with ``sim.can_bus(name, bitrate)``."""
+    """A simulated classic CAN bus of a [`Sim`][stest.Sim].
+
+    Create with [`Sim.can_bus`][stest.Sim.can_bus] before ``sim.start()``; wire firmware
+    nodes with ``sim.node(..., can={"CAN2": bus})`` and Python devices with
+    [`attach`][stest.CanBus.attach]. A bus engine decides arbitration, ACK, error frames and
+    fault confinement on the global virtual clock, at every quantum end, so every timing is
+    deterministic and independent of the quantum. The engine's rules are in the
+    [CAN guide](../../can.md) and the module docstring of ``stest/can/bus.py``.
+
+    Senders on a bus: firmware nodes (by node name), attached devices (by device name) and
+    plain senders created by [`send`][stest.CanBus.send]; every name is unique per bus.
+
+    Attributes:
+        name (str): The bus name.
+        bitrate (int): Bit rate in bit/s.
+        log (list[LoggedFrame]): Every delivered frame in EOF order. A frame is appended at
+            the first quantum end at or after its EOF. Error frames are not logged.
+        errors (list[dict]): Error frames and node error-state changes in time order, each
+            ``{"t_ns", "kind", "sender"}``; kinds ``"ack"``, ``"injected"``, ``"bit"`` (an
+            error frame; ``t_ns`` is the start of the error flag, one entry per
+            transmitter) and ``"error_passive"``, ``"bus_off"``, ``"error_active"`` (a
+            firmware node's state change). Appended at the first quantum end at or after
+            ``t_ns``.
+        lookahead_ns (int): The quantum cap this bus imposes, ``lookahead_ns(bitrate)``.
+        ifs_ns (int): The 3-bit intermission in ns, rounded up.
+    """
 
     def __init__(self, sim: Sim, name: str, bitrate: int, index: int):
         self._sim = sim
@@ -308,7 +333,22 @@ class CanBus:
 
     # ---- public API ----
     def attach(self, device: CanDevice) -> CanDevice:
-        """Attach a virtual device; it receives frames whose SOF is at or after now."""
+        """Attach a Python virtual device to the bus.
+
+        The device receives frames whose SOF is at or after the current virtual time and
+        can send from then on. A device can be attached to one bus only.
+
+        Args:
+            device: The [`CanDevice`][stest.CanDevice] (or subclass) instance.
+
+        Returns:
+            ``device``, for chaining (``ecu = bus.attach(MyDevice("ecu"))``).
+
+        Raises:
+            TypeError: ``device`` is not a ``CanDevice``.
+            StestError: The device is already attached, or the bus already has a sender with
+                its name.
+        """
         if not isinstance(device, CanDevice):
             raise TypeError(f"attach: expected a CanDevice (got {type(device).__name__})")
         if getattr(device, "bus", None) is not None:
@@ -322,8 +362,18 @@ class CanBus:
         return device
 
     def send(self, frame: CanFrame, sender: str = "python") -> None:
-        """Request ``frame`` at the current virtual time from ``sender`` (an attached device's
-        name sends as that device; any other name is a send-only sender that never ACKs)."""
+        """Request a frame at the current virtual time (``sim.now_ns``).
+
+        Args:
+            frame: The [`CanFrame`][stest.CanFrame].
+            sender: An attached device's name sends as that device. Any other name
+                (default ``"python"``) is a send-only sender, created on first use, that never
+                acknowledges and has no error counters (errors are retried forever).
+
+        Raises:
+            StestError: ``sender`` is a firmware node on this bus.
+            TypeError: ``frame`` is not a ``CanFrame``.
+        """
         if sender in self._nodes:
             raise StestError(f"bus {self.name!r}: {sender!r} is a firmware node; it cannot send from Python")
         if sender not in self._devices and sender not in self._order:
@@ -332,12 +382,23 @@ class CanBus:
         self._device_send(sender, frame)
 
     def inject_errors(self, count: int = 1, *, target: str | None = None) -> None:
-        """Corrupt the next ``count`` frames whose SOF is at or after the current virtual time
-        (only frames sent by ``target`` when given; ``count`` then counts only its frames): an
-        error frame right after the arbitration field, a transmit error for the transmitter
-        (TEC += 8), a receive error for every receiver (REC += 1), then retransmission. Each
-        retransmission is a new frame (32 errors on one frame drive its node to bus-off). Calls
-        queue up: a frame takes the first call that applies to it."""
+        """Corrupt upcoming frames with an error frame.
+
+        Affects the next ``count`` frames whose SOF is at or after the current virtual time:
+        an error frame right after the arbitration field, a transmit error for the
+        transmitter (TEC += 8), a receive error for every receiver (REC += 1), then
+        retransmission. Each retransmission is a new frame (32 errors on one frame drive its
+        node to bus-off). Calls queue up: a frame takes the first call that applies to it.
+
+        Args:
+            count: Number of frames to corrupt (positive ``int``, default 1).
+            target: Only corrupt frames sent by this sender (``count`` then counts only its
+                frames). ``None`` (default): any sender.
+
+        Raises:
+            ValueError: ``count`` is not a positive ``int``.
+            StestError: ``target`` is not a sender on this bus.
+        """
         if isinstance(count, bool) or not isinstance(count, int) or count < 1:
             raise ValueError(f"inject_errors: count must be a positive integer (got {count!r})")
         if target is not None and target not in self._order:
@@ -352,9 +413,24 @@ class CanBus:
         timeout_ms: float,
         match: Callable[[CanFrame], bool] | None = None,
     ) -> LoggedFrame:
-        """Advance until a delivered frame not consumed by an earlier ``wait_for_frame``
-        matches ``id`` and ``match``; returns it and consumes frames up to it. Raises
-        WaitTimeout after ``timeout_ms`` of virtual time."""
+        """Advance the simulation until a new delivered frame matches.
+
+        Only frames not consumed by an earlier ``wait_for_frame`` / ``wait_for_message`` on
+        this bus are searched; the call consumes the log up to and including the returned
+        frame. Checked now and at every quantum boundary.
+
+        Args:
+            id: Identifier to match (``None``: any). Standard and extended frames with the
+                same numeric identifier both match; use ``match`` to tell them apart.
+            timeout_ms: Budget in virtual milliseconds.
+            match: Predicate on the [`CanFrame`][stest.CanFrame] (``None``: any).
+
+        Returns:
+            The matching [`LoggedFrame`][stest.LoggedFrame].
+
+        Raises:
+            WaitTimeout: No new frame matched within ``timeout_ms``.
+        """
         found: list[LoggedFrame] = []
 
         def cond() -> bool:
@@ -372,8 +448,18 @@ class CanBus:
         return found[0]
 
     def messages(self, dbc: Dbc) -> list[tuple[int, str, dict]]:
-        """The delivered frames decoded with ``dbc``: ``(t_ns, message name, signals)`` in EOF
-        order; frames the DBC does not know are skipped."""
+        """The delivered frames decoded with a DBC.
+
+        Args:
+            dbc: The [`Dbc`][stest.Dbc].
+
+        Returns:
+            ``(t_ns, message name, signals)`` per frame in EOF order; frames the DBC does
+                not know are skipped.
+
+        Raises:
+            StestError: A frame matches a message but cannot be decoded.
+        """
         out = []
         for lf in self.log:
             d = dbc.decode(lf.frame)
@@ -389,9 +475,23 @@ class CanBus:
         timeout_ms: float,
         where: Callable[[dict], bool] | None = None,
     ) -> tuple[int, dict]:
-        """Like :meth:`wait_for_frame` (same consumption cursor) for the DBC message
-        ``message`` whose decoded signals satisfy ``where``; returns ``(t_ns, signals)``.
-        Raises WaitTimeout after ``timeout_ms`` of virtual time."""
+        """Advance the simulation until a new frame of a DBC message arrives.
+
+        Like [`wait_for_frame`][stest.CanBus.wait_for_frame], sharing its consumption cursor.
+
+        Args:
+            dbc: The [`Dbc`][stest.Dbc].
+            message: Message name.
+            timeout_ms: Budget in virtual milliseconds.
+            where: Predicate on the decoded signals dict (``None``: any).
+
+        Returns:
+            ``(t_ns, signals)``: the frame's EOF time in ns and its decoded signals.
+
+        Raises:
+            StestError: Unknown message name.
+            WaitTimeout: No such frame within ``timeout_ms``.
+        """
         msg = dbc.message(message)
         decoded: list[dict] = []
 
@@ -408,11 +508,22 @@ class CanBus:
         return lf.t_ns, decoded[-1]
 
     def export_candump(self, path) -> None:
+        """Write the whole log in candump format (see
+        [`format_candump`][stest.can.format_candump]), with the bus name as the channel.
+
+        Args:
+            path (str | os.PathLike): Output file path (overwritten).
+        """
         with open(path, "w") as f:
             f.write(format_candump(self.log, self.name))
 
     def export_asc(self, path) -> None:
-        """Vector ASC; the channel number is the bus's creation index + 1."""
+        """Write the whole log as Vector ASC (see [`format_asc`][stest.can.format_asc]).
+
+        Args:
+            path (str | os.PathLike): Output file path (overwritten). The channel number
+                is the bus's creation index + 1.
+        """
         with open(path, "w") as f:
             f.write(format_asc(self.log, self._index + 1))
 

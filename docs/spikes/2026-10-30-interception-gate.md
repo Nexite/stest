@@ -86,7 +86,7 @@ the model, HAL error callbacks), so it is the single-node upper bound for CAN tr
 | Linux arm64 (Docker Desktop VM, same Mac, `build-gate-docker`) | 100 us | 0.000453 | 0.093273 0.096210 0.089236 0.087274 0.089846 | 0.089846 | 0.090299 | PASS | | |
 | Linux arm64 (Docker Desktop VM) | 88 us, run 1 | 0.000481 | 0.143918 0.138524 0.167682 0.156502 0.150372 | 0.150372 | 0.150853 | PASS | 0.322301 0.326619 0.337259 0.341444 0.364232 | 0.337259 |
 | Linux arm64 (Docker Desktop VM) | 88 us, run 2 | 0.000405 | 0.104000 0.102804 0.103506 0.101706 0.100342 | 0.102804 | 0.103209 | PASS | | |
-| **Linux x86-64 (GitHub Actions)** | 88 us | _pending: from the CI run of this branch (artifact `gate-can-linux-x86_64`)_ | | | | | | |
+| **Linux x86-64 (GitHub Actions, CI run 43167244660)** | 88 us | 0.000824 | 0.211988 0.218048 0.211701 0.231578 0.227590 | 0.218048 | 0.218872 | PASS | 1.178090 1.151416 1.160391 1.189690 1.179937 | 1.178090 |
 
 Reading:
 - At 88 us the sync term grows by the quantum ratio (100/88 = 1.14x more round trips): native
@@ -125,7 +125,7 @@ Measured after the WFI change (WFI sleeps across quantum ends instead of returni
 | macOS arm64 (M3 Pro, native) | 88 us | 0.000398 | 0.064074 | 0.064472 | 0.355213 0.345693 0.352747 0.359714 0.341585 | **0.352747** (PASS) | 0.351227 |
 | Linux arm64 (Docker Desktop VM, `build-gate-docker`) | 100 us | 0.000447 | 0.097242 | 0.097689 | | | 0.317106 |
 | Linux arm64 (Docker Desktop VM, `build-gate-docker`) | 88 us | 0.000464 | 0.107897 | 0.108361 | 0.411289 0.442860 0.443022 0.515940 0.436516 | **0.442860** (PASS) | 0.313119 |
-| **Linux x86-64 (GitHub Actions)** | 88 us | _pending: CI artifact `gate-can-linux-x86_64`_ | | | | | |
+| **Linux x86-64 (GitHub Actions, CI run 43167244660)** | 88 us | 0.000824 | 0.218048 | 0.218872 | 1.135290 1.125602 1.122830 1.125469 1.127183 | **1.125602 (FAIL, budget 0.80)** | 1.178090 |
 
 Reading: the standard gate and the no-ACK row do not change measurably with the WFI change
 (the sync benchmark and the no-ACK node are bound by the per-quantum handoff, which WFI still
@@ -134,3 +134,13 @@ load costs 0.18 (native) to 0.22 (Docker) per node per virtual second, half the 
 x86-64, where Plan 1 measured sync about 2x the arm64 Docker figure, expect about 0.6-0.9 for
 the pair: near the 0.80 budget, which is why the row is gated in CI's non-blocking step; above
 it, the plan's stop-and-ask rule applies (see the follow-ups file).
+
+### x86-64 result (PR #3 CI) and the planned fix
+
+On x86-64 the standard single-node gate at 88 us passes (0.219 of 0.40), but the gated two-node
+CAN row fails: **1.13 s wall per virtual second for the pair (budget 0.80)**, i.e. a two-board
+CAN test runs slower than real time. The no-ACK worst case is 1.18 (informational). The bench
+sync term (0.22 per node) explains less than half of the two-node figure, so the rest is
+per-quantum Python harness and bus-engine work (0.34 per node per virtual s on x86). Per the
+plan's stop-and-ask rule this went to the user, who chose to record the planned fix and
+schedule it later; see "CAN sync speed" in `docs/superpowers/plans/2026-10-31-plan-3-followups.md`.
